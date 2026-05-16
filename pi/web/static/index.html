@@ -98,6 +98,11 @@
       color: #000;
       border-color: var(--accent);
     }
+    .row button.detect-on {
+      background: var(--warn);
+      color: #000;
+      border-color: var(--warn);
+    }
     .dpad.disabled button { opacity: 0.45; pointer-events: none; }
     .panel-title {
       font-size: 0.75rem;
@@ -250,6 +255,7 @@
     </div>
 
     <div class="row">
+      <button type="button" id="btn-detect">DETECT OFF</button>
       <button type="button" id="btn-follow">FOLLOW OFF</button>
       <button type="button" id="btn-grip-open">GRIP OPEN</button>
       <button type="button" id="btn-grip-close">GRIP CLOSE</button>
@@ -265,6 +271,7 @@
     let reconnectTimer = null;
     let activeDir = null;
     let followOn = false;
+    let detectOn = false;
     const RECONNECT_MS = 1500;
 
     function wsUrl() {
@@ -330,14 +337,18 @@
         trackEl.textContent = 'N/A';
         trackRow.className = 'status-row';
       } else if (d.tracking_enabled) {
-        trackEl.textContent = d.tracking_hailo_ready ? 'ON' : 'STARTING';
+        trackEl.textContent = d.tracking_hailo_ready ? 'FOLLOW' : 'STARTING';
         trackRow.className = 'status-row' + (d.tracking_hailo_ready ? '' : ' warn');
+      } else if (d.tracking_detect_only) {
+        trackEl.textContent = d.tracking_hailo_ready ? 'DETECT' : 'STARTING';
+        trackRow.className = 'status-row warn';
       } else {
         trackEl.textContent = 'OFF';
         trackRow.className = 'status-row';
       }
       const personRow = document.getElementById('row-person');
       const personEl = document.getElementById('st-person');
+      const trackingActive = d.tracking_enabled || d.tracking_detect_only;
       if (!d.tracking_available) {
         personEl.textContent = '—';
         personRow.className = 'status-row';
@@ -345,24 +356,37 @@
         personEl.textContent = 'YES';
         personRow.className = 'status-row';
       } else {
-        personEl.textContent = d.tracking_enabled ? 'NO' : '—';
+        personEl.textContent = trackingActive ? 'NO' : '—';
         personRow.className = 'status-row';
       }
-      if (d.tracking_enabled !== followOn) {
+      if (d.tracking_enabled !== followOn || d.tracking_detect_only !== detectOn) {
         followOn = !!d.tracking_enabled;
-        updateFollowButton();
+        detectOn = !!d.tracking_detect_only;
+        updateTrackingButtons();
       }
     }
 
-    function updateFollowButton() {
-      const btn = document.getElementById('btn-follow');
-      btn.textContent = followOn ? 'FOLLOW ON' : 'FOLLOW OFF';
-      btn.classList.toggle('follow-on', followOn);
+    function updateTrackingButtons() {
+      const btnFollow = document.getElementById('btn-follow');
+      btnFollow.textContent = followOn ? 'FOLLOW ON' : 'FOLLOW OFF';
+      btnFollow.classList.toggle('follow-on', followOn);
+      btnFollow.classList.remove('detect-on');
+
+      const btnDetect = document.getElementById('btn-detect');
+      btnDetect.textContent = detectOn ? 'DETECT ON' : 'DETECT OFF';
+      btnDetect.classList.toggle('detect-on', detectOn);
+      btnDetect.classList.remove('follow-on');
+
+      // D-pad disabled only during full follow, not during detect-only
       document.getElementById('dpad').classList.toggle('disabled', followOn);
     }
 
     function setTracking(enabled) {
       wsSend({ type: 'tracking', enabled });
+    }
+
+    function setDetectOnly(active) {
+      wsSend({ type: 'tracking', enabled: false, detect_only: active });
     }
 
     function wsSend(payload) {
@@ -446,7 +470,8 @@
         setWsStatus('OFFLINE', true);
         activeDir = null;
         followOn = false;
-        updateFollowButton();
+        detectOn = false;
+        updateTrackingButtons();
         setActive(null);
         scheduleReconnect();
       };
@@ -529,7 +554,7 @@
     };
     document.getElementById('btn-estop').onclick = () => {
       try {
-        if (followOn) setTracking(false);
+        if (followOn || detectOn) setTracking(false);
         stopMotors();
         toast('E-STOP');
         setActive(null);
@@ -537,8 +562,19 @@
       } catch (e) { toast(e.message); }
     };
 
+    document.getElementById('btn-detect').onclick = () => {
+      if (!wsConnected) { toast('Not connected'); return; }
+      if (followOn) { toast('Disable FOLLOW first'); return; }
+      const next = !detectOn;
+      try {
+        setDetectOnly(next);
+        toast(next ? 'DETECT ON' : 'DETECT OFF');
+      } catch (e) { toast(e.message); }
+    };
+
     document.getElementById('btn-follow').onclick = () => {
       if (!wsConnected) { toast('Not connected'); return; }
+      if (detectOn) setDetectOnly(false);
       const next = !followOn;
       try {
         setTracking(next);
@@ -546,7 +582,7 @@
       } catch (e) { toast(e.message); }
     };
 
-    updateFollowButton();
+    updateTrackingButtons();
     document.getElementById('camera').src = cameraStreamUrl();
     connectWs();
   </script>

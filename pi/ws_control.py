@@ -46,6 +46,7 @@ def build_telemetry(
         state = body_tracker.get_state()
         payload["tracking_available"] = state["available"]
         payload["tracking_enabled"] = state["enabled"]
+        payload["tracking_detect_only"] = state["detect_only"]
         payload["tracking_hailo_ready"] = state["hailo_ready"]
         payload["person_detected"] = state["person_detected"]
         if state.get("last_error"):
@@ -53,6 +54,7 @@ def build_telemetry(
     else:
         payload["tracking_available"] = False
         payload["tracking_enabled"] = False
+        payload["tracking_detect_only"] = False
     return payload
 
 
@@ -153,6 +155,7 @@ class ControlHub:
     def _disable_tracking(self) -> None:
         if self._body_tracker is not None:
             self._body_tracker.set_enabled(False)
+            self._body_tracker.set_detect_only(False)
         self._tracking_owner = None
 
     async def _release_driver(self, ws: WebSocket) -> None:
@@ -185,15 +188,22 @@ class ControlHub:
 
         if msg_type == "tracking":
             enabled = bool(msg.get("enabled", False))
+            detect_only = bool(msg.get("detect_only", False))
             if self._body_tracker is None:
                 await self._send_json(ws, {"type": "error", "msg": "tracking not configured"})
                 return
-            if enabled and not self._body_tracker.available:
+            if (enabled or detect_only) and not self._body_tracker.available:
                 await self._send_json(
                     ws, {"type": "error", "msg": "Hailo not available on this host"}
                 )
                 return
-            if enabled:
+            if detect_only:
+                if self._tracking_owner is not None and self._tracking_owner is not ws:
+                    await self._send_json(ws, {"type": "error", "msg": "another client owns tracking"})
+                    return
+                self._body_tracker.set_detect_only(True)
+                self._tracking_owner = ws
+            elif enabled:
                 if self._driver is not None and self._driver is not ws:
                     await self._send_json(ws, {"type": "error", "msg": "another client is driving"})
                     return
@@ -209,9 +219,12 @@ class ControlHub:
                 except RuntimeError as exc:
                     await self._send_json(ws, {"type": "error", "msg": str(exc)})
                     return
-            await self._send_json(
-                ws, {"type": "ack", "cmd": "tracking", "enabled": self._body_tracker.enabled}
-            )
+            await self._send_json(ws, {
+                "type": "ack",
+                "cmd": "tracking",
+                "enabled": self._body_tracker.enabled,
+                "detect_only": self._body_tracker.detect_only,
+            })
             return
 
         if msg_type == "drive":

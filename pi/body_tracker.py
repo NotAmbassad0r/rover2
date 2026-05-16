@@ -54,6 +54,7 @@ class BodyTracker:
 
         self._lock = threading.Lock()
         self._enabled = False
+        self._detect_only = False
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._hailo: _HailoInference | None = None
@@ -73,6 +74,11 @@ class BodyTracker:
             return self._enabled
 
     @property
+    def detect_only(self) -> bool:
+        with self._lock:
+            return self._detect_only
+
+    @property
     def person_detected(self) -> bool:
         return self._person_detected
 
@@ -89,6 +95,7 @@ class BodyTracker:
             "available": self.available,
             "running": self._running,
             "enabled": self.enabled,
+            "detect_only": self.detect_only,
             "hailo_ready": self._hailo_ready,
             "person_detected": self._person_detected,
             "person_tracked": self._person_tracked,
@@ -123,10 +130,21 @@ class BodyTracker:
     def set_enabled(self, enabled: bool) -> None:
         with self._lock:
             self._enabled = enabled
+            if enabled:
+                self._detect_only = False
         logger.info("BodyTracker: tracking %s", "ENABLED" if enabled else "DISABLED")
         if not enabled:
             self._reset_tracking_state()
             self._drive(0, 0, force=True)
+
+    def set_detect_only(self, active: bool) -> None:
+        with self._lock:
+            self._detect_only = active
+            if active:
+                self._enabled = False
+        logger.info("BodyTracker: detect-only %s", "ON" if active else "OFF")
+        if not active:
+            self._reset_tracking_state()
 
     def _reset_tracking_state(self) -> None:
         self._person_detected = False
@@ -230,7 +248,7 @@ class BodyTracker:
                 buf = buf[b + 2 :]
 
                 with self._lock:
-                    active = self._enabled
+                    active = self._enabled or self._detect_only
                 if not active:
                     continue
 
@@ -255,7 +273,8 @@ class BodyTracker:
         if self._hailo is None:
             return
         with self._lock:
-            active = self._enabled
+            active = self._enabled or self._detect_only
+            detect_only = self._detect_only
         if not active:
             return
 
@@ -267,6 +286,9 @@ class BodyTracker:
 
         best = parse_best_person(nms_out, confidence=self._confidence)
         self._update_person_presence(best is not None)
+
+        if detect_only:
+            return
 
         if not self._person_tracked or best is None:
             self._drive(0, 0)
