@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ROVER2 Control</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #3fb950;
+      --warn: #d29922;
+      --danger: #f85149;
+      --mono: "JetBrains Mono", "Consolas", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--mono);
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1.5rem;
+    }
+    h1 { font-size: 1.25rem; letter-spacing: 0.15em; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.75rem; margin-bottom: 1.5rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      width: min(420px, 100%);
+      margin-bottom: 1rem;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      margin-bottom: 0.35rem;
+    }
+    .status-row span:last-child { color: var(--accent); }
+    .status-row.err span:last-child { color: var(--danger); }
+    .status-row.warn span:last-child { color: var(--warn); }
+    .dpad {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-rows: 1fr 1fr 1fr;
+      gap: 0.5rem;
+      max-width: 240px;
+      margin: 0 auto 1rem;
+    }
+    .dpad button {
+      aspect-ratio: 1;
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      touch-action: none;
+    }
+    .dpad button:hover { border-color: var(--accent); }
+    .dpad button:active, .dpad button.active,
+    .row button.active {
+      background: var(--accent);
+      color: #000;
+      border-color: var(--accent);
+    }
+    .dpad .empty { visibility: hidden; pointer-events: none; }
+    .row {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .row button, .speed input {
+      font-family: inherit;
+      font-size: 0.8rem;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .row button.danger { border-color: var(--danger); color: var(--danger); }
+    .row button.follow-on {
+      background: var(--accent);
+      color: #000;
+      border-color: var(--accent);
+    }
+    .dpad.disabled button { opacity: 0.45; pointer-events: none; }
+    .panel-title {
+      font-size: 0.75rem;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin: 0 0 0.75rem;
+      text-align: center;
+    }
+    .arm-pad {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .arm-pad button {
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.85rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      touch-action: none;
+    }
+    .arm-pad button:hover { border-color: var(--accent); }
+    .arm-pad button.hold-up, .arm-pad button.hold-down {
+      grid-column: span 2;
+    }
+    .arm-pad button:active, .arm-pad button.active {
+      background: var(--accent);
+      color: #000;
+      border-color: var(--accent);
+    }
+    .speed {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 1rem 0;
+      font-size: 0.8rem;
+    }
+    .speed input[type=range] { flex: 1; accent-color: var(--accent); }
+    .toast {
+      position: fixed;
+      bottom: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 0.5rem 1rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.75rem;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .camera-wrap {
+      width: 100%;
+      max-height: 200px;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 0.75rem;
+    }
+    .camera-wrap img {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 200px;
+      object-fit: contain;
+    }
+    .camera-hint {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>ROVER2</h1>
+  <p class="sub">WEBSOCKET · DRIVE · ARM · GRIPPER · ULTRASONIC</p>
+
+  <div class="panel">
+    <div class="status-row" id="row-ws">
+      <span>WEBSOCKET</span><span id="st-ws">—</span>
+    </div>
+    <div class="status-row" id="row-serial">
+      <span>SERIAL</span><span id="st-serial">—</span>
+    </div>
+    <div class="status-row">
+      <span>MOTORS</span><span id="st-motors">—</span>
+    </div>
+    <div class="status-row" id="row-ultra">
+      <span>ULTRASONIC</span><span id="st-ultra">—</span>
+    </div>
+    <div class="status-row" id="row-safety">
+      <span>SAFETY</span><span id="st-safety">—</span>
+    </div>
+    <div class="status-row" id="row-tracking">
+      <span>FOLLOW</span><span id="st-tracking">—</span>
+    </div>
+    <div class="status-row" id="row-person">
+      <span>PERSON</span><span id="st-person">—</span>
+    </div>
+    <div class="status-row">
+      <span>UPTIME</span><span id="st-uptime">—</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="camera-hint">LIVE CAMERA</p>
+    <div class="camera-wrap">
+      <img id="camera" src="" alt="Live camera" />
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="panel-title">ARM LIFT · hold up/down</p>
+    <div class="arm-pad">
+      <button type="button" class="hold-up" id="btn-arm-up">▲ ARM UP</button>
+      <button type="button" class="hold-down" id="btn-arm-down">▼ ARM DOWN</button>
+      <button type="button" id="btn-arm-pulse-up">NUDGE UP</button>
+      <button type="button" id="btn-arm-pulse-down">NUDGE DOWN</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="panel-title">DRIVE</p>
+    <div class="speed">
+      <label for="speed">SPEED</label>
+      <input type="range" id="speed" min="20" max="100" value="80" />
+      <span id="speed-val">80%</span>
+    </div>
+
+    <div class="dpad" id="dpad">
+      <div class="empty"></div>
+      <button data-dir="forward" type="button">FWD</button>
+      <div class="empty"></div>
+      <button data-dir="left" type="button">LEFT</button>
+      <button data-dir="stop" type="button">STOP</button>
+      <button data-dir="right" type="button">RIGHT</button>
+      <div class="empty"></div>
+      <button data-dir="back" type="button">BACK</button>
+      <div class="empty"></div>
+    </div>
+
+    <div class="row">
+      <button type="button" id="btn-follow">FOLLOW OFF</button>
+      <button type="button" id="btn-grip-open">GRIP OPEN</button>
+      <button type="button" id="btn-grip-close">GRIP CLOSE</button>
+      <button type="button" class="danger" id="btn-estop">E-STOP</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    let ws = null;
+    let wsConnected = false;
+    let reconnectTimer = null;
+    let activeDir = null;
+    let followOn = false;
+    const RECONNECT_MS = 1500;
+
+    function wsUrl() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return proto + '//' + location.host + '/ws';
+    }
+
+    function cameraStreamUrl() {
+      const proto = location.protocol === 'https:' ? 'https:' : 'http:';
+      return proto + '//' + location.hostname + ':8081/stream';
+    }
+
+    function formatUltrasonic(cm, ageS) {
+      if (ageS == null || ageS > 2) return '—';
+      if (cm == null) return 'NO ECHO';
+      return cm + ' cm';
+    }
+
+    function toast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 2000);
+    }
+
+    function speedFrac() {
+      return Number(document.getElementById('speed').value) / 100;
+    }
+
+    function setWsStatus(text, err) {
+      document.getElementById('st-ws').textContent = text;
+      document.getElementById('row-ws').className = 'status-row' + (err ? ' err' : '');
+    }
+
+    function applyTelemetry(d) {
+      if (!d || d.type !== 'telemetry') return;
+      const serialEl = document.getElementById('st-serial');
+      const rowSerial = document.getElementById('row-serial');
+      serialEl.textContent = d.serial_connected ? 'OK' : 'OFFLINE';
+      rowSerial.className = 'status-row' + (d.serial_connected ? '' : ' err');
+      document.getElementById('st-motors').textContent = d.motors_ready ? 'READY' : 'PENDING';
+      const u = d.ultrasonic_cm;
+      const ultraRow = document.getElementById('row-ultra');
+      document.getElementById('st-ultra').textContent = formatUltrasonic(u, d.ultrasonic_age_s);
+      const close = d.safety_enabled && u != null && u > 0 && u < (d.safe_distance_cm || 40);
+      ultraRow.className = 'status-row' + (close ? ' warn' : '');
+      const safetyRow = document.getElementById('row-safety');
+      const safetyEl = document.getElementById('st-safety');
+      if (!d.safety_enabled) {
+        safetyEl.textContent = 'OFF';
+        safetyRow.className = 'status-row';
+      } else if (d.forward_blocked) {
+        safetyEl.textContent = 'BLOCKED';
+        safetyRow.className = 'status-row warn';
+      } else {
+        safetyEl.textContent = 'OK (' + d.safe_distance_cm + ' cm)';
+        safetyRow.className = 'status-row';
+      }
+      document.getElementById('st-uptime').textContent = d.uptime_s + ' s';
+      const trackRow = document.getElementById('row-tracking');
+      const trackEl = document.getElementById('st-tracking');
+      if (!d.tracking_available) {
+        trackEl.textContent = 'N/A';
+        trackRow.className = 'status-row';
+      } else if (d.tracking_enabled) {
+        trackEl.textContent = d.tracking_hailo_ready ? 'ON' : 'STARTING';
+        trackRow.className = 'status-row' + (d.tracking_hailo_ready ? '' : ' warn');
+      } else {
+        trackEl.textContent = 'OFF';
+        trackRow.className = 'status-row';
+      }
+      const personRow = document.getElementById('row-person');
+      const personEl = document.getElementById('st-person');
+      if (!d.tracking_available) {
+        personEl.textContent = '—';
+        personRow.className = 'status-row';
+      } else if (d.person_detected) {
+        personEl.textContent = 'YES';
+        personRow.className = 'status-row';
+      } else {
+        personEl.textContent = d.tracking_enabled ? 'NO' : '—';
+        personRow.className = 'status-row';
+      }
+      if (d.tracking_enabled !== followOn) {
+        followOn = !!d.tracking_enabled;
+        updateFollowButton();
+      }
+    }
+
+    function updateFollowButton() {
+      const btn = document.getElementById('btn-follow');
+      btn.textContent = followOn ? 'FOLLOW ON' : 'FOLLOW OFF';
+      btn.classList.toggle('follow-on', followOn);
+      document.getElementById('dpad').classList.toggle('disabled', followOn);
+    }
+
+    function setTracking(enabled) {
+      wsSend({ type: 'tracking', enabled });
+    }
+
+    function wsSend(payload) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        throw new Error('WebSocket not connected');
+      }
+      ws.send(JSON.stringify(payload));
+    }
+
+    function drive(direction) {
+      wsSend({ type: 'drive', direction, speed: speedFrac() });
+    }
+
+    function stopMotors() {
+      wsSend({ type: 'stop' });
+    }
+
+    function grip(action) {
+      wsSend({ type: 'grip', action });
+    }
+
+    function arm(direction) {
+      wsSend({ type: 'arm', direction, speed: speedFrac() });
+    }
+
+    function armPulse(action) {
+      wsSend({ type: 'arm_pulse', action });
+    }
+
+    function bindArmHold(btn, direction) {
+      const start = (e) => {
+        e.preventDefault();
+        if (!wsConnected) { toast('Not connected'); return; }
+        btn.classList.add('active');
+        try { arm(direction); } catch (err) { toast(err.message); }
+      };
+      const end = () => {
+        btn.classList.remove('active');
+        if (!wsConnected) return;
+        try { arm('stop'); } catch (err) { toast(err.message); }
+      };
+      btn.addEventListener('mousedown', start);
+      btn.addEventListener('touchstart', start, { passive: false });
+      btn.addEventListener('mouseup', end);
+      btn.addEventListener('mouseleave', end);
+      btn.addEventListener('touchend', end);
+      btn.addEventListener('touchcancel', end);
+    }
+
+    function connectWs() {
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      setWsStatus('CONNECTING', false);
+      ws = new WebSocket(wsUrl());
+
+      ws.onopen = () => {
+        wsConnected = true;
+        setWsStatus('OK', false);
+        wsSend({ type: 'ping' });
+      };
+
+      ws.onmessage = (ev) => {
+        let data;
+        try {
+          data = JSON.parse(ev.data);
+        } catch {
+          return;
+        }
+        if (data.type === 'telemetry') {
+          applyTelemetry(data);
+        } else if (data.type === 'ack' && (data.cmd === 'arm' || data.cmd === 'arm_pulse')) {
+          toast((data.cmd === 'arm_pulse' ? 'PULSE ' : 'ARM ') + (data.direction || data.action || 'ok'));
+        } else if (data.type === 'error') {
+          toast(data.msg || 'error');
+        }
+      };
+
+      ws.onclose = () => {
+        wsConnected = false;
+        setWsStatus('OFFLINE', true);
+        activeDir = null;
+        followOn = false;
+        updateFollowButton();
+        setActive(null);
+        scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        wsConnected = false;
+        setWsStatus('ERR', true);
+      };
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWs();
+      }, RECONNECT_MS);
+    }
+
+    function setActive(btn) {
+      document.querySelectorAll('.dpad button[data-dir]').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+    }
+
+    function bindHold(btn) {
+      const dir = btn.dataset.dir;
+      const start = (e) => {
+        e.preventDefault();
+        if (!wsConnected) {
+          toast('Not connected');
+          return;
+        }
+        if (followOn) {
+          toast('Disable FOLLOW first');
+          return;
+        }
+        if (dir === 'stop') {
+          try { stopMotors(); toast('STOP'); } catch (err) { toast(err.message); }
+          return;
+        }
+        activeDir = dir;
+        setActive(btn);
+        try { drive(dir); } catch (err) { toast(err.message); }
+      };
+      const end = () => {
+        if (activeDir !== dir) return;
+        activeDir = null;
+        setActive(null);
+        if (!wsConnected) return;
+        try { stopMotors(); } catch (err) { toast(err.message); }
+      };
+      btn.addEventListener('mousedown', start);
+      btn.addEventListener('touchstart', start, { passive: false });
+      btn.addEventListener('mouseup', end);
+      btn.addEventListener('mouseleave', end);
+      btn.addEventListener('touchend', end);
+      btn.addEventListener('touchcancel', end);
+    }
+
+    document.querySelectorAll('.dpad button[data-dir]').forEach(bindHold);
+    bindArmHold(document.getElementById('btn-arm-up'), 'up');
+    bindArmHold(document.getElementById('btn-arm-down'), 'down');
+
+    document.getElementById('btn-arm-pulse-up').onclick = () => {
+      try { armPulse('up'); toast('NUDGE UP'); } catch (e) { toast(e.message); }
+    };
+    document.getElementById('btn-arm-pulse-down').onclick = () => {
+      try { armPulse('down'); toast('NUDGE DOWN'); } catch (e) { toast(e.message); }
+    };
+
+    document.getElementById('speed').addEventListener('input', (e) => {
+      document.getElementById('speed-val').textContent = e.target.value + '%';
+    });
+
+    document.getElementById('btn-grip-open').onclick = () => {
+      try { grip('open'); toast('GRIP OPEN'); } catch (e) { toast(e.message); }
+    };
+    document.getElementById('btn-grip-close').onclick = () => {
+      try { grip('close'); toast('GRIP CLOSE'); } catch (e) { toast(e.message); }
+    };
+    document.getElementById('btn-estop').onclick = () => {
+      try {
+        if (followOn) setTracking(false);
+        stopMotors();
+        toast('E-STOP');
+        setActive(null);
+        activeDir = null;
+      } catch (e) { toast(e.message); }
+    };
+
+    document.getElementById('btn-follow').onclick = () => {
+      if (!wsConnected) { toast('Not connected'); return; }
+      const next = !followOn;
+      try {
+        setTracking(next);
+        toast(next ? 'FOLLOW ON' : 'FOLLOW OFF');
+      } catch (e) { toast(e.message); }
+    };
+
+    updateFollowButton();
+    document.getElementById('camera').src = cameraStreamUrl();
+    connectWs();
+  </script>
+</body>
+</html>

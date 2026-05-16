@@ -1,0 +1,60 @@
+serial:
+  port: /dev/ttyUSB0
+  baudrate: 115200
+  timeout_s: 1.0
+  reconnect_interval_s: 5.0
+  startup_detect_delay_s: 2.5
+
+server:
+  host: 0.0.0.0
+  port: 8082
+
+drive:
+  default_speed: 120
+  max_speed: 255
+  # Optional per-chassis remap: direction → [left_sign, right_sign]
+  # direction_map:
+  #   forward: [1, -1]
+  #   back: [-1, 1]
+  #   left: [1, 1]
+  #   right: [-1, -1]
+
+gripper:
+  port: PORT4B
+
+arm:
+  port: PORT3B          # must match firmware rover2_basic.ino
+  max_speed: 150        # PWM magnitude for hold-to-move
+  invert: false         # set true if up/down are reversed
+
+safety:
+  enabled: true
+  safe_distance_cm: 40
+  poll_interval_s: 0.5
+  initial_poll_delay_s: 1.0
+
+ultrasonic:
+  poll_interval_s: 0.5   # background poll on serial bridge
+
+websocket:
+  telemetry_interval_s: 0.4   # live status push to browser
+
+camera:
+  upstream_url: http://127.0.0.1:8081/stream
+  snapshot_url: http://127.0.0.1:8081/snapshot
+  health_url: http://127.0.0.1:8081/health
+
+body_tracker:
+  enabled: true
+  camera_url: http://127.0.0.1:8081/stream   # rover-camera.service (v1 path OK)
+  hef_path: /opt/rover/models/yolov8m_h10.hef
+  hailo_group_id: rover2
+  confidence: 0.40
+  centre_zone: 0.30
+  target_bbox_width: 0.35
+  turn_speed: 100
+  forward_speed: 120
+  frame_interval_s: 0.10
+
+firmware:
+  hex_path: /tmp/rover2_firmware.hex

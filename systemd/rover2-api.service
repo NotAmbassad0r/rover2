@@ -1,0 +1,20 @@
+[Unit]
+Description=ROVER2 Pi API (motors, gripper, ultrasonic, web D-pad)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ambassad0r
+WorkingDirectory=/opt/rover2
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/rover2.env
+ExecStart=/opt/rover2/venv/bin/python3 /opt/rover2/main.py
+Restart=on-failure
+RestartSec=5s
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
