@@ -55,6 +55,9 @@ class BodyTracker:
         self._lock = threading.Lock()
         self._enabled = False
         self._detect_only = False
+        self._last_score_log: float = 0.0
+        self._frames_inferred: int = 0
+        self._last_frame_log: float = 0.0
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._hailo: _HailoInference | None = None
@@ -282,9 +285,31 @@ class BodyTracker:
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.uint8)
         nms_out = self._hailo.infer(rgb)
         if nms_out is None:
+            logger.warning("Hailo infer returned None")
             return
+        self._frames_inferred += 1
+        now_fi = time.monotonic()
+        if now_fi - self._last_frame_log >= 5.0:
+            self._last_frame_log = now_fi
+            flat = nms_out.ravel()
+            logger.info("Inference running — %d frames, shape=%s max=%.3f",
+                        self._frames_inferred, nms_out.shape, float(flat.max()))
+            if flat.size == 80 * 501:
+                det0 = flat[0:5]
+                logger.debug("Class-0 det0: score=%.3f y0=%.3f x0=%.3f y1=%.3f x1=%.3f",
+                             det0[0], det0[1], det0[2], det0[3], det0[4])
 
         best = parse_best_person(nms_out, confidence=self._confidence)
+        raw_best = parse_best_person(nms_out, confidence=0.0)
+        now = time.monotonic()
+        if now - self._last_score_log >= 3.0:
+            self._last_score_log = now
+            if raw_best is not None:
+                logger.info("Detect score: %.2f (threshold %.2f) → %s",
+                            raw_best[4], self._confidence,
+                            "PASS" if best is not None else "below-threshold")
+            else:
+                logger.info("Detect score: no person boxes")
         self._update_person_presence(best is not None)
 
         if detect_only:
