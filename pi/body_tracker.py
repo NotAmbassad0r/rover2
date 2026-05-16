@@ -324,16 +324,16 @@ class BodyTracker:
         bbox_w = x1 - x0
 
         if cx < self._left_bound:
-            logger.debug("Follow: cx=%.2f → LEFT  (speed=%d)", cx, self._turn_speed)
+            logger.info("Follow: cx=%.2f → LEFT  (speed=%d)", cx, self._turn_speed)
             self._drive_direction("left", self._turn_speed)
         elif cx > self._right_bound:
-            logger.debug("Follow: cx=%.2f → RIGHT (speed=%d)", cx, self._turn_speed)
+            logger.info("Follow: cx=%.2f → RIGHT (speed=%d)", cx, self._turn_speed)
             self._drive_direction("right", self._turn_speed)
         elif bbox_w < self._target_bbox_width:
-            logger.debug("Follow: cx=%.2f bbox=%.2f → FWD  (speed=%d)", cx, bbox_w, self._forward_speed)
+            logger.info("Follow: cx=%.2f bbox=%.2f → FWD  (speed=%d)", cx, bbox_w, self._forward_speed)
             self._drive_direction("forward", self._forward_speed)
         else:
-            logger.debug("Follow: cx=%.2f bbox=%.2f → HOLD", cx, bbox_w)
+            logger.info("Follow: cx=%.2f bbox=%.2f → HOLD", cx, bbox_w)
             self._drive(0, 0)
 
 

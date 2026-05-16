@@ -52,8 +52,8 @@ body_tracker:
   confidence: 0.40
   centre_zone: 0.30
   target_bbox_width: 0.35
-  turn_speed: 100
-  forward_speed: 120
+  turn_speed: 70
+  forward_speed: 80
   frame_interval_s: 0.10
 
 firmware:
