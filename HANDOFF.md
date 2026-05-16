@@ -383,6 +383,48 @@ Report what you changed and how follow behaved on the robot.
 
 ---
 
+## Versioning
+
+**Repo:** https://github.com/NotAmbassad0r/rover2
+
+**Branches:**
+- `main` — stable, tagged releases only
+- `dev` — active development (you are here during dev phase)
+
+**Tags / releases (semver):**
+
+| Tag | Meaning |
+|-----|---------|
+| `v0.3.0` | Phase 3 follow enabled — dev phase (current) |
+| `v0.3.x` | Follow tuning patches |
+| `v1.0.0` | Phase 3 verified untethered — test1 pass → merge dev→main |
+| `v1.1.0` | Phase 4: BLE beacon follow |
+
+**Phases:**
+- **dev phase** — robot on eth0 (192.168.70.11) + power cables; limited movement
+- **test1 phase** — robot untethered (WiFi 192.168.250.254, battery); full mobility test
+
+**Workflow:**
+```bash
+# daily work on dev branch
+git checkout dev
+# ... make changes, deploy, test ...
+git add -p && git commit -m "fix: ..."
+git push
+
+# patch release after tuning
+git tag -a v0.3.1 -m "follow tuning: lower turn_speed, wider centre_zone"
+git push origin v0.3.1
+gh release create v0.3.1 --generate-notes
+
+# test1 milestone → merge to main
+git checkout main && git merge --no-ff dev
+git tag -a v1.0.0 -m "Phase 3 verified untethered (test1)"
+git push origin main v1.0.0
+```
+
+---
+
 ## Standing rules (this repo)
 
 - Prefer changes in `rover2/` unless explicitly merging into v1
