@@ -6,11 +6,15 @@ import logging
 import threading
 import time
 import urllib.request
-from typing import Callable
+from collections import deque
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 
 from body_tracker_parse import parse_best_person
+
+if TYPE_CHECKING:
+    from ble_tracker import BLETracker
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,15 @@ _CONFIRM_FRAMES: int = 3
 _LOST_FRAMES: int = 4
 _DRIVE_MIN_INTERVAL_S: float = 0.25
 _RECONNECT_DELAY_S: float = 2.0
+
+# BLE fallback constants
+_BLE_HANDOFF_DELAY_S: float = 2.0   # seconds after camera LOST before BLE activates
+_BLE_RSSI_CLOSE: int = -60           # dBm — person very close, hold
+_BLE_RSSI_TRACK: int = -75           # dBm — person visible, advance
+_BLE_SEARCH_SPEED: int = 50          # slow rotation while searching
+_BLE_FWD_SPEED: int = 60             # slow advance toward beacon
+_BLE_DIR_FLIP_S: float = 8.0         # flip search direction after this many seconds
+_BLE_TREND_WINDOW: int = 8           # RSSI readings to assess gradient
 
 DriveFn = Callable[[int, int], None]
 StopFn = Callable[[], None]
@@ -32,6 +45,7 @@ class BodyTracker:
         stop: StopFn,
         directions: dict[str, tuple[int, int]],
         config: dict | None = None,
+        ble_tracker: BLETracker | None = None,
     ) -> None:
         cfg = (config or {}).get("body_tracker", {})
 
@@ -71,6 +85,14 @@ class BodyTracker:
         self._hailo_ready = False
         self._last_error: str | None = None
 
+        # BLE fallback state
+        self._ble: BLETracker | None = ble_tracker
+        self._ble_active = False
+        self._camera_lost_at: float = 0.0
+        self._ble_search_dir: str = "right"
+        self._ble_dir_since: float = 0.0
+        self._ble_rssi_history: deque[int] = deque(maxlen=_BLE_TREND_WINDOW)
+
     @property
     def enabled(self) -> bool:
         with self._lock:
@@ -94,7 +116,7 @@ class BodyTracker:
         return True
 
     def get_state(self) -> dict:
-        return {
+        state: dict = {
             "available": self.available,
             "running": self._running,
             "enabled": self.enabled,
@@ -104,7 +126,11 @@ class BodyTracker:
             "person_tracked": self._person_tracked,
             "last_error": self._last_error,
             "camera_url": self._camera_url,
+            "ble_active": self._ble_active,
         }
+        if self._ble is not None:
+            state["ble"] = self._ble.get_state()
+        return state
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -154,8 +180,12 @@ class BodyTracker:
         self._person_tracked = False
         self._seen_streak = 0
         self._lost_streak = 0
+        self._ble_active = False
+        self._camera_lost_at = 0.0
+        self._ble_rssi_history.clear()
 
     def _update_person_presence(self, seen: bool) -> None:
+        was_tracked = self._person_tracked
         if seen:
             self._seen_streak += 1
             self._lost_streak = 0
@@ -171,6 +201,18 @@ class BodyTracker:
                     logger.info("BodyTracker: person LOST (streak=%d)", self._lost_streak)
                 self._person_tracked = False
         self._person_detected = self._person_tracked
+
+        if was_tracked and not self._person_tracked:
+            # Just lost — start the BLE handoff timer
+            self._camera_lost_at = time.monotonic()
+            self._ble_rssi_history.clear()
+        elif not was_tracked and self._person_tracked:
+            # Just reacquired — cancel BLE
+            if self._ble_active:
+                logger.info("BLE follow: camera re-acquired, returning to camera follow")
+            self._ble_active = False
+            self._camera_lost_at = 0.0
+            self._ble_rssi_history.clear()
 
     def _drive_direction(self, direction: str, speed: int) -> None:
         mult_l, mult_r = self._directions.get(direction, (0, 0))
@@ -191,6 +233,46 @@ class BodyTracker:
             self._drive_fn(left, right)
         self._last_drive = cmd
         self._last_drive_time = now
+
+    def _ble_drive(self) -> None:
+        """Drive toward the BLE beacon when the camera has lost the person."""
+        if self._ble is None:
+            return
+        rssi = self._ble.rssi
+        now = time.monotonic()
+
+        if rssi is not None:
+            self._ble_rssi_history.append(rssi)
+
+        if rssi is None or rssi < _BLE_RSSI_TRACK:
+            # Beacon not visible or too weak — rotate to search
+            # Use RSSI trend to decide whether to flip direction
+            if len(self._ble_rssi_history) >= _BLE_TREND_WINDOW:
+                history = list(self._ble_rssi_history)
+                trend = history[-1] - history[0]   # positive = signal improving
+                if trend < -3:                      # worsening while turning this way
+                    self._ble_search_dir = "left" if self._ble_search_dir == "right" else "right"
+                    self._ble_dir_since = now
+                    self._ble_rssi_history.clear()
+                    logger.info(
+                        "BLE follow: signal worsening (trend=%+d dBm), flip → %s",
+                        trend, self._ble_search_dir,
+                    )
+            elif now - self._ble_dir_since > _BLE_DIR_FLIP_S:
+                # Timeout fallback — try other direction
+                self._ble_search_dir = "left" if self._ble_search_dir == "right" else "right"
+                self._ble_dir_since = now
+                self._ble_rssi_history.clear()
+                logger.info("BLE follow: search timeout, flip → %s", self._ble_search_dir)
+            self._drive_direction(self._ble_search_dir, _BLE_SEARCH_SPEED)
+        elif rssi > _BLE_RSSI_CLOSE:
+            # Very close — hold
+            logger.debug("BLE follow: close (rssi=%d dBm) → HOLD", rssi)
+            self._drive(0, 0)
+        else:
+            # Medium distance — advance
+            logger.debug("BLE follow: tracking (rssi=%d dBm) → FWD", rssi)
+            self._drive_direction("forward", _BLE_FWD_SPEED)
 
     def _run(self) -> None:
         self._running = True
@@ -316,7 +398,20 @@ class BodyTracker:
             return
 
         if not self._person_tracked or best is None:
-            self._drive(0, 0)
+            if (
+                self._ble is not None
+                and self._camera_lost_at > 0.0
+                and time.monotonic() - self._camera_lost_at >= _BLE_HANDOFF_DELAY_S
+            ):
+                if not self._ble_active:
+                    self._ble_active = True
+                    logger.info(
+                        "BLE follow: activated (camera LOST %.1fs ago)",
+                        time.monotonic() - self._camera_lost_at,
+                    )
+                self._ble_drive()
+            else:
+                self._drive(0, 0)
             return
 
         _y0, x0, _y1, x1, _score = best

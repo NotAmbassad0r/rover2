@@ -56,5 +56,10 @@ body_tracker:
   forward_speed: 80
   frame_interval_s: 0.10
 
+ble_tracker:
+  enabled: true
+  device_name: "JBL Flip 6"
+  # device_mac: "AA:BB:CC:DD:EE:FF"  # optional — more reliable than name matching
+
 firmware:
   hex_path: /tmp/rover2_firmware.hex

@@ -9,6 +9,7 @@ import sys
 import uvicorn
 import yaml
 
+from ble_tracker import BLETracker
 from body_tracker import BodyTracker
 from megapi import MegaPiBridge
 from safety import SafetyMonitor
@@ -51,6 +52,13 @@ def main() -> None:
         safety_monitor.start()
 
     directions = _directions_from_config(config)
+
+    ble_tracker: BLETracker | None = None
+    ble_cfg = config.get("ble_tracker", {})
+    if ble_cfg.get("enabled", False):
+        ble_tracker = BLETracker(config=config)
+        ble_tracker.start()
+
     body_tracker: BodyTracker | None = None
     tracker_cfg = config.get("body_tracker", {})
     if tracker_cfg.get("enabled", False):
@@ -59,6 +67,7 @@ def main() -> None:
             stop=megapi.stop_motors,
             directions=directions,
             config=config,
+            ble_tracker=ble_tracker,
         )
         body_tracker.start()
 
@@ -80,6 +89,8 @@ def main() -> None:
     finally:
         if body_tracker is not None:
             body_tracker.stop()
+        if ble_tracker is not None:
+            ble_tracker.stop()
         if safety_monitor is not None:
             safety_monitor.stop()
         megapi.stop()

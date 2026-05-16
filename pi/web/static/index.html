@@ -212,6 +212,9 @@
     <div class="status-row" id="row-person">
       <span>PERSON</span><span id="st-person">—</span>
     </div>
+    <div class="status-row" id="row-ble">
+      <span>BLE BEACON</span><span id="st-ble">—</span>
+    </div>
     <div class="status-row">
       <span>UPTIME</span><span id="st-uptime">—</span>
     </div>
@@ -363,6 +366,22 @@
         followOn = !!d.tracking_enabled;
         detectOn = !!d.tracking_detect_only;
         updateTrackingButtons();
+      }
+
+      const bleEl = document.getElementById('st-ble');
+      const bleRow = document.getElementById('row-ble');
+      if (d.ble_available === false) {
+        bleEl.textContent = 'N/A';
+        bleRow.className = 'status-row';
+      } else if (d.ble_active) {
+        bleEl.textContent = d.ble_rssi != null ? `FOLLOWING (${d.ble_rssi} dBm)` : 'FOLLOWING';
+        bleRow.className = 'status-row warn';
+      } else if (d.ble_seen) {
+        bleEl.textContent = d.ble_rssi != null ? `SEEN (${d.ble_rssi} dBm)` : 'SEEN';
+        bleRow.className = 'status-row';
+      } else if (d.ble_available !== undefined) {
+        bleEl.textContent = 'SCANNING';
+        bleRow.className = 'status-row';
       }
     }
 

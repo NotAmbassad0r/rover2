@@ -49,12 +49,19 @@ def build_telemetry(
         payload["tracking_detect_only"] = state["detect_only"]
         payload["tracking_hailo_ready"] = state["hailo_ready"]
         payload["person_detected"] = state["person_detected"]
+        payload["ble_active"] = state.get("ble_active", False)
+        ble = state.get("ble")
+        if ble:
+            payload["ble_available"] = ble.get("available", False)
+            payload["ble_seen"] = ble.get("seen", False)
+            payload["ble_rssi"] = ble.get("rssi")
         if state.get("last_error"):
             payload["tracking_error"] = state["last_error"]
     else:
         payload["tracking_available"] = False
         payload["tracking_enabled"] = False
         payload["tracking_detect_only"] = False
+        payload["ble_active"] = False
     return payload
 
 
