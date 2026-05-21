@@ -12,12 +12,12 @@ server:
 drive:
   default_speed: 120
   max_speed: 255
-  # Optional per-chassis remap: direction → [left_sign, right_sign]
-  # direction_map:
-  #   forward: [1, -1]
-  #   back: [-1, 1]
-  #   left: [1, 1]
-  #   right: [-1, -1]
+  # Arc turns: one wheel rolls, one stops — much less floor friction than pivot turns
+  direction_map:
+    forward: [1, -1]
+    back: [-1, 1]
+    left: [0, -1]
+    right: [1, 0]
 
 gripper:
   port: PORT4B
@@ -38,7 +38,7 @@ ultrasonic:
 
 websocket:
   telemetry_interval_s: 0.4   # live status push to browser
-  heartbeat_timeout_s: 4.0    # stop motors/follow if UI stops pinging
+  heartbeat_timeout_s: 10.0   # stop motors/follow if UI stops pinging (10s tolerates WiFi jitter)
 
 camera:
   upstream_url: http://127.0.0.1:8081/stream
@@ -53,9 +53,9 @@ body_tracker:
   confidence: 0.40
   centre_zone: 0.30
   target_bbox_width: 0.35
-  turn_speed: 100
-  forward_speed: 120
-  frame_interval_s: 0.10
+  turn_speed: 160
+  forward_speed: 150
+  frame_interval_s: 0.25   # 4fps — reduces Hailo power draw on battery
   avoid_default: left   # when wall blocks FWD and person is centred in frame
 
 ble_tracker:

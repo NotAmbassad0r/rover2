@@ -362,25 +362,6 @@ class BodyTracker:
 
     def _run(self) -> None:
         self._running = True
-        backoff = 2.0
-        while not self._stop_event.is_set():
-            try:
-                self._hailo = _HailoInference(self._hef_path, self._hailo_group_id)
-                self._hailo_ready = True
-                self._last_error = None
-                logger.info("BodyTracker: Hailo ready")
-                break
-            except Exception as exc:
-                self._hailo_ready = False
-                self._last_error = str(exc)
-                if self._stop_event.is_set():
-                    return
-                logger.warning(
-                    "BodyTracker: Hailo init failed (%s) — retry in %.1fs", exc, backoff
-                )
-                self._stop_event.wait(backoff)
-                backoff = min(backoff * 2, 30.0)
-
         while not self._stop_event.is_set():
             # Idle wait — do not open the stream unless DETECT or FOLLOW is active.
             with self._lock:
@@ -388,6 +369,31 @@ class BodyTracker:
             if not active:
                 self._stop_event.wait(0.2)
                 continue
+
+            # Lazy Hailo init — load model only when first needed, not at service start.
+            # This avoids a power spike during boot when the CPU is already busy.
+            if self._hailo is None:
+                backoff = 2.0
+                while not self._stop_event.is_set():
+                    try:
+                        self._hailo = _HailoInference(self._hef_path, self._hailo_group_id)
+                        self._hailo_ready = True
+                        self._last_error = None
+                        logger.info("BodyTracker: Hailo ready")
+                        break
+                    except Exception as exc:
+                        self._hailo_ready = False
+                        self._last_error = str(exc)
+                        if self._stop_event.is_set():
+                            break
+                        logger.warning(
+                            "BodyTracker: Hailo init failed (%s) — retry in %.1fs", exc, backoff
+                        )
+                        self._stop_event.wait(backoff)
+                        backoff = min(backoff * 2, 30.0)
+                if self._hailo is None:
+                    continue
+
             try:
                 self._stream_loop()
             except Exception as exc:
