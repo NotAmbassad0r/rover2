@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rsync -avz /home/ambassad0r/Documents/projects/rover2/pi/web/static/index.html /home/ambassad0r/Documents/projects/rover2/pi/vlm_engine.py /home/ambassad0r/Documents/projects/rover2/pi/chat_router.py /home/ambassad0r/Documents/projects/rover2/pi/server.py /home/ambassad0r/Documents/projects/rover2/pi/main.py /home/ambassad0r/Documents/projects/rover2/pi/config.yaml rover-eth:/opt/rover2/pi/)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(m['name'], m['size']//1024//1024, 'MB'\\) for m in d.get\\('models',[]\\)]\")",
+      "Bash(curl -s --max-time 3 http://localhost:11434/)",
+      "Bash(systemctl --user status ollama)",
+      "Bash(rsync -avz /home/ambassad0r/Documents/projects/rover2/pi/web/static/index.html rover-eth:/opt/rover2/web/static/)",
+      "Bash(rsync -avz /home/ambassad0r/Documents/projects/rover2/pi/agent.py /home/ambassad0r/Documents/projects/rover2/pi/vlm_engine.py /home/ambassad0r/Documents/projects/rover2/pi/chat_router.py /home/ambassad0r/Documents/projects/rover2/pi/server.py /home/ambassad0r/Documents/projects/rover2/pi/main.py /home/ambassad0r/Documents/projects/rover2/pi/config.yaml rover-eth:/opt/rover2/)",
+      "Bash(rsync -av pi/agent.py ambassad0r@rover:/opt/rover2/)",
+      "Bash(ssh ambassad0r@rover \"sudo systemctl restart --no-block rover2-api.service && sleep 3 && systemctl is-active rover2-api\")",
+      "Bash(ssh ambassad0r@rover 'time curl -s -X POST http://localhost:8082/api/agent/chat   -H '\\\\''Content-Type: application/json'\\\\''   -d '\\\\''{\"messages\":[{\"role\":\"user\",\"content\":\"List the status of all rover services.\"}]}'\\\\''   | python3 -c '\\\\''import json,sys; d=json.load\\(sys.stdin\\); print\\(d[\"reply\"]\\)'\\\\''')",
+      "Bash(ssh ambassad0r@rover 'curl -s -X POST http://localhost:8082/api/agent/chat   -H '\\\\''Content-Type: application/json'\\\\''   -d '\\\\''{\"messages\":[{\"role\":\"user\",\"content\":\"Any alerts or issues right now?\"}]}'\\\\''   | python3 -c '\\\\''import json,sys; d=json.load\\(sys.stdin\\); print\\(d[\"reply\"]\\)'\\\\''')",
+      "Bash(ssh ambassad0r@rover \"node --check /tmp/test_js.js 2>&1 | head -20\")",
+      "Bash(ssh ambassad0r@rover \"systemctl is-active rover2-api && curl -s http://localhost:8082/api/health && echo && curl -s -o /dev/null -w '%{http_code}' http://localhost:8082/\")",
+      "Bash(rsync -av pi/web/static/index.html ambassad0r@rover:/opt/rover2/web/static/)",
+      "Bash(ssh ambassad0r@rover \"curl -s http://localhost:8082/ | head -2\")"
+    ]
+  }
+}

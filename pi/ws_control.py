@@ -94,6 +94,77 @@ class ControlHub:
         self._driver_direction: str | None = None
         self._arm_driver: WebSocket | None = None
         self._tracking_owner: WebSocket | None = None
+        self._last_client_activity: float = time.monotonic()
+        self._watchdog_task: asyncio.Task[None] | None = None
+        self._telemetry_extra: dict[str, Any] = {}
+        ws_cfg = self._config.get("websocket", {})
+        self._heartbeat_timeout_s = float(ws_cfg.get("heartbeat_timeout_s", 4.0))
+
+    def touch_activity(self) -> None:
+        self._last_client_activity = time.monotonic()
+
+    def set_telemetry_extra(self, extra: dict[str, Any]) -> None:
+        self._telemetry_extra = dict(extra)
+
+    def apply_drive_settings(
+        self,
+        *,
+        max_speed: int | None = None,
+        default_speed: int | None = None,
+    ) -> None:
+        if max_speed is not None:
+            self._max_speed = int(max_speed)
+        if default_speed is not None:
+            self._config.setdefault("drive", {})["default_speed"] = int(default_speed)
+
+    def apply_websocket_settings(
+        self,
+        *,
+        telemetry_interval_s: float | None = None,
+        heartbeat_timeout_s: float | None = None,
+    ) -> None:
+        if telemetry_interval_s is not None:
+            self._telemetry_interval_s = float(telemetry_interval_s)
+        if heartbeat_timeout_s is not None:
+            self._heartbeat_timeout_s = float(heartbeat_timeout_s)
+
+    async def watchdog_loop(self) -> None:
+        """Stop motion if no client messages (incl. ping) within timeout."""
+        try:
+            while True:
+                await asyncio.sleep(0.5)
+                active = (
+                    self._driver is not None
+                    or self._arm_driver is not None
+                    or (
+                        self._body_tracker is not None
+                        and self._body_tracker.enabled
+                    )
+                )
+                if not active:
+                    continue
+                if time.monotonic() - self._last_client_activity > self._heartbeat_timeout_s:
+                    logger.warning(
+                        "Heartbeat timeout (%.1fs) — stopping motors/tracking",
+                        self._heartbeat_timeout_s,
+                    )
+                    self.touch_activity()
+                    if self._body_tracker is not None and self._body_tracker.enabled:
+                        self._disable_tracking()
+                    try:
+                        self._megapi.stop_motors()
+                        self._megapi.arm(0)
+                    except Exception as exc:
+                        logger.warning("Heartbeat stop failed: %s", exc)
+                    self._driver = None
+                    self._driver_direction = None
+                    self._arm_driver = None
+        except asyncio.CancelledError:
+            raise
+
+    def start_watchdog(self) -> None:
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self.watchdog_loop())
 
     def _scale(self, speed_fraction: float) -> int:
         return int(
@@ -131,6 +202,8 @@ class ControlHub:
                     self._public_ultrasonic_cm,
                     self._body_tracker,
                 )
+                if self._telemetry_extra:
+                    payload.update(self._telemetry_extra)
                 await self._send_json(ws, payload)
                 await asyncio.sleep(self._telemetry_interval_s)
         except asyncio.CancelledError:
@@ -141,6 +214,7 @@ class ControlHub:
     async def serve(self, ws: WebSocket) -> None:
         """Run session after the route handler has accepted the WebSocket."""
         self._clients.add(ws)
+        self.start_watchdog()
         telemetry_task = asyncio.create_task(self._telemetry_loop(ws))
         try:
             while True:
@@ -187,6 +261,7 @@ class ControlHub:
                 logger.warning("Stop on disconnect failed: %s", exc)
 
     async def _handle_message(self, ws: WebSocket, msg: dict[str, Any]) -> None:
+        self.touch_activity()
         msg_type = str(msg.get("type", "")).lower()
 
         if msg_type == "ping":

@@ -7,14 +7,16 @@ import threading
 import time
 import urllib.request
 from collections import deque
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 
 from body_tracker_parse import parse_best_person
+from follow_nav import ble_should_turn_in_place, steer_around_obstacle
 
 if TYPE_CHECKING:
     from ble_tracker import BLETracker
+    from safety import SafetyMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ class BodyTracker:
         directions: dict[str, tuple[int, int]],
         config: dict | None = None,
         ble_tracker: BLETracker | None = None,
+        safety: SafetyMonitor | None = None,
     ) -> None:
         cfg = (config or {}).get("body_tracker", {})
 
@@ -85,6 +88,9 @@ class BodyTracker:
         self._hailo_ready = False
         self._last_error: str | None = None
 
+        self._safety: SafetyMonitor | None = safety
+        self._avoid_default = str(cfg.get("avoid_default", "left"))
+
         # BLE fallback state
         self._ble: BLETracker | None = ble_tracker
         self._ble_active = False
@@ -92,6 +98,50 @@ class BodyTracker:
         self._ble_search_dir: str = "right"
         self._ble_dir_since: float = 0.0
         self._ble_rssi_history: deque[int] = deque(maxlen=_BLE_TREND_WINDOW)
+
+        ble_cfg = (config or {}).get("ble_tracker", {})
+        self._ble_rssi_close = int(ble_cfg.get("rssi_close", _BLE_RSSI_CLOSE))
+        self._ble_rssi_track = int(ble_cfg.get("rssi_track", _BLE_RSSI_TRACK))
+        self._ble_search_speed = int(ble_cfg.get("search_speed", _BLE_SEARCH_SPEED))
+        self._ble_fwd_speed = int(ble_cfg.get("fwd_speed", _BLE_FWD_SPEED))
+
+    def apply_tuning(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """Apply body_tracker + ble_tracker tuning fields at runtime."""
+        applied: dict[str, Any] = {}
+        with self._lock:
+            if "confidence" in patch:
+                self._confidence = float(patch["confidence"])
+                applied["confidence"] = self._confidence
+            if "centre_zone" in patch:
+                self._centre_zone = float(patch["centre_zone"])
+                self._left_bound = 0.5 - self._centre_zone / 2
+                self._right_bound = 0.5 + self._centre_zone / 2
+                applied["centre_zone"] = self._centre_zone
+            if "target_bbox_width" in patch:
+                self._target_bbox_width = float(patch["target_bbox_width"])
+                applied["target_bbox_width"] = self._target_bbox_width
+            if "turn_speed" in patch:
+                self._turn_speed = int(patch["turn_speed"])
+                applied["turn_speed"] = self._turn_speed
+            if "forward_speed" in patch:
+                self._forward_speed = int(patch["forward_speed"])
+                applied["forward_speed"] = self._forward_speed
+            if "avoid_default" in patch:
+                self._avoid_default = str(patch["avoid_default"])
+                applied["avoid_default"] = self._avoid_default
+            if "rssi_close" in patch:
+                self._ble_rssi_close = int(patch["rssi_close"])
+                applied["rssi_close"] = self._ble_rssi_close
+            if "rssi_track" in patch:
+                self._ble_rssi_track = int(patch["rssi_track"])
+                applied["rssi_track"] = self._ble_rssi_track
+            if "search_speed" in patch:
+                self._ble_search_speed = int(patch["search_speed"])
+                applied["search_speed"] = self._ble_search_speed
+            if "fwd_speed" in patch:
+                self._ble_fwd_speed = int(patch["fwd_speed"])
+                applied["fwd_speed"] = self._ble_fwd_speed
+        return applied
 
     @property
     def enabled(self) -> bool:
@@ -161,6 +211,8 @@ class BodyTracker:
             self._enabled = enabled
             if enabled:
                 self._detect_only = False
+                if not self._person_tracked and self._camera_lost_at == 0.0:
+                    self._camera_lost_at = time.monotonic()
         logger.info("BodyTracker: tracking %s", "ENABLED" if enabled else "DISABLED")
         if not enabled:
             self._reset_tracking_state()
@@ -214,6 +266,38 @@ class BodyTracker:
             self._camera_lost_at = 0.0
             self._ble_rssi_history.clear()
 
+    def _forward_blocked(self) -> bool:
+        return self._safety is not None and self._safety.forward_blocked
+
+    def _follow_drive(
+        self,
+        direction: str,
+        speed: int,
+        *,
+        person_cx: float | None = None,
+        ble_turn: str | None = None,
+    ) -> None:
+        """Drive for follow; steer around ultrasonic obstacles instead of stopping."""
+        direction = steer_around_obstacle(
+            direction,
+            forward_blocked=self._forward_blocked(),
+            person_cx=person_cx,
+            ble_turn=ble_turn,
+            default_avoid=self._avoid_default,
+        )
+        if (
+            self._safety is not None
+            and direction in ("left", "right")
+            and self._forward_blocked()
+            and self._safety.distance_cm is not None
+        ):
+            logger.info(
+                "Follow: obstacle at %d cm → %s (keep tracking)",
+                self._safety.distance_cm,
+                direction.upper(),
+            )
+        self._drive_direction(direction, speed)
+
     def _drive_direction(self, direction: str, speed: int) -> None:
         mult_l, mult_r = self._directions.get(direction, (0, 0))
         self._drive(mult_l * speed, mult_r * speed)
@@ -244,7 +328,7 @@ class BodyTracker:
         if rssi is not None:
             self._ble_rssi_history.append(rssi)
 
-        if rssi is None or rssi < _BLE_RSSI_TRACK:
+        if rssi is None or rssi < self._ble_rssi_track:
             # Beacon not visible or too weak — rotate to search
             # Use RSSI trend to decide whether to flip direction
             if len(self._ble_rssi_history) >= _BLE_TREND_WINDOW:
@@ -264,15 +348,17 @@ class BodyTracker:
                 self._ble_dir_since = now
                 self._ble_rssi_history.clear()
                 logger.info("BLE follow: search timeout, flip → %s", self._ble_search_dir)
-            self._drive_direction(self._ble_search_dir, _BLE_SEARCH_SPEED)
-        elif rssi > _BLE_RSSI_CLOSE:
+            self._follow_drive(self._ble_search_dir, self._ble_search_speed, ble_turn=self._ble_search_dir)
+        elif rssi > self._ble_rssi_close:
             # Very close — hold
             logger.debug("BLE follow: close (rssi=%d dBm) → HOLD", rssi)
             self._drive(0, 0)
+        elif ble_should_turn_in_place(list(self._ble_rssi_history)):
+            logger.debug("BLE follow: RSSI falling → turn %s", self._ble_search_dir)
+            self._follow_drive(self._ble_search_dir, self._ble_search_speed, ble_turn=self._ble_search_dir)
         else:
-            # Medium distance — advance
             logger.debug("BLE follow: tracking (rssi=%d dBm) → FWD", rssi)
-            self._drive_direction("forward", _BLE_FWD_SPEED)
+            self._follow_drive("forward", self._ble_fwd_speed, ble_turn=self._ble_search_dir)
 
     def _run(self) -> None:
         self._running = True
@@ -296,6 +382,12 @@ class BodyTracker:
                 backoff = min(backoff * 2, 30.0)
 
         while not self._stop_event.is_set():
+            # Idle wait — do not open the stream unless DETECT or FOLLOW is active.
+            with self._lock:
+                active = self._enabled or self._detect_only
+            if not active:
+                self._stop_event.wait(0.2)
+                continue
             try:
                 self._stream_loop()
             except Exception as exc:
@@ -319,6 +411,13 @@ class BodyTracker:
         last_infer = 0.0
         try:
             while not self._stop_event.is_set():
+                # Stop streaming as soon as DETECT and FOLLOW are both off.
+                with self._lock:
+                    active = self._enabled or self._detect_only
+                if not active:
+                    logger.info("BodyTracker: idle — closing stream")
+                    break
+
                 chunk = req.read(4096)
                 if not chunk:
                     break
@@ -331,11 +430,6 @@ class BodyTracker:
                     continue
                 jpg = buf[a : b + 2]
                 buf = buf[b + 2 :]
-
-                with self._lock:
-                    active = self._enabled or self._detect_only
-                if not active:
-                    continue
 
                 now = time.monotonic()
                 if now - last_infer < self._frame_interval_s:
@@ -420,13 +514,13 @@ class BodyTracker:
 
         if cx < self._left_bound:
             logger.info("Follow: cx=%.2f → LEFT  (speed=%d)", cx, self._turn_speed)
-            self._drive_direction("left", self._turn_speed)
+            self._follow_drive("left", self._turn_speed, person_cx=cx)
         elif cx > self._right_bound:
             logger.info("Follow: cx=%.2f → RIGHT (speed=%d)", cx, self._turn_speed)
-            self._drive_direction("right", self._turn_speed)
+            self._follow_drive("right", self._turn_speed, person_cx=cx)
         elif bbox_w < self._target_bbox_width:
             logger.info("Follow: cx=%.2f bbox=%.2f → FWD  (speed=%d)", cx, bbox_w, self._forward_speed)
-            self._drive_direction("forward", self._forward_speed)
+            self._follow_drive("forward", self._forward_speed, person_cx=cx)
         else:
             logger.info("Follow: cx=%.2f bbox=%.2f → HOLD", cx, bbox_w)
             self._drive(0, 0)

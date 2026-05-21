@@ -19,9 +19,11 @@ class BLETracker:
 
     def __init__(self, config: dict | None = None) -> None:
         cfg = (config or {}).get("ble_tracker", {})
-        self._target_name: str = str(cfg.get("device_name", "JBL Flip 6"))
+        self._target_name: str = str(cfg.get("device_name", ""))
         mac = str(cfg.get("device_mac", "")).strip().upper()
         self._target_mac: str | None = mac or None
+        uuid = str(cfg.get("beacon_uuid", "")).strip().lower()
+        self._target_uuid: str | None = uuid or None
 
         self._lock = threading.Lock()
         self._rssi_smooth: float | None = None
@@ -32,6 +34,7 @@ class BLETracker:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._seen_addrs: set[str] = set()
 
     # ------------------------------------------------------------------ public
 
@@ -68,6 +71,7 @@ class BLETracker:
             "seen": self.seen,
             "rssi": self.rssi,
             "target_name": self._target_name,
+            "target_uuid": self._target_uuid,
             "last_error": self._last_error,
         }
 
@@ -98,10 +102,20 @@ class BLETracker:
     def _on_advertisement(self, device, adv) -> None:
         name = device.name or ""
         addr = device.address.upper()
-        match = (
-            (self._target_mac and addr == self._target_mac)
-            or (not self._target_mac and self._target_name.lower() in name.lower())
-        )
+        if addr not in self._seen_addrs:
+            self._seen_addrs.add(addr)
+            logger.info("BLE seen: %s  name=%r  rssi=%s  uuids=%s",
+                        addr, name or "(unnamed)", adv.rssi,
+                        list(adv.service_uuids) if adv.service_uuids else "[]")
+        if self._target_uuid:
+            match = any(
+                self._target_uuid in u.lower()
+                for u in (adv.service_uuids or [])
+            )
+        elif self._target_mac:
+            match = (addr == self._target_mac)
+        else:
+            match = bool(name) and self._target_name.lower() in name.lower()
         if not match:
             return
         rssi = adv.rssi

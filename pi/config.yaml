@@ -38,6 +38,7 @@ ultrasonic:
 
 websocket:
   telemetry_interval_s: 0.4   # live status push to browser
+  heartbeat_timeout_s: 4.0    # stop motors/follow if UI stops pinging
 
 camera:
   upstream_url: http://127.0.0.1:8081/stream
@@ -52,14 +53,44 @@ body_tracker:
   confidence: 0.40
   centre_zone: 0.30
   target_bbox_width: 0.35
-  turn_speed: 70
-  forward_speed: 80
+  turn_speed: 100
+  forward_speed: 120
   frame_interval_s: 0.10
+  avoid_default: left   # when wall blocks FWD and person is centred in frame
 
 ble_tracker:
   enabled: true
-  device_name: "JBL Flip 6"
-  # device_mac: "AA:BB:CC:DD:EE:FF"  # optional — more reliable than name matching
+  device_name: "-Lars's Z flip 6"
+  device_mac: "F0:05:1B:0A:E0:4C"
+  beacon_uuid: "0000fcf1-0000-1000-8000-00805f9b34fb"
+  rssi_track: -75      # advance when signal stronger than this
+  rssi_close: -60      # hold when very close
+  search_speed: 50
+  fwd_speed: 60
+
+agent:
+  enabled: true
+  # backend: hailo = LLM on AI HAT+ (hailo-ollama) | tools_only = Pi bridge/tools only (no CPU LLM)
+  #         cpu = legacy Pi CPU ollama.service (high load — avoid on robot)
+  backend: tools_only   # Pi bridge only while FOLLOW uses HAT. For HAT LLM: set backend: hailo, FOLLOW off, run setup_ai_on_hailo.sh
+  ollama_base: http://127.0.0.1:11434   # used when backend=cpu only
+  hailo_ollama_base: http://127.0.0.1:8000   # hailo-ollama on HAT (port 8000, not 11434)
+  model: llama3.2:1b                    # CPU ollama only
+  hailo_model: qwen2:1.5b               # model on AI HAT+ (hailo-ollama)
+  rover_base: http://127.0.0.1:8082     # rover2-api self-call for tool execution
+  ollama_timeout_s: 180
+  warmup_on_start: false                # no LLM preload on Pi CPU (energy / thermals)
+
+metrics:
+  interval_s: 5
+  interval_hot_s: 15                  # slower sampling when CPU >= 70% (less Pi heat)
+
+vlm:
+  enabled: true
+  hef_path: /opt/rover/models/Qwen2-VL-2B-Instruct.hef
+  hailo_group_id: rover2          # must match body_tracker — enables round-robin sharing
+  camera_url: http://127.0.0.1:8081/snapshot
+  max_tokens: 128                 # keep responses short; longer = more Hailo time
 
 firmware:
   hex_path: /tmp/rover2_firmware.hex

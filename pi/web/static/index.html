@@ -1,9 +1,10 @@
-<!DOCTYPE html>
+<!DOCTYPE html><!-- v2025-05-16e -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ROVER2 Control</title>
+  <script src="/static/chart.min.js"></script>
   <style>
     :root {
       --bg: #0d1117;
@@ -184,11 +185,324 @@
       margin-bottom: 0.75rem;
       text-align: center;
     }
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      width: min(420px, 100%);
+    }
+    .tabs button {
+      flex: 1;
+      font-family: inherit;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      padding: 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .tabs button.active {
+      color: #000;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .tab-page { display: none; width: min(420px, 100%); }
+    .tab-page.active { display: block; }
+    .diag-grid { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.72rem; }
+    .diag-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.35rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .diag-row:last-child { border-bottom: none; }
+    .diag-row .label { color: var(--muted); }
+    .diag-row.ok span.val { color: var(--accent); }
+    .diag-row.warn span.val { color: var(--warn); }
+    .diag-row.error span.val { color: var(--danger); }
+    .script-row {
+      font-size: 0.7rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .script-row:last-child { border-bottom: none; }
+    .script-row code {
+      display: block;
+      margin-top: 0.25rem;
+      color: var(--accent);
+      word-break: break-all;
+    }
+    .tools-actions button {
+      font-family: inherit;
+      font-size: 0.75rem;
+      padding: 0.45rem 0.65rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .tools-actions button:hover { border-color: var(--accent); }
+    .script-run {
+      float: right;
+      font-family: inherit;
+      font-size: 0.65rem;
+      padding: 0.2rem 0.45rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #21262d;
+      color: var(--accent);
+      cursor: pointer;
+    }
+    .tools-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .muted { color: var(--muted); font-size: 0.7rem; }
+    .log-area, .config-pre {
+      font-size: 0.62rem;
+      line-height: 1.35;
+      max-height: 140px;
+      overflow-y: auto;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.5rem;
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .log-line.warn { color: var(--warn); }
+    .log-line.error { color: var(--danger); }
+    .tune-grid { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.7rem; margin-bottom: 0.75rem; }
+    .tune-grid label { display: flex; flex-direction: column; gap: 0.2rem; color: var(--muted); }
+    .tune-grid input[type=range] { width: 100%; accent-color: var(--accent); }
+    .tune-grid select { font-family: inherit; background: #21262d; color: var(--text); border: 1px solid var(--border); padding: 0.25rem; }
+    .metric-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.72rem;
+      padding: 0.3rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-row .label { color: var(--muted); min-width: 90px; flex-shrink: 0; }
+    .metric-row .bar-track { flex: 1; height: 4px; background: var(--border); border-radius: 2px; }
+    .metric-row .bar-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+    .metric-row .bar-fill.warn { background: var(--warn); }
+    .metric-row .bar-fill.error { background: var(--danger); }
+    .metric-row .val { min-width: 72px; text-align: right; }
+    .metric-row.ok .val { color: var(--accent); }
+    .metric-row.warn .val { color: var(--warn); }
+    .metric-row.error .val { color: var(--danger); }
+    .metric-row.info .val { color: var(--text); }
+    .core-grid { display: flex; gap: 0.25rem; flex-wrap: wrap; margin: 0.3rem 0; }
+    .core-cell { font-size: 0.65rem; padding: 0.15rem 0.3rem; border-radius: 3px; background: #21262d; border: 1px solid var(--border); }
+    .core-cell.warn { border-color: var(--warn); color: var(--warn); }
+    .core-cell.error { border-color: var(--danger); color: var(--danger); }
+    .diag-section-title {
+      font-size: 0.65rem;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin: 0.75rem 0 0.4rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.25rem;
+    }
+    .temp-grid { display: flex; flex-direction: column; gap: 0.25rem; }
+    .temp-row { display: flex; justify-content: space-between; font-size: 0.7rem; }
+    .temp-row .temp-name { color: var(--muted); }
+    .temp-val.ok { color: var(--accent); }
+    .temp-val.warn { color: var(--warn); }
+    .temp-val.error { color: var(--danger); }
+    #diag-auto-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+    .chart-label { font-size: 0.65rem; color: var(--muted); margin: 0; letter-spacing: 0.08em; }
+    .chart-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 0.5rem 0 0.2rem;
+      gap: 0.4rem;
+    }
+    .btn-ask-ai {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      padding: 0.12rem 0.45rem;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      background: #0d1f12;
+      color: var(--accent);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-ask-ai:hover { background: #132a18; }
+    .chart-wrap { position: relative; height: 120px; }
+    .time-sel { display: flex; gap: 0.3rem; margin-bottom: 0.5rem; }
+    .time-sel button {
+      font-family: var(--mono); font-size: 0.65rem; padding: 0.2rem 0.45rem;
+      border: 1px solid var(--border); border-radius: 4px;
+      background: #21262d; color: var(--muted); cursor: pointer;
+    }
+    .time-sel button.active { background: var(--accent); color: #000; border-color: var(--accent); }
+    .db-info { font-size: 0.62rem; color: var(--muted); text-align: right; margin-top: 0.25rem; }
+    .chart-group { font-size: 0.63rem; letter-spacing: 0.1em; color: var(--accent); margin: 1rem 0 0.25rem; }
+    /* ── Chat tab ─────────────────────────────────────────────────── */
+    .chat-log {
+      max-height: 260px;
+      overflow-y: auto;
+      font-size: 0.68rem;
+      line-height: 1.6;
+      margin-bottom: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.5rem;
+      background: #0d1117;
+    }
+    .chat-msg { padding: 0.1rem 0; border-bottom: 1px solid #1a1f26; }
+    .chat-msg:last-child { border-bottom: none; }
+    .chat-ts { color: var(--muted); margin-right: 0.4rem; font-size: 0.62rem; }
+    .chat-user .chat-who { color: var(--warn); font-weight: 600; }
+    .chat-rover .chat-who { color: var(--accent); font-weight: 600; }
+    .chat-error .chat-who { color: var(--danger); font-weight: 600; }
+    .chat-action { color: var(--muted); font-size: 0.62rem; margin-right: 0.25rem; }
+    .chat-row { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; align-items: stretch; }
+    .chat-row button {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      padding: 0.45rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .chat-row button:hover:not(:disabled) { border-color: var(--accent); }
+    .chat-row button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .chat-row button.agent-busy { border-color: var(--warn); color: var(--warn); }
+    .chat-input {
+      flex: 1;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      padding: 0.45rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--text);
+    }
+    .chat-input:focus { outline: none; border-color: var(--accent); }
+    .chat-btns { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .chat-btns button {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      padding: 0.45rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .chat-btns button:hover { border-color: var(--accent); }
+    #btn-voice.listening { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .vlm-status { font-size: 0.65rem; color: var(--muted); margin-top: 0.5rem; }
+    /* ── Agent panel ──────────────────────────────────────────────── */
+    .agent-log {
+      max-height: 320px;
+      overflow-y: auto;
+      font-size: 0.67rem;
+      line-height: 1.55;
+      margin-bottom: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.5rem;
+      background: #0d1117;
+    }
+    .agent-msg { padding: 0.15rem 0; border-bottom: 1px solid #1a1f26; }
+    .agent-msg:last-child { border-bottom: none; }
+    .agent-ts  { color: var(--muted); font-size: 0.6rem; margin-right: 0.4rem; }
+    .agent-user   .agent-who { color: var(--warn);   font-weight: 600; }
+    .agent-ai     .agent-who { color: #7ee787;        font-weight: 600; }
+    .agent-tool   .agent-who { color: var(--muted);  font-style: italic; }
+    .agent-error  .agent-who { color: var(--danger); font-weight: 600; }
+    .agent-result { color: var(--muted); font-size: 0.6rem; margin-left: 1.2rem; white-space: pre-wrap; word-break: break-all; }
+    .confirm-bar {
+      display: none;
+      margin: 0.5rem 0;
+      padding: 0.5rem;
+      border: 1px solid var(--danger);
+      border-radius: 6px;
+      font-size: 0.7rem;
+      background: #1a0a0a;
+    }
+    .confirm-bar.show { display: block; }
+    .confirm-bar .confirm-msg { color: var(--warn); margin-bottom: 0.4rem; }
+    .confirm-bar button {
+      font-family: var(--mono); font-size: 0.7rem;
+      padding: 0.3rem 0.65rem;
+      border-radius: 5px; cursor: pointer;
+      border: 1px solid;
+    }
+    .btn-confirm-yes { background: var(--danger); color: #fff; border-color: var(--danger); margin-right: 0.4rem; }
+    .btn-confirm-no  { background: #21262d; color: var(--text); border-color: var(--border); }
+    .agent-thinking { color: var(--muted); font-style: italic; font-size: 0.65rem; }
+    .btn-range {
+      background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+      border-radius: 4px; padding: 0.2rem 0.55rem; font-family: var(--mono);
+      font-size: 0.72rem; cursor: pointer; letter-spacing: .04em;
+    }
+    .btn-range.active { border-color: var(--accent); color: var(--accent); }
+    #btn-global-voice.listening {
+      border-color: var(--danger); color: var(--danger); animation: pulse 1s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
   </style>
 </head>
 <body>
   <h1>ROVER2</h1>
-  <p class="sub">WEBSOCKET · DRIVE · ARM · GRIPPER · ULTRASONIC</p>
+  <p class="sub">WEBSOCKET · DRIVE · ARM · FOLLOW · TOOLS</p>
+
+  <!-- Global alert bar — shown when threshold alerts are active -->
+  <div id="alert-bar" style="display:none;width:min(420px,100%);margin-bottom:0.6rem;
+    background:#1a0e0e;border:1px solid var(--danger);border-radius:8px;
+    padding:0.6rem 1rem;font-size:0.78rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span style="color:var(--danger);font-weight:700;letter-spacing:.06em;">⚠ ALERT</span>
+      <button onclick="document.getElementById('alert-bar').style.display='none'"
+        style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;">✕</button>
+    </div>
+    <div id="alert-msgs" style="color:var(--warn);margin-top:0.3rem;line-height:1.5;"></div>
+    <button type="button" onclick="alertAskAI()" style="margin-top:0.4rem;font-size:0.7rem;
+      background:#2a1212;border:1px solid var(--danger);color:var(--danger);
+      border-radius:4px;padding:0.2rem 0.6rem;cursor:pointer;">
+      ASK AI WHAT'S WRONG
+    </button>
+  </div>
+
+  <!-- Global voice bar -->
+  <div style="width:min(420px,100%);display:flex;align-items:center;gap:0.5rem;
+    margin-bottom:0.6rem;">
+    <button id="btn-global-voice" type="button" onclick="startGlobalVoice()"
+      style="flex:1;background:var(--panel);border:1px solid var(--border);
+      color:var(--muted);border-radius:6px;padding:0.45rem 0.6rem;
+      font-family:var(--mono);font-size:0.75rem;cursor:pointer;letter-spacing:.06em;">
+      🎤 SPEAK TO ROVER
+    </button>
+    <button id="btn-tts" type="button" onclick="toggleTTS()"
+      style="background:var(--panel);border:1px solid var(--border);
+      color:var(--muted);border-radius:6px;padding:0.45rem 0.65rem;
+      font-family:var(--mono);font-size:0.75rem;cursor:pointer;" title="Toggle voice replies">
+      🔇
+    </button>
+  </div>
+
+  <div class="tabs">
+    <button type="button" id="tab-btn-control" class="active">CONTROL</button>
+    <button type="button" id="tab-btn-tools">TOOLS</button>
+    <button type="button" id="tab-btn-diag">DIAG</button>
+    <button type="button" id="tab-btn-chat">CHAT</button>
+  </div>
+
+  <div id="tab-control" class="tab-page active">
 
   <div class="panel">
     <div class="status-row" id="row-ws">
@@ -218,6 +532,11 @@
     <div class="status-row">
       <span>UPTIME</span><span id="st-uptime">—</span>
     </div>
+  </div>
+
+  <div class="panel">
+    <p class="panel-title">EVENT LOG</p>
+    <div id="event-log" style="font-size:0.65rem;line-height:1.6;max-height:120px;overflow-y:auto;"></div>
   </div>
 
   <div class="panel">
@@ -266,6 +585,283 @@
     </div>
   </div>
 
+
+  </div>
+
+  <div id="tab-tools" class="tab-page">
+    <div class="panel">
+      <p class="panel-title">DIAGNOSTICS</p>
+      <p class="muted" id="diag-ts">Not run yet</p>
+      <div class="tools-actions">
+        <button type="button" id="btn-diag-run">RUN DIAGNOSTICS</button>
+        <button type="button" id="btn-wifi-restore">RESTORE WIFI</button>
+        <button type="button" id="btn-restart-service">RESTART SERVICE</button>
+        <button type="button" id="btn-restart-pi">RESTART PI</button>
+      </div>
+      <div class="diag-grid" id="diag-hardware"></div>
+      <p class="panel-title" style="margin-top:1rem">NETWORK</p>
+      <div class="diag-grid" id="diag-network"></div>
+      <p class="panel-title" style="margin-top:1rem">SOFTWARE</p>
+      <div class="diag-grid" id="diag-software"></div>
+      <p class="panel-title" style="margin-top:1rem">SYSTEM</p>
+      <div class="diag-grid" id="diag-system"></div>
+    </div>
+    <div class="panel">
+      <p class="panel-title">SCRIPTS</p>
+      <p class="muted">Dev: copy on PC. Pi: safe API buttons only.</p>
+      <div id="script-list"></div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title">FOLLOW TUNING</p>
+      <p class="muted">Saved to config.yaml — applies immediately</p>
+      <div class="tune-grid">
+        <label>Turn speed <span id="t-turn-val"></span>
+          <input type="range" id="t-turn" min="30" max="255" value="100" />
+        </label>
+        <label>Fwd speed <span id="t-fwd-val"></span>
+          <input type="range" id="t-fwd" min="30" max="255" value="120" />
+        </label>
+        <label>Confidence <span id="t-conf-val"></span>
+          <input type="range" id="t-conf" min="15" max="95" value="40" />
+        </label>
+        <label>Safe dist (cm) <span id="t-safe-val"></span>
+          <input type="range" id="t-safe" min="15" max="120" value="40" />
+        </label>
+        <label>BLE track RSSI <span id="t-ble-track-val"></span>
+          <input type="range" id="t-ble-track" min="-95" max="-50" value="-75" />
+        </label>
+        <label>Avoid default
+          <select id="t-avoid"><option value="left">left</option><option value="right">right</option></select>
+        </label>
+      </div>
+      <div class="tools-actions">
+        <button type="button" id="btn-tuning-load">LOAD</button>
+        <button type="button" id="btn-tuning-save">SAVE</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title">LOGS</p>
+      <div class="tools-actions">
+        <button type="button" id="btn-logs-refresh">REFRESH</button>
+        <button type="button" id="btn-logs-clear">CLEAR</button>
+      </div>
+      <pre class="log-area" id="log-area">—</pre>
+    </div>
+    <div class="panel">
+      <p class="panel-title">CONFIG</p>
+      <p class="muted" id="config-path">—</p>
+      <div class="tools-actions">
+        <button type="button" id="btn-config-refresh">REFRESH</button>
+      </div>
+      <pre class="config-pre" id="config-pre">—</pre>
+    </div>
+  </div>
+
+  <div id="tab-diag" class="tab-page">
+    <div class="panel">
+      <p class="panel-title">SYSTEM DIAGNOSTICS</p>
+      <div class="tools-actions">
+        <button type="button" id="diag-refresh-btn">REFRESH</button>
+        <button type="button" id="diag-auto-btn">AUTO 5s</button>
+        <button type="button" class="btn-ask-ai" onclick="diagAskAI()" style="padding:0.45rem 0.7rem;font-size:0.75rem;">
+          ASK AI
+        </button>
+      </div>
+      <p class="muted" id="full-diag-ts">Not loaded</p>
+
+      <p class="diag-section-title">METRICS · HISTORY</p>
+      <div class="time-sel" id="time-sel">
+        <button class="active" data-m="15">15m</button>
+        <button data-m="60">1h</button>
+        <button data-m="360">6h</button>
+        <button data-m="1440">24h</button>
+      </div>
+      <p class="db-info" id="db-info"></p>
+
+      <p class="chart-group">SYSTEM</p>
+      <div class="chart-label-row">
+        <span class="chart-label">CPU %</span>
+        <button type="button" class="btn-ask-ai" onclick="chartAskAI('cpu')">ASK AI</button>
+      </div>
+      <div class="chart-wrap"><canvas id="ch-cpu"></canvas></div>
+      <div class="chart-label-row">
+        <span class="chart-label">RAM % / Swap %</span>
+        <button type="button" class="btn-ask-ai" onclick="chartAskAI('ram')">ASK AI</button>
+      </div>
+      <div class="chart-wrap"><canvas id="ch-ram"></canvas></div>
+      <div class="chart-label-row">
+        <span class="chart-label">Temperature (°C)</span>
+        <button type="button" class="btn-ask-ai" onclick="chartAskAI('temp')">ASK AI</button>
+      </div>
+      <div class="chart-wrap"><canvas id="ch-temp"></canvas></div>
+      <p class="chart-label">Disk %</p>
+      <div class="chart-wrap"><canvas id="ch-disk"></canvas></div>
+
+      <p class="chart-group">PROCESS · rover2-api</p>
+      <p class="chart-label">CPU %</p>
+      <div class="chart-wrap"><canvas id="ch-proc-cpu"></canvas></div>
+      <p class="chart-label">Memory (MB)</p>
+      <div class="chart-wrap"><canvas id="ch-proc-mem"></canvas></div>
+
+      <p class="chart-group">NETWORK</p>
+      <p class="chart-label">eth0 TX / RX (KB/s)</p>
+      <div class="chart-wrap"><canvas id="ch-eth0"></canvas></div>
+      <p class="chart-label">wlan0 TX / RX (KB/s)</p>
+      <div class="chart-wrap"><canvas id="ch-wlan0"></canvas></div>
+      <p class="chart-label">Disk read / write (KB/s)</p>
+      <div class="chart-wrap"><canvas id="ch-disk-io"></canvas></div>
+
+      <p class="chart-group">ROBOT</p>
+      <p class="chart-label">Ultrasonic (cm)</p>
+      <div class="chart-wrap"><canvas id="ch-ultra"></canvas></div>
+      <p class="chart-label">BLE RSSI (dBm)</p>
+      <div class="chart-wrap"><canvas id="ch-ble"></canvas></div>
+      <p class="chart-label">Follow state (0=off 1=detect 2=camera 3=BLE)</p>
+      <div class="chart-wrap"><canvas id="ch-follow"></canvas></div>
+      <p class="chart-label">Person detected / Safety blocked</p>
+      <div class="chart-wrap"><canvas id="ch-events"></canvas></div>
+
+      <p class="diag-section-title">SYSTEM</p>
+      <div id="fd-system"></div>
+
+      <p class="diag-section-title">TEMPERATURE</p>
+      <div class="temp-grid" id="fd-temps"></div>
+
+      <p class="diag-section-title">CPU CORES</p>
+      <div class="core-grid" id="fd-cores"></div>
+
+      <p class="diag-section-title">PROCESS · rover2-api</p>
+      <div id="fd-process"></div>
+
+      <p class="diag-section-title">HARDWARE</p>
+      <div id="fd-hardware"></div>
+
+      <p class="diag-section-title">NETWORK</p>
+      <div id="fd-network"></div>
+
+      <p class="diag-section-title">SERVICES</p>
+      <div id="fd-services"></div>
+    </div>
+  </div>
+
+  <div id="tab-chat" class="tab-page">
+    <div style="
+      background: linear-gradient(135deg, #0d1f12 0%, #0d1117 100%);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 0.85rem 1.1rem;
+      width: min(420px, 100%);
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    ">
+      <div>
+        <div style="font-size:0.9rem;font-weight:700;color:var(--accent);letter-spacing:0.12em;">
+          AI: ON-DEVICE &middot; NO CLOUD
+        </div>
+        <div style="font-size:0.65rem;color:var(--muted);margin-top:0.2rem;">
+          AI HAT+ 2: vision + LLM &middot; Pi = bridge only (MegaPi / tools)
+        </div>
+      </div>
+      <div style="
+        font-size:0.6rem;color:var(--accent);
+        border:1px solid var(--accent);
+        border-radius:4px;padding:0.2rem 0.45rem;
+        letter-spacing:0.08em;white-space:nowrap;
+      ">FULLY&nbsp;OFFLINE</div>
+    </div>
+
+    <div class="panel">
+      <div class="status-row" id="row-vlm">
+        <span>VLM ENGINE</span><span id="st-vlm">—</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title">CHAT · NL COMMANDS + SCENE DESCRIPTION</p>
+      <div id="chat-log" class="chat-log"></div>
+      <div class="chat-row">
+        <input id="chat-input" type="text" class="chat-input"
+               placeholder="forward / describe / follow me …"
+               onkeydown="if(event.key==='Enter')sendChat()" />
+        <button id="btn-voice" type="button" class="chat-btns" onclick="startVoice()" title="Voice input">MIC</button>
+      </div>
+      <div class="chat-btns" style="margin-bottom:0.5rem;">
+        <button type="button" onclick="sendChat()">SEND</button>
+        <button type="button" onclick="describeScene()">DESCRIBE SCENE</button>
+        <button type="button" onclick="chatSend('follow me')">FOLLOW ME</button>
+        <button type="button" onclick="chatSend('stop')">STOP</button>
+      </div>
+      <p class="vlm-status" id="vlm-detail"></p>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title">QUICK COMMANDS</p>
+      <div class="chat-btns">
+        <button onclick="chatSend('forward')">FWD 2s</button>
+        <button onclick="chatSend('backward')">BACK 2s</button>
+        <button onclick="chatSend('left')">LEFT 2s</button>
+        <button onclick="chatSend('right')">RIGHT 2s</button>
+        <button onclick="chatSend('detect')">DETECT ON</button>
+        <button onclick="chatSend('stop detecting')">DETECT OFF</button>
+        <button onclick="chatSend('open gripper')">GRIP OPEN</button>
+        <button onclick="chatSend('close gripper')">GRIP CLOSE</button>
+      </div>
+    </div>
+
+    <div class="panel" id="agent-panel">
+      <div class="status-row" id="row-agent">
+        <span>AI AGENT</span><span id="st-agent">—</span>
+      </div>
+      <p class="panel-title" style="margin-top:0.75rem">AGENT · MONITOR · CONFIG · Q&amp;A</p>
+      <p class="muted" style="font-size:0.65rem;margin-bottom:0.5rem;">
+        Ask anything about ROVER2 hardware or software. The agent monitors live data,
+        changes config parameters (saved to config.yaml), and answers from tools.
+        First reply may take 1–2 minutes while the model loads.
+      </p>
+      <div id="agent-log" class="agent-log"></div>
+
+      <div class="confirm-bar" id="confirm-bar">
+        <div class="confirm-msg" id="confirm-msg"></div>
+        <button class="btn-confirm-yes" onclick="agentConfirm()">CONFIRM &amp; EXECUTE</button>
+        <button class="btn-confirm-no"  onclick="agentDecline()">CANCEL</button>
+      </div>
+
+      <div class="chat-row">
+        <input id="agent-input" type="text" class="chat-input"
+               placeholder="Monitor CPU/temp, change turn_speed, explain BLE follow…"
+               onkeydown="if(event.key==='Enter')sendAgent()" />
+        <button type="button" onclick="sendAgent()" id="btn-agent-send" title="Send to AI agent">ASK</button>
+        <button type="button" onclick="agentCancel()" id="btn-agent-cancel" style="display:none"
+                title="Cancel in-flight agent request">CANCEL</button>
+      </div>
+      <div class="chat-btns" style="margin-top:0.4rem;">
+        <button onclick="agentAsk('Why is the CPU usage high? List the top processes by CPU.')">HIGH CPU?</button>
+        <button onclick="agentAsk('Check all temperatures. Are any components running too hot?')">TEMPS</button>
+        <button onclick="agentAsk('Is person detection working? Check the body_tracker service and camera.')">DETECT ISSUE</button>
+        <button onclick="agentAsk('What recent errors are in the rover2-api logs?')">CHECK LOGS</button>
+        <button onclick="agentAsk('Do a full health check: services, temperatures, disk, WiFi, and any errors.')">HEALTH CHECK</button>
+        <button onclick="agentAsk('List the status of all rover services.')">ALL SERVICES</button>
+        <button onclick="agentAsk('How much disk space is used? Any partition getting full?')">DISK USAGE</button>
+        <button onclick="agentAsk('Check WiFi connection quality and signal strength.')">WIFI STATUS</button>
+        <button onclick="agentAsk('Check Hailo AI chip status and which models are loaded.')">HAILO STATUS</button>
+        <button onclick="agentAsk('Is the robot ready to follow a person? Check all subsystems.')">READY TO FOLLOW?</button>
+        <button onclick="agentAsk('List all tunable parameters and current follow settings.')">PARAMETERS</button>
+        <button onclick="agentAsk('What are the MegaPi ports and network IPs for this robot?')">HARDWARE INFO</button>
+        <button onclick="agentAsk('The camera service is using too much CPU. Can you stop it temporarily?')">STOP CAMERA</button>
+        <button onclick="agentAsk('What is the memory usage? Any process leaking memory?')">MEMORY</button>
+        <button onclick="agentAsk('Show me the robot capabilities and all available API endpoints.')">CAPABILITIES</button>
+        <button onclick="agentAsk('Check Ollama AI service health and which models are available.')">AI STATUS</button>
+        <button onclick="agentAsk('Diagnose why BLE tracking might not be working.')">BLE ISSUE</button>
+        <button onclick="agentAsk('Check for any recent crashes or kernel errors in system journal.')">CRASH LOGS</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <script>
@@ -276,6 +872,526 @@
     let followOn = false;
     let detectOn = false;
     const RECONNECT_MS = 1500;
+
+    // Event log
+    let _prevPerson = null;
+    let _prevFollow = null;
+    let _prevBleActive = null;
+    let _prevSafetyBlocked = null;
+
+    function _logEvent(msg, color) {
+      const el = document.getElementById('event-log');
+      if (!el) return;
+      const now = new Date();
+      const ts = now.getHours().toString().padStart(2,'0') + ':'
+               + now.getMinutes().toString().padStart(2,'0') + ':'
+               + now.getSeconds().toString().padStart(2,'0');
+      const line = document.createElement('div');
+      line.style.color = color || 'var(--muted)';
+      line.textContent = ts + '  ' + msg;
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+      // keep max 60 lines
+      while (el.children.length > 60) el.removeChild(el.firstChild);
+    }
+
+    function _checkEvents(d) {
+      if (_prevPerson !== null && d.person_detected !== _prevPerson) {
+        _logEvent(d.person_detected ? 'PERSON detected' : 'PERSON lost',
+                  d.person_detected ? 'var(--accent)' : 'var(--danger)');
+      }
+      if (_prevFollow !== null && d.tracking_enabled !== _prevFollow) {
+        _logEvent(d.tracking_enabled ? 'FOLLOW enabled' : 'FOLLOW off',
+                  d.tracking_enabled ? 'var(--accent)' : 'var(--muted)');
+      }
+      if (_prevBleActive !== null && d.ble_active !== _prevBleActive) {
+        _logEvent(d.ble_active ? `BLE following (${d.ble_rssi} dBm)` : 'BLE → camera',
+                  d.ble_active ? 'var(--warn)' : 'var(--accent)');
+      }
+      if (_prevSafetyBlocked !== null && d.safety_blocked !== _prevSafetyBlocked) {
+        _logEvent(d.safety_blocked ? 'SAFETY blocked' : 'SAFETY clear',
+                  d.safety_blocked ? 'var(--danger)' : 'var(--muted)');
+      }
+      _prevPerson       = d.person_detected;
+      _prevFollow       = d.tracking_enabled;
+      _prevBleActive    = d.ble_active;
+      _prevSafetyBlocked = d.safety_blocked;
+    }
+
+
+
+    let heartbeatTimer = null;
+
+    function shouldHeartbeat() {
+      return followOn || detectOn || activeDir ||
+        !!document.querySelector('.arm-pad button.active');
+    }
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => {
+        if (!wsConnected || !shouldHeartbeat()) return;
+        try { wsSend({ type: 'ping' }); } catch (_) {}
+      }, 2000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    function bindTuneSlider(id, valId, fmt) {
+      const el = document.getElementById(id);
+      const val = document.getElementById(valId);
+      const upd = () => { val.textContent = fmt(el.value); };
+      el.addEventListener('input', upd);
+      upd();
+    }
+
+    async function loadTuningForm() {
+      const r = await fetch(apiBase() + '/api/config');
+      const d = await r.json();
+      const c = d.config || {};
+      const bt = c.body_tracker || {};
+      const sf = c.safety || {};
+      const ble = c.ble_tracker || {};
+      document.getElementById('t-turn').value = bt.turn_speed || 100;
+      document.getElementById('t-fwd').value = bt.forward_speed || 120;
+      document.getElementById('t-conf').value = Math.round((bt.confidence || 0.4) * 100);
+      document.getElementById('t-safe').value = sf.safe_distance_cm || 40;
+      document.getElementById('t-ble-track').value = ble.rssi_track || -75;
+      document.getElementById('t-avoid').value = bt.avoid_default || 'left';
+      ['t-turn','t-fwd','t-conf','t-safe','t-ble-track'].forEach(id => {
+        document.getElementById(id).dispatchEvent(new Event('input'));
+      });
+    }
+
+    async function saveTuning() {
+      const body = {
+        body_tracker: {
+          turn_speed: Number(document.getElementById('t-turn').value),
+          forward_speed: Number(document.getElementById('t-fwd').value),
+          confidence: Number(document.getElementById('t-conf').value) / 100,
+          avoid_default: document.getElementById('t-avoid').value,
+        },
+        safety: { safe_distance_cm: Number(document.getElementById('t-safe').value) },
+        ble_tracker: { rssi_track: Number(document.getElementById('t-ble-track').value) },
+      };
+      const r = await fetch(apiBase() + '/api/config/tuning', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'save failed');
+      toast('Tuning saved');
+    }
+
+
+    function apiBase() {
+      return location.protocol + '//' + location.host;
+    }
+
+    function showTab(name) {
+      ['control','tools','diag','chat'].forEach(t => {
+        document.getElementById('tab-' + t)?.classList.toggle('active', name === t);
+        document.getElementById('tab-btn-' + t)?.classList.toggle('active', name === t);
+      });
+      if (name === 'tools') {
+        if (!document.getElementById('script-list').children.length) loadScripts();
+        loadCachedDiagnostics();
+        loadLogs();
+        loadConfig();
+        loadTuningForm();
+      }
+      if (name === 'diag') loadFullDiagnostics();
+      if (name === 'chat') loadChatStatus();
+      _activeTab = name;
+    }
+    let _activeTab = 'control';
+
+    async function loadLogs() {
+      const r = await fetch(apiBase() + '/api/logs');
+      const d = await r.json();
+      const el = document.getElementById('log-area');
+      const lines = (d.records || []).slice(-80);
+      if (!lines.length) { el.textContent = '(empty)'; return; }
+      el.innerHTML = lines.map(rec => {
+        const cls = rec.level === 'WARNING' ? 'warn' : (rec.level === 'ERROR' ? 'error' : '');
+        return '<span class="log-line ' + cls + '">' + rec.timestamp + ' [' + rec.level + '] '
+          + rec.logger + ': ' + rec.message + '</span>';
+      }).join('\n');
+    }
+
+    async function clearLogs() {
+      await fetch(apiBase() + '/api/logs', { method: 'DELETE' });
+      document.getElementById('log-area').textContent = '(cleared)';
+      toast('Logs cleared');
+    }
+
+    async function loadConfig() {
+      const r = await fetch(apiBase() + '/api/config');
+      const d = await r.json();
+      document.getElementById('config-path').textContent = d.path || '';
+      document.getElementById('config-pre').textContent = JSON.stringify(d.config || {}, null, 2);
+    }
+
+    async function loadCachedDiagnostics() {
+      try {
+        const r = await fetch(apiBase() + '/api/diagnostics');
+        const d = await r.json();
+        if (!d.hardware) return;
+        document.getElementById('diag-ts').textContent = (d.timestamp || '') + ' (cached)';
+        renderDiagSection('diag-hardware', d.hardware);
+        renderDiagSection('diag-network', d.network);
+        renderDiagSection('diag-software', d.software);
+        renderDiagSection('diag-system', d.system);
+      } catch (_) { /* ignore */ }
+    }
+
+    document.getElementById('tab-btn-control').onclick = () => showTab('control');
+    document.getElementById('tab-btn-tools').onclick = () => showTab('tools');
+    document.getElementById('tab-btn-diag').onclick = () => showTab('diag');
+    document.getElementById('tab-btn-chat').onclick = () => showTab('chat');
+
+    function renderDiagSection(elId, section) {
+      const el = document.getElementById(elId);
+      if (!section) { el.innerHTML = '<span class="muted">—</span>'; return; }
+      el.innerHTML = Object.entries(section).map(([k, v]) => {
+        const st = (v.status || 'ok');
+        return `<div class="diag-row ${st}"><span class="label">${k}</span><span class="val">${v.detail || ''}</span></div>`;
+      }).join('');
+    }
+
+    async function runDiagnostics() {
+      toast('Running diagnostics…');
+      const r = await fetch(apiBase() + '/api/diagnostics/run', { method: 'POST' });
+      const d = await r.json();
+      document.getElementById('diag-ts').textContent = d.timestamp || 'done';
+      renderDiagSection('diag-hardware', d.hardware);
+      renderDiagSection('diag-network', d.network);
+      renderDiagSection('diag-software', d.software);
+      renderDiagSection('diag-system', d.system);
+      toast('Diagnostics updated');
+    }
+
+    async function restoreWifi() {
+      toast('Restoring WiFi…');
+      const r = await fetch(apiBase() + '/api/maintenance/wifi-restore', { method: 'POST' });
+      const d = await r.json();
+      toast(d.status === 'ok' ? 'WiFi restore OK' : (d.detail || 'WiFi restore failed'));
+      runDiagnostics();
+    }
+
+    async function restartService() {
+      if (!confirm('Restart rover2-api? Connection will drop for ~5s.')) return;
+      toast('Restarting service…');
+      fetch(apiBase() + '/api/maintenance/restart-service', { method: 'POST' }).catch(() => {});
+    }
+
+    async function restartPi() {
+      if (!confirm('Reboot the Pi? Takes ~30s to come back.')) return;
+      toast('Pi rebooting…');
+      fetch(apiBase() + '/api/maintenance/restart-pi', { method: 'POST' }).catch(() => {});
+    }
+
+    // ── DIAG TAB ─────────────────────────────────────────────────────────────
+
+    // ── Charts ───────────────────────────────────────────────────────────────
+    const _diagCharts = {};
+    const C = { green:'#3fb950', blue:'#58a6ff', yellow:'#d29922', red:'#f85149', purple:'#bc8cff', cyan:'#79c0ff', orange:'#e3b341', pink:'#f778ba' };
+
+    function _fmtTime(ts) {
+      const d = new Date(ts * 1000);
+      return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+    }
+
+    const _xScale = { type: 'linear', ticks: { color: '#8b949e', font: { size: 9 }, maxTicksLimit: 6, callback: v => _fmtTime(v) }, grid: { color: '#21262d' } };
+    const _yScale = (opts={}) => ({ ticks: { color: '#8b949e', font: { size: 9 }, maxTicksLimit: 4 }, grid: { color: '#21262d' }, ...opts });
+
+    function _ds(label, color, fill=false) {
+      return { label, data: [], borderColor: color, backgroundColor: color+'22', borderWidth: 1.5, pointRadius: 0, fill, tension: 0.2, stepped: false };
+    }
+    function _dsStepped(label, color) {
+      return { label, data: [], borderColor: color, backgroundColor: color+'33', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0, stepped: 'before' };
+    }
+
+    function _mkChart(id, datasets, yOpts={}, legend=false) {
+      return new Chart(document.getElementById(id), {
+        type: 'line',
+        data: { datasets },
+        options: {
+          animation: false, responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: legend, labels: { color:'#8b949e', font:{size:9}, boxWidth:10, padding:6 } } },
+          scales: { x: _xScale, y: _yScale(yOpts) },
+        },
+      });
+    }
+
+    function _initDiagCharts() {
+      if (_diagCharts.cpu) return;
+      // SYSTEM
+      _diagCharts.cpu      = _mkChart('ch-cpu',      [_ds('CPU %', C.green, true)],         { min:0, max:100 });
+      _diagCharts.ram      = _mkChart('ch-ram',      [_ds('RAM %', C.blue, true), _ds('Swap %', C.purple)], { min:0, max:100 }, true);
+      _diagCharts.temp     = _mkChart('ch-temp',     [_ds('cpu_thermal', C.yellow), _ds('rp1_adc', C.orange)], {}, true);
+      _diagCharts.disk     = _mkChart('ch-disk',     [_ds('Disk %', C.cyan, true)],          { min:0, max:100 });
+      // PROCESS
+      _diagCharts.procCpu  = _mkChart('ch-proc-cpu', [_ds('CPU %', C.green, true)],         { min:0 });
+      _diagCharts.procMem  = _mkChart('ch-proc-mem', [_ds('MB', C.blue, true)],             { min:0 });
+      // NETWORK
+      _diagCharts.eth0     = _mkChart('ch-eth0',     [_ds('TX KB/s', C.green), _ds('RX KB/s', C.blue)], { min:0 }, true);
+      _diagCharts.wlan0    = _mkChart('ch-wlan0',    [_ds('TX KB/s', C.green), _ds('RX KB/s', C.blue)], { min:0 }, true);
+      _diagCharts.diskIo   = _mkChart('ch-disk-io',  [_ds('Read KB/s', C.cyan), _ds('Write KB/s', C.orange)], { min:0 }, true);
+      // ROBOT
+      _diagCharts.ultra    = _mkChart('ch-ultra',    [_ds('cm', C.yellow, true)],           { min:0 });
+      _diagCharts.ble      = _mkChart('ch-ble',      [_ds('dBm', C.purple, true)]);
+      _diagCharts.follow   = _mkChart('ch-follow',   [_dsStepped('state', C.green)],
+        { min:0, max:3, ticks: { ...{color:'#8b949e',font:{size:9},maxTicksLimit:4}, callback: v=>['off','detect','camera','BLE'][v]||'' } });
+      _diagCharts.events   = _mkChart('ch-events',   [_dsStepped('person', C.green), _dsStepped('safety', C.red)], { min:0, max:1 }, true);
+    }
+
+    function _setDs(chart, idx, data, scale=1) {
+      chart.data.datasets[idx].data = data.map(p => ({ x: p.ts, y: p.v * scale }));
+      chart.update('none');
+    }
+
+    let _chartMinutes = 15;
+
+    async function loadCharts(minutes) {
+      _initDiagCharts();
+      minutes = minutes || _chartMinutes;
+      _chartMinutes = minutes;
+      const base = apiBase() + '/api/metrics/history';
+
+      async function load(metric) {
+        try { return (await (await fetch(`${base}?metric=${metric}&minutes=${minutes}`)).json()); }
+        catch { return null; }
+      }
+
+      const [
+        cpu, ram, swap, disk,
+        procCpu, procMem,
+        eth0tx, eth0rx, wlan0tx, wlan0rx, diskR, diskW,
+        tempA, tempB,
+        ultra, ble,
+        follow, person, safety,
+      ] = await Promise.all([
+        load('cpu_percent'), load('ram_percent'), load('swap_percent'), load('disk_percent'),
+        load('process_cpu_percent'), load('process_memory_mb'),
+        load('net_eth0_tx_bps'), load('net_eth0_rx_bps'),
+        load('net_wlan0_tx_bps'), load('net_wlan0_rx_bps'),
+        load('disk_read_bps'), load('disk_write_bps'),
+        load('temp_cpu_thermal'), load('temp_rp1_adc'),
+        load('ultrasonic_cm'), load('ble_rssi'),
+        load('follow_state'), load('person_detected'), load('safety_blocked'),
+      ]);
+
+      if (cpu)     _setDs(_diagCharts.cpu,     0, cpu.data);
+      if (ram)     _setDs(_diagCharts.ram,     0, ram.data);
+      if (swap)    _setDs(_diagCharts.ram,     1, swap.data);
+      if (disk)    _setDs(_diagCharts.disk,    0, disk.data);
+      if (procCpu) _setDs(_diagCharts.procCpu, 0, procCpu.data);
+      if (procMem) _setDs(_diagCharts.procMem, 0, procMem.data);
+      if (eth0tx)  _setDs(_diagCharts.eth0,    0, eth0tx.data,  1/1024);
+      if (eth0rx)  _setDs(_diagCharts.eth0,    1, eth0rx.data,  1/1024);
+      if (wlan0tx) _setDs(_diagCharts.wlan0,   0, wlan0tx.data, 1/1024);
+      if (wlan0rx) _setDs(_diagCharts.wlan0,   1, wlan0rx.data, 1/1024);
+      if (diskR)   _setDs(_diagCharts.diskIo,  0, diskR.data,   1/1024);
+      if (diskW)   _setDs(_diagCharts.diskIo,  1, diskW.data,   1/1024);
+      if (tempA)   _setDs(_diagCharts.temp,    0, tempA.data);
+      if (tempB)   _setDs(_diagCharts.temp,    1, tempB.data);
+      if (ultra)   _setDs(_diagCharts.ultra,   0, ultra.data);
+      if (ble)     _setDs(_diagCharts.ble,     0, ble.data);
+      if (follow)  _setDs(_diagCharts.follow,  0, follow.data);
+      if (person)  _setDs(_diagCharts.events,  0, person.data);
+      if (safety)  _setDs(_diagCharts.events,  1, safety.data);
+
+      const ref = cpu || procCpu || ultra;
+      if (ref && ref.db_size_mb != null)
+        document.getElementById('db-info').textContent = `DB: ${ref.db_size_mb} MB · ${_chartMinutes < 60 ? _chartMinutes+'m' : (_chartMinutes/60)+'h'} window`;
+    }
+
+    document.getElementById('time-sel').querySelectorAll('button').forEach(btn => {
+      btn.onclick = () => {
+        document.getElementById('time-sel').querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        loadCharts(parseInt(btn.dataset.m));
+      };
+    });
+
+    let _diagAutoTimer = null;
+
+    function metricRow(label, val, pct, cls) {
+      const barCls = cls === 'warn' ? 'warn' : (cls === 'error' ? 'error' : '');
+      const bar = pct != null
+        ? `<div class="bar-track"><div class="bar-fill ${barCls}" style="width:${Math.min(pct,100)}%"></div></div>`
+        : '';
+      return `<div class="metric-row ${cls || 'info'}"><span class="label">${label}</span>${bar}<span class="val">${val}</span></div>`;
+    }
+
+    function tempClass(c, high, crit) {
+      if (crit && c >= crit * 0.95) return 'error';
+      if (high && c >= high * 0.9) return 'warn';
+      if (c >= 80) return 'error';
+      if (c >= 65) return 'warn';
+      return 'ok';
+    }
+
+    function renderFullDiag(d) {
+      const ext = d.extended || {};
+      const ts = d.timestamp || '';
+      document.getElementById('full-diag-ts').textContent = ts + (d.timeout ? ' (timeout)' : '');
+
+      // SYSTEM
+      const sys = [];
+      if (ext.uptime) sys.push(metricRow('uptime', ext.uptime, null, 'info'));
+      if (ext.load_avg) sys.push(metricRow('load 1/5/15m', ext.load_avg.join(' / '), null, 'info'));
+      if (ext.cpu_percent != null) {
+        const cc = ext.cpu_percent >= 90 ? 'error' : ext.cpu_percent >= 70 ? 'warn' : 'ok';
+        sys.push(metricRow('cpu', `${ext.cpu_percent}%  ×${ext.cpu_cores || '?'} @ ${ext.cpu_freq_mhz || '?'} MHz`, ext.cpu_percent, cc));
+      }
+      if (ext.ram_percent != null) {
+        const rc = ext.ram_percent >= 90 ? 'error' : ext.ram_percent >= 75 ? 'warn' : 'ok';
+        sys.push(metricRow('ram', `${ext.ram_percent}%  ${ext.ram_used_mb} / ${ext.ram_total_mb} MB`, ext.ram_percent, rc));
+      }
+      if (ext.swap_total_mb > 0) {
+        const sc = ext.swap_percent >= 80 ? 'warn' : 'ok';
+        sys.push(metricRow('swap', `${ext.swap_percent}%  ${ext.swap_used_mb} / ${ext.swap_total_mb} MB`, ext.swap_percent, sc));
+      }
+      if (ext.disk_percent != null) {
+        const dc = ext.disk_percent >= 92 ? 'error' : ext.disk_percent >= 80 ? 'warn' : 'ok';
+        sys.push(metricRow('disk /', `${ext.disk_free_gb} GB free / ${ext.disk_total_gb} GB  (${ext.disk_percent}%)`, ext.disk_percent, dc));
+      }
+      if (ext.error) sys.push(`<div class="metric-row error"><span class="label">error</span><span class="val">${ext.error}</span></div>`);
+      document.getElementById('fd-system').innerHTML = sys.join('') || '<span class="muted">—</span>';
+
+      // TEMPERATURES
+      const temps = ext.temperatures || {};
+      const tRows = Object.entries(temps).map(([name, t]) => {
+        const cls = tempClass(t.current, t.high, t.critical);
+        const extra = t.high ? ` / ${t.high}°C max` : '';
+        return `<div class="temp-row"><span class="temp-name">${name}</span><span class="temp-val ${cls}">${t.current} °C${extra}</span></div>`;
+      });
+      document.getElementById('fd-temps').innerHTML = tRows.join('') || '<span class="muted">—</span>';
+
+      // CPU CORES
+      const cores = ext.cpu_per_core || [];
+      document.getElementById('fd-cores').innerHTML = cores.map((pct, i) => {
+        const cls = pct >= 90 ? 'error' : pct >= 70 ? 'warn' : '';
+        return `<div class="core-cell ${cls}">C${i} ${pct}%</div>`;
+      }).join('') || '<span class="muted">—</span>';
+
+      // PROCESS
+      const proc = ext.process;
+      const pRows = proc ? [
+        metricRow('pid', proc.pid, null, 'info'),
+        metricRow('cpu', `${proc.cpu_percent}%`, proc.cpu_percent, proc.cpu_percent >= 80 ? 'warn' : 'ok'),
+        metricRow('memory', `${proc.memory_mb} MB`, null, 'info'),
+        metricRow('threads', proc.threads, null, 'info'),
+        metricRow('status', proc.status, null, 'info'),
+      ] : ['<span class="muted">—</span>'];
+      document.getElementById('fd-process').innerHTML = pRows.join('');
+
+      // HARDWARE (from base)
+      const hw = d.hardware || {};
+      const hRows = Object.entries(hw).map(([k, v]) => {
+        const cls = v.status === 'ok' ? 'ok' : v.status === 'warn' ? 'warn' : 'error';
+        return `<div class="metric-row ${cls}"><span class="label">${k}</span><span class="val">${v.detail || v.status}</span></div>`;
+      });
+      document.getElementById('fd-hardware').innerHTML = hRows.join('') || '<span class="muted">—</span>';
+
+      // NETWORK (base + I/O)
+      const net = d.network || {};
+      const nio = ext.net_io || {};
+      const nRows = Object.entries(net).map(([iface, v]) => {
+        const cls = v.status === 'ok' ? 'ok' : 'warn';
+        const io = nio[iface] ? `  ↑${nio[iface].sent} ↓${nio[iface].recv}` : '';
+        return `<div class="metric-row ${cls}"><span class="label">${iface}</span><span class="val">${v.detail || ''}${io}</span></div>`;
+      });
+      // add any net_io interfaces not in network section
+      Object.entries(nio).filter(([k]) => !net[k]).forEach(([iface, c]) => {
+        nRows.push(`<div class="metric-row info"><span class="label">${iface}</span><span class="val">↑${c.sent} ↓${c.recv}</span></div>`);
+      });
+      document.getElementById('fd-network').innerHTML = nRows.join('') || '<span class="muted">—</span>';
+
+      // SERVICES
+      const sw = d.software || {};
+      const sRows = Object.entries(sw).map(([k, v]) => {
+        const cls = v.status === 'ok' ? 'ok' : v.status === 'warn' ? 'warn' : 'error';
+        return `<div class="metric-row ${cls}"><span class="label">${k.replace('.service','')}</span><span class="val">${v.detail || v.status}</span></div>`;
+      });
+      document.getElementById('fd-services').innerHTML = sRows.join('') || '<span class="muted">—</span>';
+    }
+
+    async function loadFullDiagnostics() {
+      try {
+        const r = await fetch(apiBase() + '/api/diagnostics/full');
+        renderFullDiag(await r.json());
+      } catch (e) { toast('Diag error: ' + e.message); }
+      await loadCharts();
+    }
+
+    async function runFullDiagnostics() {
+      toast('Running full diagnostics…');
+      try {
+        const r = await fetch(apiBase() + '/api/diagnostics/full/run', { method: 'POST' });
+        renderFullDiag(await r.json());
+        toast('Done');
+      } catch (e) { toast('Error: ' + e.message); }
+      await loadCharts();
+    }
+
+    document.getElementById('diag-refresh-btn').onclick = () => runFullDiagnostics();
+    document.getElementById('diag-auto-btn').onclick = function() {
+      if (_diagAutoTimer) {
+        clearInterval(_diagAutoTimer);
+        _diagAutoTimer = null;
+        this.classList.remove('active');
+      } else {
+        _diagAutoTimer = setInterval(loadFullDiagnostics, 5000);
+        this.classList.add('active');
+        loadFullDiagnostics();
+      }
+    };
+
+    // ── END DIAG TAB ─────────────────────────────────────────────────────────
+
+    async function loadScripts() {
+      const r = await fetch(apiBase() + '/api/scripts');
+      const d = await r.json();
+      const el = document.getElementById('script-list');
+      el.innerHTML = (d.scripts || []).map(s => {
+        const cmd = s.command || s.api || s.path || '';
+        const where = s.where || '';
+        const runBtn = where === 'pi_api'
+          ? '<button type="button" class="script-run" data-id="' + s.id + '">RUN</button> '
+          : '';
+        return '<div class="script-row">' + runBtn + '<strong>' + s.title + '</strong> '
+          + '<span class="muted">(' + where + ')</span><br>' + (s.detail || '')
+          + '<code>' + cmd + '</code></div>';
+      }).join('');
+      el.querySelectorAll('.script-run').forEach(btn => {
+        btn.onclick = () => {
+          if (btn.dataset.id === 'restore_wifi') restoreWifi().catch(e => toast(e.message));
+        };
+      });
+    }
+
+    document.getElementById('btn-diag-run').onclick = () => runDiagnostics().catch(e => toast(e.message));
+    document.getElementById('btn-wifi-restore').onclick = () => restoreWifi().catch(e => toast(e.message));
+    document.getElementById('btn-restart-service').onclick = () => restartService().catch(e => toast(e.message));
+    document.getElementById('btn-restart-pi').onclick = () => restartPi().catch(e => toast(e.message));
+    document.getElementById('btn-logs-refresh').onclick = () => loadLogs().catch(e => toast(e.message));
+    document.getElementById('btn-logs-clear').onclick = () => clearLogs().catch(e => toast(e.message));
+    bindTuneSlider('t-turn', 't-turn-val', v => v);
+    bindTuneSlider('t-fwd', 't-fwd-val', v => v);
+    bindTuneSlider('t-conf', 't-conf-val', v => (v/100).toFixed(2));
+    bindTuneSlider('t-safe', 't-safe-val', v => v + ' cm');
+    bindTuneSlider('t-ble-track', 't-ble-track-val', v => v + ' dBm');
+    document.getElementById('btn-tuning-load').onclick = () => loadTuningForm().catch(e => toast(e.message));
+    document.getElementById('btn-tuning-save').onclick = () => saveTuning().catch(e => toast(e.message));
+    document.getElementById('btn-config-refresh').onclick = () => loadConfig().catch(e => toast(e.message));
+
+
 
     function wsUrl() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -356,11 +1472,15 @@
         personEl.textContent = '—';
         personRow.className = 'status-row';
       } else if (d.person_detected) {
-        personEl.textContent = 'YES';
+        personEl.textContent = 'DETECTED';
         personRow.className = 'status-row';
+        personEl.style.color = 'var(--accent)';
+        personEl.style.fontWeight = '700';
       } else {
-        personEl.textContent = trackingActive ? 'NO' : '—';
+        personEl.textContent = trackingActive ? 'NOT SEEN' : '—';
         personRow.className = 'status-row';
+        personEl.style.color = trackingActive ? 'var(--danger)' : '';
+        personEl.style.fontWeight = trackingActive ? '700' : '';
       }
       if (d.tracking_enabled !== followOn || d.tracking_detect_only !== detectOn) {
         followOn = !!d.tracking_enabled;
@@ -466,6 +1586,7 @@
         wsConnected = true;
         setWsStatus('OK', false);
         wsSend({ type: 'ping' });
+        startHeartbeat();
       };
 
       ws.onmessage = (ev) => {
@@ -477,6 +1598,8 @@
         }
         if (data.type === 'telemetry') {
           applyTelemetry(data);
+          _checkEvents(data);
+          if (data.alerts !== undefined) _updateAlertBar(data.alerts);
         } else if (data.type === 'ack' && (data.cmd === 'arm' || data.cmd === 'arm_pulse')) {
           toast((data.cmd === 'arm_pulse' ? 'PULSE ' : 'ARM ') + (data.direction || data.action || 'ok'));
         } else if (data.type === 'error') {
@@ -492,6 +1615,7 @@
         detectOn = false;
         updateTrackingButtons();
         setActive(null);
+        stopHeartbeat();
         scheduleReconnect();
       };
 
@@ -604,6 +1728,537 @@
     updateTrackingButtons();
     document.getElementById('camera').src = cameraStreamUrl();
     connectWs();
+
+    // ── CHAT TAB ──────────────────────────────────────────────────────────────
+
+    function _chatAppend(role, text, action) {
+      const log = document.getElementById('chat-log');
+      const div = document.createElement('div');
+      div.className = 'chat-msg chat-' + role;
+      const now = new Date();
+      const ts = now.getHours().toString().padStart(2,'0') + ':'
+               + now.getMinutes().toString().padStart(2,'0') + ':'
+               + now.getSeconds().toString().padStart(2,'0');
+      const who = role === 'user' ? 'YOU' : role === 'rover' ? 'ROVER' : 'ERR';
+      const act = action ? '<span class="chat-action">[' + action + ']</span> ' : '';
+      div.innerHTML = '<span class="chat-ts">' + ts + '</span>'
+                    + '<span class="chat-who">' + who + '</span> ' + act + text;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+      while (log.children.length > 100) log.removeChild(log.firstChild);
+    }
+
+    async function sendChat() {
+      const input = document.getElementById('chat-input');
+      let msg = input.value.trim();
+      if (!msg) {
+        const agentMsg = document.getElementById('agent-input')?.value.trim();
+        if (agentMsg) {
+          await sendAgent();
+          return;
+        }
+        toast('Type a command above or a question in the agent box');
+        return;
+      }
+      input.value = '';
+      _chatAppend('user', msg, null);
+      try {
+        const r = await fetch(apiBase() + '/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg }),
+        });
+        const d = await r.json();
+        _chatAppend('rover', d.reply || '(no reply)', d.action || null);
+      } catch (e) {
+        _chatAppend('error', 'Request failed: ' + e.message, null);
+      }
+    }
+
+    async function chatSend(msg) {
+      document.getElementById('chat-input').value = msg;
+      await sendChat();
+    }
+
+    async function describeScene() {
+      _chatAppend('user', 'Describe what you see', null);
+      try {
+        const r = await fetch(apiBase() + '/api/vision/describe');
+        const d = await r.json();
+        _chatAppend('rover', d.description || d.detail || '(no description)', 'describe');
+      } catch (e) {
+        _chatAppend('error', 'Failed: ' + e.message, null);
+      }
+    }
+
+    function startVoice() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { toast('Voice input requires Chrome or Edge'); return; }
+      const sr = new SR();
+      sr.lang = 'en-US';
+      sr.interimResults = false;
+      const btn = document.getElementById('btn-voice');
+      btn.classList.add('listening');
+      btn.textContent = '…';
+      sr.onresult = (e) => {
+        document.getElementById('chat-input').value = e.results[0][0].transcript;
+        btn.classList.remove('listening');
+        btn.textContent = 'MIC';
+        sendChat();
+      };
+      sr.onerror = () => { btn.classList.remove('listening'); btn.textContent = 'MIC'; };
+      sr.onend   = () => { btn.classList.remove('listening'); btn.textContent = 'MIC'; };
+      sr.start();
+    }
+
+    async function loadChatStatus() {
+      try {
+        const r = await fetch(apiBase() + '/api/chat/status');
+        const d = await r.json();
+        const vlm = d.vlm || {};
+        const el = document.getElementById('st-vlm');
+        const det = document.getElementById('vlm-detail');
+        if (vlm.status === 'ok') {
+          el.textContent = 'READY';
+          el.style.color = 'var(--accent)';
+        } else if (vlm.status === 'idle') {
+          el.textContent = 'LAZY (loads on first use)';
+          el.style.color = 'var(--warn)';
+        } else if (vlm.status === 'skip') {
+          el.textContent = 'DISABLED';
+          el.style.color = 'var(--muted)';
+        } else {
+          el.textContent = vlm.status || '—';
+          el.style.color = 'var(--danger)';
+        }
+        det.textContent = vlm.detail || vlm.hef || '';
+      } catch (_) {}
+      await loadAgentStatus();
+    }
+
+    // ── Agent ─────────────────────────────────────────────────────────────────
+
+    let _agentMessages = [];
+    let _agentPending  = null;   // action_proposal waiting for confirm
+    let _agentBusy     = false;
+    let _agentAbort    = null;
+    let _agentUserCancel = false;
+
+    function _escHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function _agentTs() {
+      const n = new Date();
+      return n.getHours().toString().padStart(2,'0') + ':'
+           + n.getMinutes().toString().padStart(2,'0') + ':'
+           + n.getSeconds().toString().padStart(2,'0');
+    }
+
+    function _agentAppend(role, text, extraHtml) {
+      const log = document.getElementById('agent-log');
+      if (!log) return;
+      const div = document.createElement('div');
+      div.className = 'agent-msg agent-' + role;
+      const who = { user: 'YOU', ai: 'AGENT', tool: 'TOOL', error: 'ERR' }[role] || role;
+      div.innerHTML = '<span class="agent-ts">' + _agentTs() + '</span>'
+                    + '<span class="agent-who">' + who + '</span> ' + _escHtml(text)
+                    + (extraHtml || '');
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+      while (log.children.length > 120) log.removeChild(log.firstChild);
+    }
+
+    function _agentSetBusy(busy) {
+      _agentBusy = busy;
+      const sendBtn = document.getElementById('btn-agent-send');
+      const cancelBtn = document.getElementById('btn-agent-cancel');
+      if (!sendBtn) return;
+      sendBtn.disabled = busy;
+      sendBtn.textContent = busy ? '…' : 'ASK';
+      sendBtn.classList.toggle('agent-busy', busy);
+      if (cancelBtn) cancelBtn.style.display = busy ? '' : 'none';
+    }
+
+    let _agentThinkTimer = null;
+
+    function _agentThinking(show) {
+      const log = document.getElementById('agent-log');
+      let el = document.getElementById('agent-thinking');
+      if (_agentThinkTimer) {
+        clearInterval(_agentThinkTimer);
+        _agentThinkTimer = null;
+      }
+      if (show && !el) {
+        el = document.createElement('div');
+        el.id = 'agent-thinking';
+        el.className = 'agent-thinking';
+        const t0 = Date.now();
+        const update = () => {
+          const s = Math.floor((Date.now() - t0) / 1000);
+          if (s < 4) {
+            el.textContent = 'Agent is thinking…';
+          } else if (s < 30) {
+            el.textContent = 'Agent is thinking… ' + s + 's';
+          } else {
+            el.textContent =
+              'Agent is thinking… ' + s + 's — full AI can take 1–3 min on the Pi; '
+              + 'logs/temps/alerts are usually faster';
+          }
+        };
+        update();
+        _agentThinkTimer = setInterval(update, 1000);
+        log.appendChild(el);
+        log.scrollTop = log.scrollHeight;
+      } else if (!show && el) {
+        el.remove();
+      }
+    }
+
+    async function sendAgent() {
+      const input = document.getElementById('agent-input');
+      const msg = input.value.trim();
+      if (!msg) {
+        toast('Type a question in the agent box below');
+        input.focus();
+        return;
+      }
+      if (_agentBusy) {
+        toast('Agent is still thinking — wait or press CANCEL');
+        return;
+      }
+      input.value = '';
+      await agentAsk(msg);
+    }
+
+    function agentCancel() {
+      if (!_agentAbort) return;
+      _agentUserCancel = true;
+      _agentAbort.abort();
+    }
+
+    async function agentAsk(msg) {
+      if (_agentBusy) {
+        toast('Agent is still thinking — wait or press CANCEL');
+        return;
+      }
+      _scrollToAgent();
+      _agentAppend('user', msg, null);
+      _agentMessages.push({ role: 'user', content: msg });
+      _agentThinking(true);
+      _agentSetBusy(true);
+      _agentUserCancel = false;
+
+      const ctrl = new AbortController();
+      _agentAbort = ctrl;
+      const timer = setTimeout(() => ctrl.abort(), 300000);
+      try {
+        const r = await fetch(apiBase() + '/api/agent/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: _agentMessages }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        let d;
+        try {
+          d = await r.json();
+        } catch (_) {
+          d = { reply: 'Invalid response from server (HTTP ' + r.status + ')' };
+        }
+        _agentThinking(false);
+        if (!r.ok) {
+          _agentAppend('error', d.detail || d.reply || ('HTTP ' + r.status), null);
+          return;
+        }
+
+        // Show tool calls
+        for (const t of (d.tool_log || [])) {
+          const summary = JSON.stringify(t.args || {}).slice(0, 80);
+          const resultStr = JSON.stringify(t.result || {}).slice(0, 200);
+          _agentAppend('tool',
+            t.name + '(' + summary + ') — ' + t.duration_ms + 'ms',
+            '<div class="agent-result">' + _escHtml(resultStr) + '</div>',
+          );
+        }
+
+        // Show reply
+        if (d.reply) {
+          _agentAppend('ai', d.reply, null);
+          _agentMessages.push({ role: 'assistant', content: d.reply });
+          speak(d.reply);
+        }
+
+        // Show confirm bar if dangerous action proposed
+        if (d.action_proposal) {
+          _agentPending = d.action_proposal;
+          const bar = document.getElementById('confirm-bar');
+          const msg2 = document.getElementById('confirm-msg');
+          msg2.textContent = 'Agent proposes: ' + d.action_proposal.name
+            + ' — ' + (d.action_proposal.args?.reason || JSON.stringify(d.action_proposal.args));
+          bar.classList.add('show');
+        }
+      } catch (e) {
+        clearTimeout(timer);
+        _agentThinking(false);
+        const errMsg = e.name === 'AbortError'
+          ? (_agentUserCancel
+              ? 'Cancelled.'
+              : 'Timed out after 5 minutes — try a shorter question or check Ollama on the Pi.')
+          : ('Request failed: ' + e.message);
+        _agentAppend('error', errMsg, null);
+      } finally {
+        clearTimeout(timer);
+        _agentAbort = null;
+        _agentSetBusy(false);
+      }
+    }
+
+    async function agentConfirm() {
+      if (!_agentPending) return;
+      const action = _agentPending;
+      _agentPending = null;
+      document.getElementById('confirm-bar').classList.remove('show');
+      _agentAppend('user', 'Confirmed: execute ' + action.name, null);
+      try {
+        const r = await fetch(apiBase() + '/api/agent/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: action.name, args: action.args }),
+        });
+        const d = await r.json();
+        _agentAppend('ai', action.name + ' executed. ' + JSON.stringify(d.result || {}), null);
+        _agentMessages.push({ role: 'assistant', content: action.name + ' executed.' });
+      } catch (e) {
+        _agentAppend('error', 'Confirm failed: ' + e.message, null);
+      }
+    }
+
+    function agentDecline() {
+      _agentPending = null;
+      document.getElementById('confirm-bar').classList.remove('show');
+      _agentAppend('ai', 'Action cancelled by user.', null);
+    }
+
+    async function loadAgentStatus() {
+      try {
+        const r = await fetch(apiBase() + '/api/agent/status');
+        const d = await r.json();
+        const el = document.getElementById('st-agent');
+        const backend = (d.backend || 'hailo').toLowerCase();
+        if (backend === 'tools_only') {
+          el.textContent = 'TOOLS ONLY (no LLM)';
+          el.style.color = 'var(--warn)';
+        } else if (d.available === true) {
+          const where = backend === 'hailo' ? 'HAT' : 'CPU';
+          el.textContent = d.model + ' READY · ' + where;
+          el.style.color = 'var(--accent)';
+        } else if (d.available === false) {
+          el.textContent = backend === 'hailo' ? 'HAT LLM OFFLINE' : 'OLLAMA UNREACHABLE';
+          el.style.color = 'var(--danger)';
+        } else {
+          el.textContent = 'UNCHECKED';
+          el.style.color = 'var(--muted)';
+        }
+      } catch (_) {}
+    }
+
+    // ── DIAG → AI ─────────────────────────────────────────────────────────────
+
+    function _chartSeriesStats(chart, datasetIdx = 0) {
+      const pts = (chart?.data?.datasets[datasetIdx]?.data || [])
+        .map(p => (typeof p === 'object' && p != null ? p.y : p))
+        .filter(v => v != null && !Number.isNaN(v));
+      if (!pts.length) return null;
+      return {
+        cur: pts[pts.length - 1],
+        avg: pts.reduce((a, b) => a + b, 0) / pts.length,
+        peak: Math.max(...pts),
+      };
+    }
+
+    function _chartWindowLabel() {
+      return _chartMinutes < 60 ? _chartMinutes + 'm' : (_chartMinutes / 60) + 'h';
+    }
+
+    async function diagAskAI() {
+      _scrollToAgent();
+      toast('Asking agent…');
+      await agentAsk(
+        'Review the current DIAG data for this ROVER2 Pi: system stats, temperatures, services, and metrics. ' +
+        'Flag anything abnormal and suggest concrete fixes.'
+      );
+    }
+
+    async function chartAskAI(chartKey) {
+      const names = { cpu: 'CPU usage', temp: 'temperature', ram: 'RAM usage' };
+      _initDiagCharts();
+      const c = _diagCharts[chartKey];
+      if (!c) {
+        toast('Open DIAG and wait for charts to load');
+        return;
+      }
+      let stats = _chartSeriesStats(c, 0);
+      if (chartKey === 'temp') {
+        stats = _chartSeriesStats(c, 0) || _chartSeriesStats(c, 1);
+      }
+      if (!stats) {
+        toast('No ' + (names[chartKey] || chartKey) + ' data yet — open DIAG and refresh');
+        return;
+      }
+      const unit = chartKey === 'temp' ? '°C' : '%';
+      const q = `Looking at the last ${_chartWindowLabel()} of ${names[chartKey]}: ` +
+                `current ${stats.cur.toFixed(1)}${unit}, average ${stats.avg.toFixed(1)}${unit}, ` +
+                `peak ${stats.peak.toFixed(1)}${unit}. ` +
+                `Is this normal for a Raspberry Pi 5 running robot software? ` +
+                `Flag concerns and list concrete fixes to try.`;
+      _scrollToAgent();
+      document.getElementById('agent-input').value = q;
+      await sendAgent();
+    }
+
+    // ── ALERT BAR ────────────────────────────────────────────────────────────
+
+    let _lastAlertCount = 0;
+
+    function _updateAlertBar(alerts) {
+      const bar  = document.getElementById('alert-bar');
+      const msgs = document.getElementById('alert-msgs');
+      if (!alerts || !alerts.length) {
+        bar.style.display = 'none';
+        _lastAlertCount = 0;
+        return;
+      }
+      bar.style.display = 'block';
+      msgs.innerHTML = alerts.map(a =>
+        `<div>${a.severity === 'crit' ? '🔴' : '🟡'} ${a.msg}</div>`
+      ).join('');
+      // Toast on new alert
+      if (alerts.length > _lastAlertCount) {
+        const newest = alerts[alerts.length - 1];
+        toast('⚠ ' + newest.msg, 5000);
+        speak('Alert: ' + newest.msg);
+      }
+      _lastAlertCount = alerts.length;
+    }
+
+    function _scrollToAgent() {
+      showTab('chat');
+      const panel = document.getElementById('agent-panel');
+      if (panel) {
+        setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      }
+    }
+
+    async function alertAskAI() {
+      const msgs = document.getElementById('alert-msgs').textContent.trim();
+      if (!msgs) {
+        toast('No alert details');
+        return;
+      }
+      if (_agentBusy) {
+        toast('Agent busy — wait or press CANCEL in CHAT');
+        _scrollToAgent();
+        return;
+      }
+      toast('Checking alerts (fast diagnostics)…');
+      _scrollToAgent();
+      await agentAsk(
+        "What's wrong? Active alerts: " + msgs +
+        '. What is causing this and how do I fix it?'
+      );
+    }
+
+    // ── GLOBAL VOICE + TTS ───────────────────────────────────────────────────
+
+    let _ttsEnabled = false;
+    let _globalVoiceActive = false;
+
+    function toggleTTS() {
+      _ttsEnabled = !_ttsEnabled;
+      document.getElementById('btn-tts').textContent = _ttsEnabled ? '🔊' : '🔇';
+      document.getElementById('btn-tts').style.borderColor = _ttsEnabled ? 'var(--accent)' : 'var(--border)';
+      document.getElementById('btn-tts').style.color = _ttsEnabled ? 'var(--accent)' : 'var(--muted)';
+    }
+
+    function speak(text) {
+      if (!_ttsEnabled || !window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      // First 2 sentences or 240 chars — don't read full reports aloud
+      const clean = text.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+      const sentences = clean.match(/[^.!?]+[.!?]*/g) || [clean];
+      const spoken = sentences.slice(0, 2).join(' ').slice(0, 240);
+      const u = new SpeechSynthesisUtterance(spoken);
+      u.rate = 1.05;
+      window.speechSynthesis.speak(u);
+    }
+
+    const _CONTROL_RE = /^(stop|forward|back|left|right|follow|unfollow|detect|grip|arm|describe)/i;
+
+    async function _routeVoice(text) {
+      if (!text) return;
+      const btn = document.getElementById('btn-global-voice');
+      btn.classList.remove('listening');
+
+      if (_CONTROL_RE.test(text.trim())) {
+        // Direct control command — fast path via chat
+        document.getElementById('chat-input').value = text;
+        showTab('chat');
+        await sendChat();
+      } else {
+        // Question — route to agent with optional metrics context
+        let q = text;
+        if (_activeTab === 'diag' && _diagCharts.cpu) {
+          const cpu = _chartSeriesStats(_diagCharts.cpu);
+          const temp = _chartSeriesStats(_diagCharts.temp, 0) || _chartSeriesStats(_diagCharts.temp, 1);
+          if (cpu)  q += ` [CPU now ${cpu.cur.toFixed(1)}%]`;
+          if (temp) q += ` [Temp now ${temp.cur.toFixed(1)}°C]`;
+        }
+        showTab('chat');
+        await agentAsk(q);
+      }
+    }
+
+    function startGlobalVoice() {
+      if (_globalVoiceActive) return;
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { toast('Voice requires Chrome or Edge'); return; }
+      const btn = document.getElementById('btn-global-voice');
+      btn.classList.add('listening');
+      btn.textContent = '🎤 LISTENING…';
+      _globalVoiceActive = true;
+      const rec = new SR();
+      rec.lang = 'en-US';
+      rec.interimResults = false;
+      rec.onresult = e => {
+        const t = e.results[0]?.[0]?.transcript || '';
+        btn.textContent = '🎤 SPEAK TO ROVER';
+        _globalVoiceActive = false;
+        _routeVoice(t);
+      };
+      rec.onerror = () => {
+        btn.classList.remove('listening');
+        btn.textContent = '🎤 SPEAK TO ROVER';
+        _globalVoiceActive = false;
+      };
+      rec.onend = () => {
+        btn.classList.remove('listening');
+        btn.textContent = '🎤 SPEAK TO ROVER';
+        _globalVoiceActive = false;
+      };
+      rec.start();
+    }
+
+    // TTS is triggered from inside sendAgent after the reply is appended (see below)
+
+    // ── END METRICS / VOICE / ALERTS ─────────────────────────────────────────
+
+    // ── END CHAT TAB ──────────────────────────────────────────────────────────
+
+    _agentSetBusy(false);
   </script>
 </body>
 </html>

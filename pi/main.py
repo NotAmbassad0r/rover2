@@ -13,7 +13,10 @@ from ble_tracker import BLETracker
 from body_tracker import BodyTracker
 from megapi import MegaPiBridge
 from safety import SafetyMonitor
+from log_buffer import install_log_ring_buffer
+from agent import RoverAgent
 from server import create_app, _directions_from_config
+from vlm_engine import VLMEngine
 
 CONFIG_PATH = pathlib.Path(__file__).parent / "config.yaml"
 
@@ -26,6 +29,7 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    install_log_ring_buffer()
 
     serial_cfg = config.get("serial", {})
     megapi = MegaPiBridge(
@@ -68,8 +72,14 @@ def main() -> None:
             directions=directions,
             config=config,
             ble_tracker=ble_tracker,
+            safety=safety_monitor,
         )
         body_tracker.start()
+
+    # Lazy — VLM model is NOT loaded here; it loads on first describe() call.
+    vlm_engine = VLMEngine(config=config) if config.get("vlm", {}).get("enabled", True) else None
+
+    rover_agent = RoverAgent(config=config) if config.get("agent", {}).get("enabled", True) else None
 
     server_cfg = config.get("server", {})
     app = create_app(
@@ -77,6 +87,8 @@ def main() -> None:
         config,
         safety_monitor=safety_monitor,
         body_tracker=body_tracker,
+        vlm_engine=vlm_engine,
+        rover_agent=rover_agent,
     )
 
     try:

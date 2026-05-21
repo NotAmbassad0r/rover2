@@ -53,6 +53,14 @@ class SafetyMonitor:
     def safe_distance_cm(self) -> int:
         return self._safe_distance_cm
 
+    def set_safe_distance_cm(self, cm: int) -> None:
+        self._safe_distance_cm = int(cm)
+
+    @property
+    def distance_cm(self) -> int | None:
+        with self._lock:
+            return self._distance_cm
+
     def start(self) -> None:
         if not self._stopped:
             return
