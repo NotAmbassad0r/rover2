@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore WiFi from /boot/firmware/network-config if wlan0 is down
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rover2/scripts/restore_wifi_if_needed.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

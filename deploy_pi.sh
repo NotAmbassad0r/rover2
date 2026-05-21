@@ -33,6 +33,7 @@ echo "==> Syncing scripts to $PI_HOST:/opt/rover2/scripts/"
 ssh "$PI_HOST" "mkdir -p /opt/rover2/scripts"
 rsync -avz "$SCRIPTS_PATH" "$PI_HOST:/opt/rover2/scripts/"
 ssh "$PI_HOST" "chmod +x /opt/rover2/scripts/*.sh 2>/dev/null || true"
+ssh "$PI_HOST" "chmod +x /opt/rover2/scripts/setup_ai_on_hailo.sh /opt/rover2/scripts/setup_ai_on_cpu.sh 2>/dev/null || true"
 
 echo ""
 echo "==> Installing Python deps (if venv exists)..."
@@ -70,6 +71,51 @@ else
   echo "    httpx already installed"
 fi
 
+# bleak: BLE library — also blocked by TCP/443 on the lab gateway, and dbus_fast
+# needs a platform-specific cp313/aarch64 wheel (not none-any), so pip can't fall
+# back to a generic sdist either. Sideload all three wheels from the dev machine.
+echo ""
+echo "==> Checking bleak (sideload from dev machine if pip couldn't install it)..."
+if ! ssh "$PI_HOST" "/opt/rover2/venv/bin/python3 -c 'import bleak' 2>/dev/null"; then
+  echo "    bleak not installed — downloading wheels on dev machine and transferring..."
+  BLEAK_TMP=$(mktemp -d)
+  python3 - "$BLEAK_TMP" <<'PYEOF'
+import urllib.request, json, os, sys
+
+def best_wheel(files, pkg):
+    """Pick none-any first; for platform pkgs fall back to cp313 aarch64."""
+    for f in files:
+        fn = f["filename"]
+        if fn.endswith(".whl") and "none-any" in fn:
+            return f
+    # platform-specific fallback: cp313 + aarch64 manylinux
+    for f in files:
+        fn = f["filename"]
+        if fn.endswith(".whl") and "cp313" in fn and "aarch64" in fn:
+            return f
+    return None
+
+dest = sys.argv[1]
+for pkg in ["bleak", "async_timeout", "dbus_fast"]:
+    with urllib.request.urlopen(f"https://pypi.org/pypi/{pkg}/json") as r:
+        data = json.load(r)
+    ver = data["info"]["version"]
+    files = data["releases"][ver]
+    chosen = best_wheel(files, pkg)
+    if chosen is None:
+        print(f"  WARNING: no suitable wheel for {pkg} — skipping", file=sys.stderr)
+        continue
+    print(f"  downloading {chosen['filename']}")
+    urllib.request.urlretrieve(chosen["url"], os.path.join(dest, chosen["filename"]))
+PYEOF
+  scp "$BLEAK_TMP"/*.whl "$PI_HOST:/tmp/"
+  ssh "$PI_HOST" "/opt/rover2/venv/bin/pip install --no-index /tmp/bleak-*.whl /tmp/dbus_fast-*.whl /tmp/async_timeout-*.whl 2>&1 | tail -5"
+  rm -rf "$BLEAK_TMP"
+  echo "    bleak sideloaded OK"
+else
+  echo "    bleak already installed"
+fi
+
 echo ""
 echo "==> Linking system Hailo into ROVER2 venv (Pi)..."
 if ssh "$PI_HOST" "[ -d /opt/rover2/venv ] && [ -d /usr/lib/python3/dist-packages/hailo_platform ]"; then
@@ -77,10 +123,51 @@ if ssh "$PI_HOST" "[ -d /opt/rover2/venv ] && [ -d /usr/lib/python3/dist-package
 fi
 
 echo ""
-echo "==> Installing systemd unit (if present)..."
-if [ -f "$ROOT/systemd/rover2-api.service" ]; then
-  scp "$ROOT/systemd/rover2-api.service" "$PI_HOST:/tmp/rover2-api.service"
-  ssh "$PI_HOST" "sudo cp /tmp/rover2-api.service /etc/systemd/system/rover2-api.service && sudo systemctl daemon-reload"
+echo "==> AI backend (agent.backend in config.yaml)..."
+AGENT_BACKEND="$(awk '/^[[:space:]]*backend:[[:space:]]+[[:alnum:]_]+/ && !/^[[:space:]]*#/ {print $2; exit}' "$LOCAL_PATH/config.yaml" 2>/dev/null | cut -d# -f1 | tr -d ' ')"
+AGENT_BACKEND="${AGENT_BACKEND:-hailo}"
+echo "    agent.backend=$AGENT_BACKEND"
+ssh "$PI_HOST" "sudo systemctl disable --now hailo-tappas-playground 2>/dev/null || true"
+if [ "$AGENT_BACKEND" = "cpu" ]; then
+  ssh "$PI_HOST" "sudo bash -s" < "$SCRIPTS_PATH/setup_ai_on_cpu.sh"
+elif [ "$AGENT_BACKEND" = "tools_only" ]; then
+  ssh "$PI_HOST" "sudo systemctl disable --now ollama hailo-ollama 2>/dev/null || true"
+  echo "    LLM services stopped (tools-only / Pi bridge mode)"
+else
+  ssh "$PI_HOST" "sudo bash -s" < "$SCRIPTS_PATH/setup_ai_on_hailo.sh" || {
+    echo "    WARN: hailo-ollama setup failed — agent will use fast-path tools until HAT LLM is up"
+  }
+fi
+
+echo ""
+echo "==> Installing systemd units (if present)..."
+for unit in rover2-api.service rover2-powerbank-keepalive.service rover2-powerbank-keepalive.timer rover2-virtual-usb-dongle.service rover2-restore-wifi.service; do
+  if [ -f "$ROOT/systemd/$unit" ]; then
+    scp "$ROOT/systemd/$unit" "$PI_HOST:/tmp/$unit"
+    ssh "$PI_HOST" "sudo cp /tmp/$unit /etc/systemd/system/$unit"
+  fi
+done
+if [ -f "$ROOT/systemd/rover2-powerbank.env" ]; then
+  scp "$ROOT/systemd/rover2-powerbank.env" "$PI_HOST:/tmp/rover2-powerbank.env"
+  ssh "$PI_HOST" "sudo cp /tmp/rover2-powerbank.env /etc/default/rover2-powerbank"
+fi
+if [ -f "$ROOT/systemd/rover2-virtual-usb-dongle.env" ]; then
+  scp "$ROOT/systemd/rover2-virtual-usb-dongle.env" "$PI_HOST:/tmp/rover2-virtual-usb-dongle.env"
+  ssh "$PI_HOST" "sudo cp /tmp/rover2-virtual-usb-dongle.env /etc/default/rover2-virtual-usb-dongle"
+fi
+if [ -f "$ROOT/systemd/rover2-wifi.sudoers" ]; then
+  scp "$ROOT/systemd/rover2-wifi.sudoers" "$PI_HOST:/tmp/rover2-wifi.sudoers"
+  ssh "$PI_HOST" "sudo cp /tmp/rover2-wifi.sudoers /etc/sudoers.d/rover2-wifi && sudo chmod 440 /etc/sudoers.d/rover2-wifi && sudo visudo -cf /etc/sudoers.d/rover2-wifi"
+fi
+ssh "$PI_HOST" "sudo systemctl daemon-reload 2>/dev/null || true"
+ssh "$PI_HOST" "sudo systemctl enable rover2-restore-wifi.service 2>/dev/null || true"
+if [ -f "$ROOT/scripts/setup_powerbank_keepalive.sh" ]; then
+  ssh "$PI_HOST" "sudo bash /opt/rover2/scripts/setup_powerbank_keepalive.sh" 2>/dev/null || true
+fi
+if [ "${ROVER2_SKIP_VIRTUAL_DONGLE:-}" != "1" ]; then
+  if [ -f "$ROOT/scripts/setup_normal_day_power.sh" ]; then
+    ssh "$PI_HOST" "sudo bash /opt/rover2/scripts/setup_normal_day_power.sh" 2>/dev/null || true
+  fi
 fi
 
 echo ""

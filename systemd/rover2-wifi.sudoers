@@ -1,0 +1,25 @@
+# Passwordless maintenance commands for rover2-api (web TOOLS tab + agent tools).
+# Installed to /etc/sudoers.d/rover2-wifi by deploy_pi.sh
+ambassad0r ALL=(root) NOPASSWD: /bin/bash /opt/rover2/scripts/restore_wifi_if_needed.sh
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl restart --no-block rover2-api.service
+ambassad0r ALL=(root) NOPASSWD: /sbin/reboot
+
+# Service management for AI agent stop_service / start_service / restart_service tools
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl stop rover-camera.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl start rover-camera.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl restart rover-camera.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl stop ollama.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl start ollama.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl restart ollama.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl stop hailo-ollama.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl start hailo-ollama.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl restart hailo-ollama.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl stop rover2-powerbank-keepalive.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl start rover2-powerbank-keepalive.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl restart rover2-powerbank-keepalive.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl stop rover2-virtual-usb-dongle.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl start rover2-virtual-usb-dongle.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl restart rover2-virtual-usb-dongle.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl stop bluetooth.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl start bluetooth.service
+ambassad0r ALL=(root) NOPASSWD: /bin/systemctl restart bluetooth.service

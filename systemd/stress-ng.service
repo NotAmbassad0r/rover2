@@ -1,0 +1,16 @@
+[Unit]
+Description=Continuous load test (stress-ng)
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/stress-ng
+# EnvironmentFile vars are not split for ExecStart; use sh so --cpu 0 works.
+ExecStart=/bin/sh -c 'exec /usr/bin/stress-ng $STRESS_NG_ARGS'
+Restart=on-failure
+RestartSec=10
+# stress-ng uses many workers; avoid tight OOM kills on small systems
+OOMScoreAdjust=200
+
+[Install]
+WantedBy=multi-user.target

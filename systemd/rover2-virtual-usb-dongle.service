@@ -1,0 +1,15 @@
+[Unit]
+Description=Virtual USB keep-alive load (emulates ~50–100 mA dongle for Viking PN-964PD)
+After=network.target
+# Do not run full stress-ng.service if present
+Conflicts=stress-ng.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/rover2-virtual-usb-dongle
+ExecStart=/opt/rover2/scripts/virtual_usb_dongle.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

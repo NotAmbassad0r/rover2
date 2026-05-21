@@ -1,0 +1,8 @@
+[Unit]
+Description=ROVER2 power bank keepalive burst (Viking PN-964PD / low-current banks)
+After=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/rover2-powerbank
+ExecStart=/opt/rover2/scripts/powerbank_keepalive.sh

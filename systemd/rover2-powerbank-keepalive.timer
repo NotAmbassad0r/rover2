@@ -1,0 +1,10 @@
+[Unit]
+Description=ROVER2 power bank keepalive every 90s (battery / untethered)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=90s
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
