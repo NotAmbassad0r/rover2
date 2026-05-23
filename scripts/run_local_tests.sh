@@ -10,7 +10,7 @@ if python3 -c "import serial" 2>/dev/null; then
   python3 -m unittest discover -s tests -p 'test_*.py' -v
 else
   echo "    (pyserial missing — skipping test_safety.py)"
-  python3 -m unittest tests.test_camera_idle tests.test_follow_nav tests.test_arm_control tests.test_body_tracker tests.test_diagnostics tests.test_config_public tests.test_config_store -v
+  python3 -m unittest tests.test_camera_idle tests.test_follow_nav tests.test_arm_control tests.test_body_tracker tests.test_diagnostics tests.test_config_public tests.test_config_store tests.test_thermal -v
 fi
 
 echo ""

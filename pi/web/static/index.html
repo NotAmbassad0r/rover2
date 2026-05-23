@@ -799,6 +799,18 @@
       <p class="diag-section-title">ROBOT · LIVE</p>
       <div id="fd-robot"></div>
     </div>
+
+    <div class="panel">
+      <p class="panel-title">SERVICES · THERMAL</p>
+      <div class="tools-actions">
+        <button type="button" id="services-refresh-btn">REFRESH</button>
+      </div>
+      <p class="muted" id="services-ts">Not loaded</p>
+      <p class="diag-section-title">KEY SERVICES</p>
+      <div id="fd-svc-health"></div>
+      <p class="diag-section-title">THERMAL</p>
+      <div id="fd-thermal"></div>
+    </div>
   </div>
 
   <div id="tab-chat" class="tab-page">
@@ -1069,7 +1081,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') loadFullDiagnostics();
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1439,6 +1451,58 @@
     }
 
     // ── END DIAG TAB ─────────────────────────────────────────────────────────
+
+    // ── Services + Thermal panel (manual refresh only) ────────────────────────
+    function _renderServicesHealth(d) {
+      const svcs = d.services || {};
+      const el = document.getElementById('fd-svc-health');
+      const rows = Object.entries(svcs).map(([name, info]) => {
+        const cls = info.active ? 'ok' : 'warn';
+        const short = name.replace('.service', '');
+        return `<div class="metric-row ${cls}"><span class="label">${short}</span><span class="val">${info.status || (info.active ? 'active' : 'inactive')}</span></div>`;
+      });
+      el.innerHTML = rows.join('') || '<span class="muted">—</span>';
+
+      const th = d.thermal || {};
+      const tel = document.getElementById('fd-thermal');
+      const tRows = [];
+      if (th.temp_c != null) {
+        const level = th.level || 'cool';
+        const cls = level === 'critical' ? 'error' : level === 'hot' ? 'error' : level === 'warm' ? 'warn' : 'ok';
+        tRows.push(metricRow('temperature', `${th.temp_c} °C (${level})`, null, cls));
+      }
+      if (th.freq_mhz != null) {
+        tRows.push(metricRow('CPU freq', `${th.freq_mhz} MHz`, null, 'info'));
+      }
+      if (th.throttle_current != null) {
+        const cls = th.throttle_current ? 'error' : 'ok';
+        tRows.push(metricRow('throttled now', th.throttle_current ? 'YES' : 'no', null, cls));
+      }
+      if (th.throttle_ever != null) {
+        const cls = th.throttle_ever ? 'warn' : 'ok';
+        tRows.push(metricRow('throttled since boot', th.throttle_ever ? 'YES' : 'no', null, cls));
+      }
+      if (!tRows.length) {
+        tRows.push('<div class="metric-row info"><span class="label">vcgencmd</span><span class="val muted">not available</span></div>');
+      }
+      tel.innerHTML = tRows.join('');
+    }
+
+    async function loadServicesHealth() {
+      try {
+        const r = await fetch(apiBase() + '/api/services');
+        const d = await r.json();
+        _renderServicesHealth(d);
+        const now = new Date();
+        document.getElementById('services-ts').textContent =
+          now.getHours().toString().padStart(2,'0') + ':' +
+          now.getMinutes().toString().padStart(2,'0') + ':' +
+          now.getSeconds().toString().padStart(2,'0');
+      } catch (e) { toast('Services error: ' + e.message); }
+    }
+
+    document.getElementById('services-refresh-btn').onclick = () => loadServicesHealth().catch(e => toast(e.message));
+    // ─────────────────────────────────────────────────────────────────────────
 
     async function loadScripts() {
       const r = await fetch(apiBase() + '/api/scripts');

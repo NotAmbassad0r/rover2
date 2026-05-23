@@ -257,6 +257,26 @@ _READ_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "get_service_status",
+            "description": "Live status of the 5 key services (rover2-api, rover-camera, "
+                           "rover2-virtual-usb-dongle, rover2-powerbank-keepalive, hailo-ollama) "
+                           "plus current temperature, throttle state, and CPU frequency.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_thermal_status",
+            "description": "Current CPU temperature, throttle state (current + since-boot), "
+                           "and CPU frequency in MHz. Use when diagnosing heat, throttling, "
+                           "or frequency scaling issues.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "set_robot_mode",
             "description": "Change the robot's operating mode: "
                            "follow (camera YOLO follow), detect (detect-only no movement), off (idle).",
@@ -515,6 +535,50 @@ def _fmt_alert_diagnosis(alerts_data: Any, diag: Any, procs: Any) -> str:
     return "\n".join(lines)
 
 
+def _fmt_service_status(data: Any) -> str:
+    svcs = data.get("services", {})
+    th   = data.get("thermal", {})
+    lines = ["Key services:"]
+    for name, info in svcs.items():
+        active = info.get("active", False)
+        status = info.get("status", "unknown")
+        marker = "+" if active else "!"
+        short  = name.replace(".service", "")
+        lines.append(f"  {marker} {short}: {status}")
+    if th.get("temp_c") is not None:
+        level = th.get("level", "cool")
+        flag  = "  WARNING" if level in ("hot", "critical") else ""
+        throttle = ""
+        if th.get("throttle_current"):
+            throttle = "  THROTTLED NOW"
+        elif th.get("throttle_ever"):
+            throttle = "  (throttled since boot)"
+        lines.append(f"Thermal: {th['temp_c']} C ({level}){flag}{throttle}")
+        if th.get("freq_mhz") is not None:
+            lines.append(f"CPU freq: {th['freq_mhz']} MHz")
+    return "\n".join(lines)
+
+
+def _fmt_thermal_status(data: Any) -> str:
+    th = data.get("thermal", {})
+    lines = ["Thermal status:"]
+    if "temp_c" in th:
+        level = th.get("level", "cool")
+        flag  = "  WARNING" if level in ("hot", "critical") else ""
+        lines.append(f"  Temperature: {th['temp_c']} C ({level}){flag}")
+    if "freq_mhz" in th:
+        lines.append(f"  CPU freq now: {th['freq_mhz']} MHz")
+    if "throttle_current" in th:
+        lines.append(f"  Throttled now: {'YES — performance impacted' if th['throttle_current'] else 'no'}")
+    if "throttle_ever" in th:
+        lines.append(f"  Throttled since boot: {'YES' if th['throttle_ever'] else 'no'}")
+    if "throttle_hex" in th:
+        lines.append(f"  Throttle flags: {th['throttle_hex']}")
+    if not any(k in th for k in ("temp_c", "freq_mhz", "throttle_current")):
+        lines.append("  vcgencmd not available — dev machine or unsupported OS")
+    return "\n".join(lines)
+
+
 def _fmt_capabilities(data: Any) -> str:
     eps      = data.get("endpoints", [])
     features = data.get("features", [])
@@ -559,7 +623,9 @@ def _fmt_health(diag: Any, svcs: Any) -> str:
 # (regex, tool_name or None for multi-tool, single-tool formatter or None)
 _FAST_PATTERNS: list[tuple[str, str | None, Any]] = [
     (r"\btemp(erature)?s?\b|how hot|too hot|thermal|overheat|cpu.{0,12}high", "get_diagnostics", _fmt_temps),
-    (r"\ball services?\b|list service|service status|status of all", "list_services",        _fmt_services),
+    (r"\bthrottl|cpu freq|scaling_max|is it throttling",                        "get_thermal_status", _fmt_thermal_status),
+    (r"key service|service.{0,15}status|are services running|check services|services up", "get_service_status", _fmt_service_status),
+    (r"\ball services?\b|list service|status of all", "list_services",        _fmt_services),
     (r"\bdisk\b|storage|space used|disk usage|getting full",        "get_disk_details",      _fmt_disk),
     (r"\bwifi\b|wireless|signal strength|ssid|network connection",  "get_wifi_info",         _fmt_wifi),
     (r"\bmemory\b|\bram\b|mem(ory)? usage|leaking mem",            "get_diagnostics",        _fmt_memory),
@@ -923,6 +989,11 @@ class RoverAgent:
                     self._get("/api/diagnostics/processes"),
                 )
                 return {"status": status, "diagnostics": diag, "processes": procs}
+            if name == "get_service_status":
+                return await self._get("/api/services")
+            if name == "get_thermal_status":
+                data = await self._get("/api/services")
+                return {"thermal": data.get("thermal", {})}
             if name == "get_hardware_reference":
                 return {"reference": ROVER2_KNOWLEDGE.strip()}
             if name == "describe_camera":

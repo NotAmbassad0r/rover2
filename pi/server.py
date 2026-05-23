@@ -30,6 +30,13 @@ try:
     _CAMERA_IDLE = True
 except ImportError:
     _CAMERA_IDLE = False
+
+try:
+    from thermal import ThermalMonitor, read_thermal, read_cpu_freq_mhz
+
+    _THERMAL = True
+except ImportError:
+    _THERMAL = False
 from config_public import public_config
 from config_runtime import apply_config_patch
 from config_store import (
@@ -115,6 +122,7 @@ def create_app(
     camera_health_url = str(cam_cfg.get("health_url", "http://127.0.0.1:8081/health"))
 
     cam_idle = CameraIdleManager(config) if _CAMERA_IDLE else None
+    thermal_monitor = ThermalMonitor() if _THERMAL else None
 
     hub = ControlHub(
         megapi=megapi,
@@ -150,6 +158,7 @@ def create_app(
     # Alert state — updated each metrics tick, pushed via WebSocket extra
     _active_alerts: list[dict] = []
     _cpu_high_since: float | None = None
+    _thermal_alert: dict | None = None  # set by /api/services on-demand evaluation
 
     _THRESHOLDS = [
         ("temp_cpu_thermal", 85, "crit", "CPU temperature CRITICAL {v:.1f} C — overheating"),
@@ -254,7 +263,7 @@ def create_app(
                 await asyncio.to_thread(_mstore.write, points)
 
                 # ── Threshold alert evaluation ──────────────────────────────
-                nonlocal _active_alerts, _cpu_high_since
+                nonlocal _active_alerts, _cpu_high_since, _thermal_alert
                 new_alerts: list[dict] = []
                 seen_metrics: set[str] = set()
                 for metric, threshold, severity, tmpl in _THRESHOLDS:
@@ -288,7 +297,8 @@ def create_app(
                 else:
                     _sleep_s = _METRICS_INTERVAL_S
                 _active_alerts = new_alerts
-                hub.set_telemetry_extra({"alerts": new_alerts})
+                all_alerts = new_alerts + ([_thermal_alert] if _thermal_alert else [])
+                hub.set_telemetry_extra({"alerts": all_alerts})
                 # ───────────────────────────────────────────────────────────
 
                 purge_tick += 1
@@ -499,6 +509,52 @@ def create_app(
     @app.get("/api/alerts/current")
     async def get_alerts_current() -> JSONResponse:
         return JSONResponse({"alerts": _active_alerts, "count": len(_active_alerts)})
+
+    @app.get("/api/services")
+    async def get_services() -> JSONResponse:
+        """Live status of 5 key services + thermal. On-demand, no background polling."""
+        import subprocess
+
+        _MONITORED = [
+            "rover2-api.service",
+            "rover-camera.service",
+            "rover2-virtual-usb-dongle.service",
+            "rover2-powerbank-keepalive.service",
+            "hailo-ollama.service",
+        ]
+
+        def _check_services() -> dict:
+            result = {}
+            for unit in _MONITORED:
+                try:
+                    r = subprocess.run(
+                        ["systemctl", "is-active", unit],
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    status = r.stdout.strip() or "unknown"
+                    result[unit] = {"active": status == "active", "status": status}
+                except Exception as exc:
+                    result[unit] = {"active": False, "status": "error", "detail": str(exc)[:60]}
+            return result
+
+        services, thermal_data = await asyncio.gather(
+            asyncio.to_thread(_check_services),
+            asyncio.to_thread(read_thermal) if _THERMAL else asyncio.sleep(0),
+        )
+        freq_mhz = await asyncio.to_thread(read_cpu_freq_mhz) if _THERMAL else None
+        if isinstance(thermal_data, dict):
+            thermal_data["freq_mhz"] = freq_mhz
+        else:
+            thermal_data = {"freq_mhz": freq_mhz}
+
+        # Evaluate thermal alert and merge into WS extra
+        nonlocal _thermal_alert
+        if thermal_monitor is not None and isinstance(thermal_data, dict):
+            _thermal_alert = thermal_monitor.evaluate(thermal_data)
+        else:
+            _thermal_alert = None
+
+        return JSONResponse({"services": services, "thermal": thermal_data})
 
     @app.get("/metrics")
     async def prometheus_metrics() -> Response:
