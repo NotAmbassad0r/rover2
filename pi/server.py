@@ -23,6 +23,13 @@ try:
     _CAMERA_PROXY = True
 except ImportError:
     _CAMERA_PROXY = False
+
+try:
+    from camera_idle import CameraIdleManager
+
+    _CAMERA_IDLE = True
+except ImportError:
+    _CAMERA_IDLE = False
 from config_public import public_config
 from config_runtime import apply_config_patch
 from config_store import (
@@ -107,6 +114,8 @@ def create_app(
     camera_snapshot_url = str(cam_cfg.get("snapshot_url", "http://127.0.0.1:8081/snapshot"))
     camera_health_url = str(cam_cfg.get("health_url", "http://127.0.0.1:8081/health"))
 
+    cam_idle = CameraIdleManager(config) if _CAMERA_IDLE else None
+
     hub = ControlHub(
         megapi=megapi,
         directions=directions,
@@ -117,6 +126,7 @@ def create_app(
         telemetry_interval_s=telemetry_interval_s,
         body_tracker=body_tracker,
         config=config,
+        cam_idle=cam_idle,
     )
 
     app = FastAPI(title="ROVER2", version="2.0.0")
@@ -238,6 +248,9 @@ def create_app(
                         points["ultrasonic_cm"] = float(d)
                     points["safety_blocked"] = 1.0 if safety_monitor.forward_blocked else 0.0
 
+                if cam_idle is not None:
+                    points["camera_sleeping"] = 1.0 if cam_idle.sleeping else 0.0
+
                 await asyncio.to_thread(_mstore.write, points)
 
                 # ── Threshold alert evaluation ──────────────────────────────
@@ -290,6 +303,9 @@ def create_app(
         asyncio.create_task(_metrics_loop())
         if rover_agent is not None:
             asyncio.create_task(rover_agent.warmup())
+        if cam_idle is not None:
+            _ultra_poll_s = float(config.get("ultrasonic", {}).get("poll_interval_s", 0.5))
+            asyncio.create_task(cam_idle.run(megapi, body_tracker, _ultra_poll_s))
 
     @app.websocket("/ws")
     async def websocket_control(websocket: WebSocket) -> None:
@@ -308,6 +324,8 @@ def create_app(
         @app.get("/stream")
         async def camera_stream() -> StreamingResponse:
             """MJPEG proxy — same feed as rover-camera on port 8081."""
+            if cam_idle is not None:
+                cam_idle.notify_stream_connect()
             await check_camera_up(camera_health_url)
             return await stream_response(camera_stream_url)
 
@@ -964,10 +982,17 @@ def create_app(
         config.update(merged)
         return JSONResponse({"status": "ok", "applied": applied, "config": public_config(config)})
 
+    @app.post("/api/camera/wake")
+    async def camera_wake() -> JSONResponse:
+        """Manually wake camera from idle sleep."""
+        if cam_idle is not None:
+            cam_idle.wake("manual API call")
+        return JSONResponse({"status": "ok", "camera_sleeping": cam_idle.sleeping if cam_idle is not None else False})
+
     @app.get("/api/status")
     async def status() -> JSONResponse:
         payload = build_telemetry(
-            megapi, safety_monitor, _START, _public_ultrasonic_cm, body_tracker
+            megapi, safety_monitor, _START, _public_ultrasonic_cm, body_tracker, cam_idle
         )
         payload.pop("type", None)
         return JSONResponse(payload)
@@ -987,8 +1012,12 @@ def create_app(
         if "ble_follow_enabled" in body:
             body_tracker.set_ble_follow_enabled(bool(body["ble_follow_enabled"]))
         if detect_only:
+            if cam_idle is not None:
+                cam_idle.notify_tracking_active()
             body_tracker.set_detect_only(True)
         elif enabled:
+            if cam_idle is not None:
+                cam_idle.notify_tracking_active()
             body_tracker.set_enabled(True)
         else:
             body_tracker.set_enabled(False)

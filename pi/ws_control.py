@@ -23,6 +23,7 @@ def build_telemetry(
     start_monotonic: float,
     public_ultrasonic_cm: Any,
     body_tracker: BodyTracker | None = None,
+    cam_idle: Any = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": "telemetry",
@@ -42,6 +43,7 @@ def build_telemetry(
         payload["forward_blocked"] = safety_monitor.forward_blocked
     else:
         payload["safety_enabled"] = False
+    payload["camera_sleeping"] = cam_idle.sleeping if cam_idle is not None else False
     if body_tracker is not None:
         state = body_tracker.get_state()
         payload["tracking_available"] = state["available"]
@@ -80,6 +82,7 @@ class ControlHub:
         telemetry_interval_s: float = 0.4,
         body_tracker: BodyTracker | None = None,
         config: dict[str, Any] | None = None,
+        cam_idle: Any = None,
     ) -> None:
         self._megapi = megapi
         self._directions = directions
@@ -90,6 +93,7 @@ class ControlHub:
         self._telemetry_interval_s = telemetry_interval_s
         self._body_tracker = body_tracker
         self._config = config or {}
+        self._cam_idle = cam_idle
         self._clients: set[WebSocket] = set()
         self._driver: WebSocket | None = None
         self._driver_direction: str | None = None
@@ -202,6 +206,7 @@ class ControlHub:
                     self._start,
                     self._public_ultrasonic_cm,
                     self._body_tracker,
+                    self._cam_idle,
                 )
                 if self._telemetry_extra:
                     payload.update(self._telemetry_extra)
@@ -284,6 +289,8 @@ class ControlHub:
                 if self._tracking_owner is not None and self._tracking_owner is not ws:
                     await self._send_json(ws, {"type": "error", "msg": "another client owns tracking"})
                     return
+                if self._cam_idle is not None:
+                    self._cam_idle.notify_tracking_active()
                 self._body_tracker.set_detect_only(True)
                 self._tracking_owner = ws
             elif enabled:
@@ -292,6 +299,8 @@ class ControlHub:
                     return
                 self._driver = None
                 self._driver_direction = None
+                if self._cam_idle is not None:
+                    self._cam_idle.notify_tracking_active()
                 self._body_tracker.set_enabled(True)
                 self._tracking_owner = ws
             else:

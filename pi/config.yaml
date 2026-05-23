@@ -94,5 +94,11 @@ vlm:
   camera_url: http://127.0.0.1:8081/snapshot
   max_tokens: 128                 # keep responses short; longer = more Hailo time
 
+camera_idle:
+  enabled: true
+  sleep_after_idle_s: 90     # seconds of stable ultrasonic before sleeping
+  distance_variance_cm: 8    # cm range threshold for "stable" (max-min in window)
+  window_size: 10            # number of readings in sliding window
+
 firmware:
   hex_path: /tmp/rover2_firmware.hex

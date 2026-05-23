@@ -568,6 +568,9 @@
     <div class="status-row" id="row-ble">
       <span>BLE BEACON</span><span id="st-ble">—</span>
     </div>
+    <div class="status-row" id="row-cam-idle">
+      <span>CAMERA</span><span id="st-cam-idle">—</span>
+    </div>
     <div class="status-row">
       <span>UPTIME</span><span id="st-uptime">—</span>
     </div>
@@ -579,9 +582,16 @@
   </div>
 
   <div class="panel">
-    <p class="camera-hint">LIVE CAMERA</p>
-    <div class="camera-wrap">
+    <p class="camera-hint" id="camera-hint">LIVE CAMERA</p>
+    <div class="camera-wrap" style="position:relative;">
       <img id="camera" src="" alt="Live camera" />
+      <div id="cam-idle-overlay" style="display:none;position:absolute;inset:0;
+        background:rgba(13,17,23,0.82);display:none;align-items:center;
+        justify-content:center;flex-direction:column;gap:0.4rem;cursor:pointer;"
+        onclick="wakeCamera()">
+        <span style="font-size:0.75rem;letter-spacing:0.12em;color:var(--muted);">CAM IDLE</span>
+        <span style="font-size:0.62rem;color:var(--muted);opacity:0.6;">tap to wake</span>
+      </div>
     </div>
   </div>
 
@@ -926,6 +936,7 @@
     let followOn = false;
     let detectOn = false;
     let bleFollowOn = false;
+    let cameraSleeping = false;
     const RECONNECT_MS = 1500;
 
     // Event log
@@ -1599,6 +1610,41 @@
         bleEl.textContent = 'SCANNING';
         bleRow.className = 'status-row';
       }
+
+      // Camera idle row
+      if (d.camera_sleeping !== undefined && d.camera_sleeping !== cameraSleeping) {
+        cameraSleeping = !!d.camera_sleeping;
+        _applyCameraSleep(cameraSleeping);
+      }
+    }
+
+    function _applyCameraSleep(sleeping) {
+      const img = document.getElementById('camera');
+      const overlay = document.getElementById('cam-idle-overlay');
+      const hint = document.getElementById('camera-hint');
+      const row = document.getElementById('row-cam-idle');
+      const st = document.getElementById('st-cam-idle');
+      if (sleeping) {
+        if (img && img.src) img.src = '';
+        if (overlay) overlay.style.display = 'flex';
+        if (hint) hint.textContent = 'CAMERA · IDLE';
+        if (st) { st.textContent = 'IDLE'; st.style.color = 'var(--muted)'; }
+        if (row) row.className = 'status-row';
+      } else {
+        if (overlay) overlay.style.display = 'none';
+        if (hint) hint.textContent = 'LIVE CAMERA';
+        if (img && !img.src) img.src = cameraStreamUrl();
+        if (st) { st.textContent = 'LIVE'; st.style.color = 'var(--accent)'; }
+        if (row) row.className = 'status-row';
+      }
+    }
+
+    function wakeCamera() {
+      // User tapped the idle overlay — POST a wake to the REST endpoint
+      fetch('/api/camera/wake', { method: 'POST' }).catch(() => {});
+      // Optimistically update the UI immediately
+      cameraSleeping = false;
+      _applyCameraSleep(false);
     }
 
     function updateTrackingButtons() {
