@@ -57,6 +57,7 @@ body_tracker:
   forward_speed: 170
   frame_interval_s: 0.25   # 4fps — reduces Hailo power draw on battery
   hailo_warmup_s: 30.0     # delay before loading Hailo model — lets CPU idle after boot
+  ble_follow_enabled: false # BLE fallback off by default — enable via UI BLE button
   avoid_default: left   # when wall blocks FWD and person is centred in frame
 
 ble_tracker:

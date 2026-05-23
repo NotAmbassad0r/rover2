@@ -95,7 +95,7 @@ class BodyTracker:
 
         # BLE fallback state
         self._ble: BLETracker | None = ble_tracker
-        self._ble_follow_enabled: bool = bool(cfg.get("ble_follow_enabled", True))
+        self._ble_follow_enabled: bool = bool(cfg.get("ble_follow_enabled", False))
         self._ble_active = False
         self._camera_lost_at: float = 0.0
         self._ble_search_dir: str = "right"

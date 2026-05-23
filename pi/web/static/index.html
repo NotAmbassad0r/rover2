@@ -785,6 +785,9 @@
 
       <p class="diag-section-title">SERVICES</p>
       <div id="fd-services"></div>
+
+      <p class="diag-section-title">ROBOT · LIVE</p>
+      <div id="fd-robot"></div>
     </div>
   </div>
 
@@ -820,6 +823,15 @@
     <div class="panel">
       <div class="status-row" id="row-vlm">
         <span>VLM ENGINE</span><span id="st-vlm">—</span>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:0.75rem 1.25rem;">
+      <p class="panel-title">TRACKING MODE</p>
+      <div class="mode-row">
+        <button type="button" id="btn-detect-chat" class="mode-btn">DETECT</button>
+        <button type="button" id="btn-follow-chat" class="mode-btn">FOLLOW</button>
+        <button type="button" id="btn-ble-chat" class="mode-btn">BLE</button>
       </div>
     </div>
 
@@ -913,7 +925,7 @@
     let activeDir = null;
     let followOn = false;
     let detectOn = false;
-    let bleFollowOn = true;
+    let bleFollowOn = false;
     const RECONNECT_MS = 1500;
 
     // Event log
@@ -1396,6 +1408,25 @@
       }
     };
 
+    function _updateDiagRobot(d) {
+      const el = document.getElementById('fd-robot');
+      if (!el || _activeTab !== 'diag') return;
+      const rows = [];
+      if (d.ble_rssi != null) {
+        const cls = d.ble_rssi >= -60 ? 'ok' : d.ble_rssi >= -75 ? 'info' : 'warn';
+        rows.push(metricRow('BLE RSSI', d.ble_rssi + ' dBm', null, cls));
+      } else {
+        rows.push(metricRow('BLE RSSI', d.ble_seen ? 'seen (no value)' : 'not seen', null, 'info'));
+      }
+      rows.push(metricRow('BLE fallback', d.ble_follow_enabled ? 'ON' : 'OFF', null, d.ble_follow_enabled ? 'ok' : 'info'));
+      if (d.tracking_available) {
+        rows.push(metricRow('person', d.person_detected ? 'DETECTED' : 'not seen', null, d.person_detected ? 'ok' : 'info'));
+        const mode = d.tracking_enabled ? (d.ble_active ? 'FOLLOW · BLE' : 'FOLLOW · camera') : (d.tracking_detect_only ? 'DETECT' : 'off');
+        rows.push(metricRow('follow mode', mode, null, 'info'));
+      }
+      el.innerHTML = rows.join('') || '<span class="muted">—</span>';
+    }
+
     // ── END DIAG TAB ─────────────────────────────────────────────────────────
 
     async function loadScripts() {
@@ -1551,6 +1582,7 @@
         if (d.ble_follow_enabled !== undefined) bleFollowOn = !!d.ble_follow_enabled;
         updateTrackingButtons();
       }
+      _updateDiagRobot(d);
 
       const bleEl = document.getElementById('st-ble');
       const bleRow = document.getElementById('row-ble');
@@ -1570,21 +1602,19 @@
     }
 
     function updateTrackingButtons() {
-      const btnFollow = document.getElementById('btn-follow');
-      btnFollow.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
-      if (followOn) btnFollow.classList.add('active-follow');
-      else btnFollow.classList.add('inactive');
-
-      const btnDetect = document.getElementById('btn-detect');
-      btnDetect.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
-      if (detectOn) btnDetect.classList.add('active-detect');
-      else btnDetect.classList.add('inactive');
-
-      const btnBle = document.getElementById('btn-ble');
-      btnBle.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
-      if (bleFollowOn) btnBle.classList.add('active-ble');
-      else btnBle.classList.add('inactive');
-
+      [
+        ['btn-follow',      'active-follow',  followOn],
+        ['btn-detect',      'active-detect',  detectOn],
+        ['btn-ble',         'active-ble',     bleFollowOn],
+        ['btn-follow-chat', 'active-follow',  followOn],
+        ['btn-detect-chat', 'active-detect',  detectOn],
+        ['btn-ble-chat',    'active-ble',     bleFollowOn],
+      ].forEach(([id, activeClass, on]) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
+        btn.classList.add(on ? activeClass : 'inactive');
+      });
       document.getElementById('dpad').classList.toggle('disabled', followOn);
     }
 
@@ -1808,6 +1838,11 @@
     document.getElementById('btn-ble').onclick = () => {
       setBleFollow(!bleFollowOn);
     };
+
+    // Chat tab mode buttons delegate to control tab handlers
+    document.getElementById('btn-detect-chat').onclick = () => document.getElementById('btn-detect').click();
+    document.getElementById('btn-follow-chat').onclick = () => document.getElementById('btn-follow').click();
+    document.getElementById('btn-ble-chat').onclick    = () => document.getElementById('btn-ble').click();
 
     updateTrackingButtons();
     document.getElementById('camera').src = cameraStreamUrl();
