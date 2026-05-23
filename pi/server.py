@@ -141,12 +141,38 @@ def create_app(
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
     config_path = Path(__file__).parent / "config.yaml"
 
+    import collections as _collections
+
     _diag_cache: dict[str, Any] | None = None
     _diag_cache_time: float = 0.0
     _DIAG_TTL_S = 30.0
     _full_diag_cache: dict[str, Any] | None = None
     _full_diag_cache_time: float = 0.0
     _FULL_DIAG_TTL_S = 10.0
+
+    # Fault history ring buffer — clears on service restart (intentional)
+    _fault_history: _collections.deque = _collections.deque(maxlen=20)
+
+    def _add_fault(component: str, msg: str, action: str = "") -> None:
+        _fault_history.append({
+            "ts": int(time.time()),
+            "component": component,
+            "msg": msg,
+            "action": action,
+        })
+        logger.warning("FAULT [%s] %s%s", component, msg, f" → {action}" if action else "")
+
+    # Fault escalation cooldown/counter state
+    _ultra_reconnect_at: float = 0.0
+    _hailo_fault_since: float | None = None
+    _hailo_recovery_count: int = 0
+    _hailo_recovery_at: float = 0.0
+    _camera_restart_at: float = 0.0
+    _ollama_unresponsive_count: int = 0
+    _mem_warn_ts: float = 0.0
+    # Transient service alerts — set by /api/services, included in next WS push
+    _camera_alert: dict | None = None
+    _ollama_alert: dict | None = None
 
     _metrics_cfg = config.get("metrics", {})
     _METRICS_INTERVAL_S = float(_metrics_cfg.get("interval_s", 5.0))
@@ -159,6 +185,22 @@ def create_app(
     _active_alerts: list[dict] = []
     _cpu_high_since: float | None = None
     _thermal_alert: dict | None = None  # set by /api/services on-demand evaluation
+
+    async def _hailo_recovery_task() -> None:
+        if body_tracker is None:
+            return
+        st_before = body_tracker.get_state()
+        was_enabled = st_before.get("enabled", False)
+        was_detect = st_before.get("detect_only", False)
+        logger.warning("Hailo recovery: disabling follow/detect for 5s")
+        body_tracker.set_enabled(False)
+        body_tracker.set_detect_only(False)
+        await asyncio.sleep(5.0)
+        if was_enabled:
+            body_tracker.set_enabled(True)
+        elif was_detect:
+            body_tracker.set_detect_only(True)
+        logger.warning("Hailo recovery complete (was_enabled=%s, was_detect=%s)", was_enabled, was_detect)
 
     _THRESHOLDS = [
         ("temp_cpu_thermal", 85, "crit", "CPU temperature CRITICAL {v:.1f} C — overheating"),
@@ -264,6 +306,9 @@ def create_app(
 
                 # ── Threshold alert evaluation ──────────────────────────────
                 nonlocal _active_alerts, _cpu_high_since, _thermal_alert
+                nonlocal _ultra_reconnect_at
+                nonlocal _hailo_fault_since, _hailo_recovery_count, _hailo_recovery_at
+                nonlocal _mem_warn_ts
                 new_alerts: list[dict] = []
                 seen_metrics: set[str] = set()
                 for metric, threshold, severity, tmpl in _THRESHOLDS:
@@ -291,14 +336,99 @@ def create_app(
                             })
                     else:
                         _cpu_high_since = None
+
+                # Ultrasonic fault escalation
+                ultra_faults = megapi.ultrasonic_fault_count
+                now_m = time.monotonic()
+                if ultra_faults >= 10:
+                    if now_m - _ultra_reconnect_at >= 60.0:
+                        _ultra_reconnect_at = now_m
+                        _add_fault("ultrasonic", f"Serial timeout x{ultra_faults} — reconnecting serial", "serial reconnect")
+                        megapi.trigger_reconnect()
+                elif ultra_faults >= 3:
+                    new_alerts.append({
+                        "metric": "ultrasonic_fault_count", "value": ultra_faults,
+                        "severity": "warn", "ts": int(time.time()),
+                        "msg": f"Ultrasonic unresponsive — serial may be wedged ({ultra_faults} timeouts)",
+                    })
+
+                # Hailo fault escalation
+                if body_tracker is not None:
+                    st_h = body_tracker.get_state()
+                    is_active = st_h.get("enabled") or st_h.get("detect_only")
+                    hailo_rdy = st_h.get("hailo_ready", False)
+                    past_warmup = body_tracker.is_past_warmup()
+                    if is_active and not hailo_rdy and past_warmup:
+                        if _hailo_fault_since is None:
+                            _hailo_fault_since = now_m
+                        fault_dur = now_m - _hailo_fault_since
+                        if fault_dur >= 60.0 and _hailo_recovery_count < 2:
+                            if now_m - _hailo_recovery_at >= 30.0:
+                                _hailo_recovery_count += 1
+                                _hailo_recovery_at = now_m
+                                _add_fault(
+                                    "hailo",
+                                    f"Hailo unavailable >{fault_dur:.0f}s — auto-recovery attempt {_hailo_recovery_count}/2",
+                                    "auto-recovery",
+                                )
+                                asyncio.create_task(_hailo_recovery_task())
+                        elif _hailo_recovery_count >= 2 and now_m - _hailo_recovery_at >= 90.0:
+                            _hailo_recovery_at = now_m
+                            _add_fault("hailo", "Hailo unavailable after 2 recovery attempts — manual restart needed", "alert")
+                            new_alerts.append({
+                                "metric": "hailo_ready", "value": 0,
+                                "severity": "crit", "ts": int(time.time()),
+                                "msg": "Hailo unavailable after recovery — restart rover2-api manually",
+                            })
+                    else:
+                        if hailo_rdy and _hailo_fault_since is not None:
+                            _hailo_fault_since = None
+                            _hailo_recovery_count = 0
+                        elif not is_active:
+                            _hailo_fault_since = None
+
+                # Memory watchdog
+                proc_mem = points.get("process_memory_mb")
+                if proc_mem is not None:
+                    if proc_mem > 200:
+                        new_alerts.append({
+                            "metric": "process_memory_mb", "value": round(proc_mem, 1),
+                            "severity": "crit", "ts": int(time.time()),
+                            "msg": f"rover2-api RSS {proc_mem:.0f} MB — critical (target <150 MB)",
+                        })
+                        _add_fault("memory", f"RSS {proc_mem:.0f} MB — critical", "alert")
+                        _mem_warn_ts = now_m
+                    elif proc_mem > 150:
+                        new_alerts.append({
+                            "metric": "process_memory_mb", "value": round(proc_mem, 1),
+                            "severity": "warn", "ts": int(time.time()),
+                            "msg": f"rover2-api RSS {proc_mem:.0f} MB — above target (target <150 MB)",
+                        })
+                        if now_m - _mem_warn_ts >= 1800:
+                            _mem_warn_ts = now_m
+                            _add_fault("memory", f"RSS {proc_mem:.0f} MB — above target", "alert")
+                    elif proc_mem > 130 and now_m - _mem_warn_ts >= 1800:
+                        _mem_warn_ts = now_m
+                        new_alerts.append({
+                            "metric": "process_memory_mb", "value": round(proc_mem, 1),
+                            "severity": "warn", "ts": int(time.time()),
+                            "msg": f"rover2-api RSS {proc_mem:.0f} MB — approaching limit",
+                        })
+
                 # Ease Pi thermals: sample less often when CPU is already high
                 if cpu_v is not None and cpu_v >= _METRICS_CPU_HOT_PCT:
                     _sleep_s = _METRICS_INTERVAL_HOT_S
                 else:
                     _sleep_s = _METRICS_INTERVAL_S
                 _active_alerts = new_alerts
-                all_alerts = new_alerts + ([_thermal_alert] if _thermal_alert else [])
-                hub.set_telemetry_extra({"alerts": all_alerts})
+                all_alerts = list(new_alerts)
+                if _thermal_alert:
+                    all_alerts.append(_thermal_alert)
+                if _camera_alert:
+                    all_alerts.append(_camera_alert)
+                if _ollama_alert:
+                    all_alerts.append(_ollama_alert)
+                hub.set_telemetry_extra({"alerts": all_alerts, "ws_client_count": hub.client_count})
                 # ───────────────────────────────────────────────────────────
 
                 purge_tick += 1
@@ -510,10 +640,21 @@ def create_app(
     async def get_alerts_current() -> JSONResponse:
         return JSONResponse({"alerts": _active_alerts, "count": len(_active_alerts)})
 
+    @app.get("/api/faults")
+    async def get_faults() -> JSONResponse:
+        return JSONResponse({"faults": list(_fault_history), "count": len(_fault_history)})
+
+    @app.delete("/api/faults")
+    async def clear_faults() -> JSONResponse:
+        _fault_history.clear()
+        return JSONResponse({"status": "ok"})
+
     @app.get("/api/services")
     async def get_services() -> JSONResponse:
-        """Live status of 5 key services + thermal. On-demand, no background polling."""
+        """Live status of key services + thermal + ollama + camera + memory + disk. On-demand only."""
         import subprocess
+        import shutil
+        import resource as _resource
 
         _MONITORED = [
             "rover2-api.service",
@@ -537,9 +678,59 @@ def create_app(
                     result[unit] = {"active": False, "status": "error", "detail": str(exc)[:60]}
             return result
 
-        services, thermal_data = await asyncio.gather(
+        async def _probe_ollama() -> dict:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=3.0) as c:
+                    r = await c.get("http://localhost:11434/api/tags")
+                return {"responsive": r.status_code == 200}
+            except Exception as exc:
+                return {"responsive": False, "detail": str(exc)[:60]}
+
+        async def _probe_camera_stream() -> dict:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=2.0) as c:
+                    r = await c.head("http://localhost:8081/stream")
+                return {"responsive": r.status_code < 500}
+            except Exception as exc:
+                return {"responsive": False, "detail": str(exc)[:60]}
+
+        def _check_disk_and_memory() -> dict:
+            result: dict = {}
+            try:
+                u = shutil.disk_usage("/")
+                result["disk_root_pct"] = round(100 * u.used / u.total, 1)
+                result["disk_root_free_gb"] = round(u.free / 1e9, 2)
+            except Exception:
+                pass
+            try:
+                u2 = shutil.disk_usage("/opt")
+                result["disk_opt_pct"] = round(100 * u2.used / u2.total, 1)
+            except Exception:
+                pass
+            try:
+                ru = _resource.getrusage(_resource.RUSAGE_SELF)
+                result["memory_rss_mb"] = round(ru.ru_maxrss / 1024, 1)
+            except Exception:
+                pass
+            try:
+                with open("/proc/mounts") as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) >= 4 and parts[1] == "/boot/firmware":
+                            result["boot_partition_ro"] = "rw" not in parts[3].split(",")
+                            break
+            except Exception:
+                pass
+            return result
+
+        services, thermal_data, ollama_probe, camera_probe, disk_mem = await asyncio.gather(
             asyncio.to_thread(_check_services),
             asyncio.to_thread(read_thermal) if _THERMAL else asyncio.sleep(0),
+            _probe_ollama(),
+            _probe_camera_stream(),
+            asyncio.to_thread(_check_disk_and_memory),
         )
         freq_mhz = await asyncio.to_thread(read_cpu_freq_mhz) if _THERMAL else None
         if isinstance(thermal_data, dict):
@@ -547,14 +738,54 @@ def create_app(
         else:
             thermal_data = {"freq_mhz": freq_mhz}
 
-        # Evaluate thermal alert and merge into WS extra
-        nonlocal _thermal_alert
+        nonlocal _thermal_alert, _ollama_unresponsive_count, _camera_restart_at, _camera_alert, _ollama_alert
         if thermal_monitor is not None and isinstance(thermal_data, dict):
             _thermal_alert = thermal_monitor.evaluate(thermal_data)
         else:
             _thermal_alert = None
 
-        return JSONResponse({"services": services, "thermal": thermal_data})
+        # Ollama consecutive unresponsive tracking
+        ollama_svc_active = services.get("hailo-ollama.service", {}).get("active", False)
+        if ollama_svc_active and not ollama_probe.get("responsive", False):
+            _ollama_unresponsive_count += 1
+            if _ollama_unresponsive_count >= 2:
+                _ollama_alert = {
+                    "metric": "ollama_responsive", "value": 0,
+                    "severity": "warn", "ts": int(time.time()),
+                    "msg": f"Ollama active but unresponsive ({_ollama_unresponsive_count} consecutive checks)",
+                }
+                _add_fault("ollama", f"Unresponsive x{_ollama_unresponsive_count}", "alert")
+        else:
+            _ollama_unresponsive_count = 0
+            _ollama_alert = None
+
+        # Camera stream health + auto-restart (5-min cooldown)
+        if not camera_probe.get("responsive", False):
+            now_m = time.monotonic()
+            if now_m - _camera_restart_at >= 300.0:
+                _camera_restart_at = now_m
+                _add_fault("camera", "Camera stream unresponsive — restarting rover-camera.service", "auto-restart")
+                subprocess.Popen(["sudo", "/usr/bin/systemctl", "restart", "rover-camera.service"])
+            _camera_alert = {
+                "metric": "camera_responsive", "value": 0,
+                "severity": "warn", "ts": int(time.time()),
+                "msg": "Camera stream unresponsive",
+            }
+        else:
+            _camera_alert = None
+
+        return JSONResponse({
+            "services": services,
+            "thermal": thermal_data,
+            "ollama": {**ollama_probe, "unresponsive_count": _ollama_unresponsive_count},
+            "camera_stream": camera_probe,
+            "memory_rss_mb": disk_mem.get("memory_rss_mb"),
+            "disk_root_pct": disk_mem.get("disk_root_pct"),
+            "disk_root_free_gb": disk_mem.get("disk_root_free_gb"),
+            "disk_opt_pct": disk_mem.get("disk_opt_pct"),
+            "boot_partition_ro": disk_mem.get("boot_partition_ro"),
+            "ws_client_count": hub.client_count,
+        })
 
     @app.get("/metrics")
     async def prometheus_metrics() -> Response:
@@ -1051,6 +1282,7 @@ def create_app(
             megapi, safety_monitor, _START, _public_ultrasonic_cm, body_tracker, cam_idle
         )
         payload.pop("type", None)
+        payload["ws_client_count"] = hub.client_count
         return JSONResponse(payload)
 
     @app.post("/api/tracking")

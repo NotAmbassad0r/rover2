@@ -43,6 +43,8 @@ class MegaPiBridge:
         self._motors_ready: bool = False
         self._poll_thread: threading.Thread | None = None
         self._poll_interval_s = 0.5
+        self._ultrasonic_state: str = "timeout"
+        self._ultrasonic_fault_count: int = 0
 
     @property
     def connected(self) -> bool:
@@ -65,6 +67,14 @@ class MegaPiBridge:
     @property
     def motors_ready(self) -> bool:
         return self._motors_ready
+
+    @property
+    def ultrasonic_state(self) -> str:
+        return self._ultrasonic_state
+
+    @property
+    def ultrasonic_fault_count(self) -> int:
+        return self._ultrasonic_fault_count
 
     def set_poll_interval(self, interval_s: float) -> None:
         self._poll_interval_s = max(0.2, float(interval_s))
@@ -104,8 +114,19 @@ class MegaPiBridge:
             raise RuntimeError("MegaPi serial not connected")
         self._ultrasonic_event.clear()
         self.send({"cmd": "sensor_req", "sensor": "ultrasonic"})
-        self._ultrasonic_event.wait(timeout=wait_s)
+        got_response = self._ultrasonic_event.wait(timeout=wait_s)
+        if not got_response:
+            self._ultrasonic_fault_count += 1
+            self._ultrasonic_state = "timeout"
         return self._last_ultrasonic_cm
+
+    def trigger_reconnect(self) -> None:
+        """Force serial reconnect by closing — _run loop reconnects automatically."""
+        logger.warning(
+            "MegaPi: triggering serial reconnect (ultrasonic fault count=%d)",
+            self._ultrasonic_fault_count,
+        )
+        self._close()
 
     def _poll_ultrasonic_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -207,6 +228,9 @@ class MegaPiBridge:
                 except (TypeError, ValueError):
                     self._last_ultrasonic_cm = -1
             self._last_ultrasonic_at = time.monotonic()
+            self._ultrasonic_fault_count = 0
+            cm = self._last_ultrasonic_cm
+            self._ultrasonic_state = "ok" if 0 <= cm < 400 else "no_echo"
             self._ultrasonic_event.set()
         if msg.get("evt") in ("ready", "detected"):
             motors = int(msg.get("motors", 0))

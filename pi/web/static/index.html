@@ -808,8 +808,19 @@
       <p class="muted" id="services-ts">Not loaded</p>
       <p class="diag-section-title">KEY SERVICES</p>
       <div id="fd-svc-health"></div>
+      <p class="diag-section-title">OLLAMA · CAMERA · RESOURCES</p>
+      <div id="fd-svc-extra"></div>
       <p class="diag-section-title">THERMAL</p>
       <div id="fd-thermal"></div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title">FAULT HISTORY</p>
+      <div class="tools-actions">
+        <button type="button" id="fault-clear-btn">CLEAR</button>
+      </div>
+      <p class="muted" id="fault-ts">Not loaded</p>
+      <div id="fd-faults" style="max-height:220px;overflow-y:auto;"></div>
     </div>
   </div>
 
@@ -1081,7 +1092,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1463,6 +1474,40 @@
       });
       el.innerHTML = rows.join('') || '<span class="muted">—</span>';
 
+      // Extra services: ollama, camera stream, memory, disk, boot, ws clients
+      const xel = document.getElementById('fd-svc-extra');
+      const xRows = [];
+      const oll = d.ollama || {};
+      if (oll.responsive != null) {
+        const cls = oll.responsive ? 'ok' : 'warn';
+        const cnt = oll.unresponsive_count > 0 ? ` (x${oll.unresponsive_count})` : '';
+        xRows.push(metricRow('ollama probe', oll.responsive ? 'responsive' : `unresponsive${cnt}`, null, cls));
+      }
+      const cam = d.camera_stream || {};
+      if (cam.responsive != null) {
+        xRows.push(metricRow('camera stream', cam.responsive ? 'responsive' : 'unresponsive', null, cam.responsive ? 'ok' : 'warn'));
+      }
+      if (d.memory_rss_mb != null) {
+        const mb = d.memory_rss_mb;
+        const cls = mb > 200 ? 'error' : mb > 150 ? 'warn' : mb > 130 ? 'info' : 'ok';
+        xRows.push(metricRow('rover2-api RSS', `${mb} MB`, null, cls));
+      }
+      if (d.disk_root_pct != null) {
+        const cls = d.disk_root_pct > 90 ? 'error' : d.disk_root_pct > 80 ? 'warn' : 'ok';
+        xRows.push(metricRow('disk /  used', `${d.disk_root_pct}%`, null, cls));
+      }
+      if (d.disk_opt_pct != null) {
+        const cls = d.disk_opt_pct > 90 ? 'error' : d.disk_opt_pct > 80 ? 'warn' : 'ok';
+        xRows.push(metricRow('disk /opt', `${d.disk_opt_pct}%`, null, cls));
+      }
+      if (d.boot_partition_ro != null) {
+        xRows.push(metricRow('/boot/firmware', d.boot_partition_ro ? 'ro ✓' : 'RW ⚠', null, d.boot_partition_ro ? 'ok' : 'warn'));
+      }
+      if (d.ws_client_count != null) {
+        xRows.push(metricRow('WS clients', d.ws_client_count, null, 'info'));
+      }
+      if (xel) xel.innerHTML = xRows.join('') || '<span class="muted">—</span>';
+
       const th = d.thermal || {};
       const tel = document.getElementById('fd-thermal');
       const tRows = [];
@@ -1502,6 +1547,47 @@
     }
 
     document.getElementById('services-refresh-btn').onclick = () => loadServicesHealth().catch(e => toast(e.message));
+
+    // ── Fault history panel ───────────────────────────────────────────────────
+    function _renderFaults(faults) {
+      const el = document.getElementById('fd-faults');
+      if (!faults || !faults.length) {
+        el.innerHTML = '<span class="muted">No faults recorded</span>';
+        return;
+      }
+      const rows = faults.slice().reverse().map(f => {
+        const ts = new Date(f.ts * 1000);
+        const hm = ts.getHours().toString().padStart(2,'0') + ':' + ts.getMinutes().toString().padStart(2,'0') + ':' + ts.getSeconds().toString().padStart(2,'0');
+        const act = f.action ? ` <span class="muted">→ ${f.action}</span>` : '';
+        return `<div class="metric-row warn" style="flex-direction:column;align-items:flex-start;padding:0.3rem 0.5rem;">
+          <div style="font-size:0.7rem;color:var(--muted);">${hm} · <strong>${f.component}</strong>${act}</div>
+          <div style="font-size:0.78rem;">${f.msg}</div>
+        </div>`;
+      });
+      el.innerHTML = rows.join('');
+    }
+
+    async function loadFaultHistory() {
+      try {
+        const r = await fetch(apiBase() + '/api/faults');
+        const d = await r.json();
+        _renderFaults(d.faults || []);
+        const now = new Date();
+        document.getElementById('fault-ts').textContent =
+          now.getHours().toString().padStart(2,'0') + ':' +
+          now.getMinutes().toString().padStart(2,'0') + ':' +
+          now.getSeconds().toString().padStart(2,'0') +
+          ' — ' + (d.count || 0) + ' event(s)';
+      } catch (e) { toast('Faults error: ' + e.message); }
+    }
+
+    document.getElementById('fault-clear-btn').onclick = async () => {
+      try {
+        await fetch(apiBase() + '/api/faults', { method: 'DELETE' });
+        await loadFaultHistory();
+        toast('Fault history cleared');
+      } catch (e) { toast('Clear error: ' + e.message); }
+    };
     // ─────────────────────────────────────────────────────────────────────────
 
     async function loadScripts() {

@@ -168,6 +168,12 @@ class BodyTracker:
             return False
         return True
 
+    def is_past_warmup(self) -> bool:
+        """True once the Hailo warmup window has elapsed since start()."""
+        if self._start_time == 0.0:
+            return False
+        return time.monotonic() - self._start_time > self._hailo_warmup_s
+
     def get_state(self) -> dict:
         state: dict = {
             "available": self.available,

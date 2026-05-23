@@ -35,6 +35,8 @@ def build_telemetry(
             megapi.last_ultrasonic_cm, age_s=megapi.last_ultrasonic_age_s
         ),
         "ultrasonic_age_s": megapi.last_ultrasonic_age_s,
+        "ultrasonic_state": megapi.ultrasonic_state,
+        "ultrasonic_fault_count": megapi.ultrasonic_fault_count,
         "uptime_s": int(time.monotonic() - start_monotonic),
     }
     if safety_monitor is not None:
@@ -104,6 +106,10 @@ class ControlHub:
         self._telemetry_extra: dict[str, Any] = {}
         ws_cfg = self._config.get("websocket", {})
         self._heartbeat_timeout_s = float(ws_cfg.get("heartbeat_timeout_s", 4.0))
+
+    @property
+    def client_count(self) -> int:
+        return len(self._clients)
 
     def touch_activity(self) -> None:
         self._last_client_activity = time.monotonic()
