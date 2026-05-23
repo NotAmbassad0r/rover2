@@ -94,6 +94,42 @@
       cursor: pointer;
     }
     .row button.danger { border-color: var(--danger); color: var(--danger); }
+    .mode-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .mode-btn {
+      flex: 1;
+      font-family: inherit;
+      font-size: 0.8rem;
+      padding: 0.6rem 0.5rem;
+      border: 2px solid var(--border);
+      border-radius: 6px;
+      background: #21262d;
+      color: var(--muted);
+      cursor: pointer;
+      letter-spacing: 0.08em;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .mode-btn.active-follow {
+      background: var(--accent);
+      color: #000;
+      border-color: var(--accent);
+    }
+    .mode-btn.active-detect {
+      background: var(--warn);
+      color: #000;
+      border-color: var(--warn);
+    }
+    .mode-btn.active-ble {
+      background: #1f6feb;
+      color: #fff;
+      border-color: #1f6feb;
+    }
+    .mode-btn.inactive {
+      opacity: 0.5;
+    }
     .row button.follow-on {
       background: var(--accent);
       color: #000;
@@ -523,6 +559,9 @@
     <div class="status-row" id="row-tracking">
       <span>FOLLOW</span><span id="st-tracking">—</span>
     </div>
+    <div class="status-row" id="row-source">
+      <span>SOURCE</span><span id="st-source">—</span>
+    </div>
     <div class="status-row" id="row-person">
       <span>PERSON</span><span id="st-person">—</span>
     </div>
@@ -576,9 +615,12 @@
       <div class="empty"></div>
     </div>
 
+    <div class="mode-row">
+      <button type="button" id="btn-detect" class="mode-btn">DETECT</button>
+      <button type="button" id="btn-follow" class="mode-btn">FOLLOW</button>
+      <button type="button" id="btn-ble" class="mode-btn">BLE</button>
+    </div>
     <div class="row">
-      <button type="button" id="btn-detect">DETECT OFF</button>
-      <button type="button" id="btn-follow">FOLLOW OFF</button>
       <button type="button" id="btn-grip-open">GRIP OPEN</button>
       <button type="button" id="btn-grip-close">GRIP CLOSE</button>
       <button type="button" class="danger" id="btn-estop">E-STOP</button>
@@ -871,6 +913,7 @@
     let activeDir = null;
     let followOn = false;
     let detectOn = false;
+    let bleFollowOn = true;
     const RECONNECT_MS = 1500;
 
     // Event log
@@ -1465,6 +1508,25 @@
         trackEl.textContent = 'OFF';
         trackRow.className = 'status-row';
       }
+      const sourceEl = document.getElementById('st-source');
+      const sourceRow = document.getElementById('row-source');
+      if (!d.tracking_enabled) {
+        sourceEl.textContent = '—';
+        sourceEl.style.color = '';
+        sourceRow.className = 'status-row';
+      } else if (d.ble_active) {
+        sourceEl.textContent = `BLE (${d.ble_rssi} dBm)`;
+        sourceEl.style.color = 'var(--warn, orange)';
+        sourceRow.className = 'status-row warn';
+      } else if (d.person_detected) {
+        sourceEl.textContent = 'CAMERA';
+        sourceEl.style.color = 'var(--accent)';
+        sourceRow.className = 'status-row';
+      } else {
+        sourceEl.textContent = 'SEARCHING…';
+        sourceEl.style.color = 'var(--muted, grey)';
+        sourceRow.className = 'status-row';
+      }
       const personRow = document.getElementById('row-person');
       const personEl = document.getElementById('st-person');
       const trackingActive = d.tracking_enabled || d.tracking_detect_only;
@@ -1482,9 +1544,11 @@
         personEl.style.color = trackingActive ? 'var(--danger)' : '';
         personEl.style.fontWeight = trackingActive ? '700' : '';
       }
-      if (d.tracking_enabled !== followOn || d.tracking_detect_only !== detectOn) {
+      if (d.tracking_enabled !== followOn || d.tracking_detect_only !== detectOn
+          || (d.ble_follow_enabled !== undefined && d.ble_follow_enabled !== bleFollowOn)) {
         followOn = !!d.tracking_enabled;
         detectOn = !!d.tracking_detect_only;
+        if (d.ble_follow_enabled !== undefined) bleFollowOn = !!d.ble_follow_enabled;
         updateTrackingButtons();
       }
 
@@ -1507,16 +1571,20 @@
 
     function updateTrackingButtons() {
       const btnFollow = document.getElementById('btn-follow');
-      btnFollow.textContent = followOn ? 'FOLLOW ON' : 'FOLLOW OFF';
-      btnFollow.classList.toggle('follow-on', followOn);
-      btnFollow.classList.remove('detect-on');
+      btnFollow.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
+      if (followOn) btnFollow.classList.add('active-follow');
+      else btnFollow.classList.add('inactive');
 
       const btnDetect = document.getElementById('btn-detect');
-      btnDetect.textContent = detectOn ? 'DETECT ON' : 'DETECT OFF';
-      btnDetect.classList.toggle('detect-on', detectOn);
-      btnDetect.classList.remove('follow-on');
+      btnDetect.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
+      if (detectOn) btnDetect.classList.add('active-detect');
+      else btnDetect.classList.add('inactive');
 
-      // D-pad disabled only during full follow, not during detect-only
+      const btnBle = document.getElementById('btn-ble');
+      btnBle.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
+      if (bleFollowOn) btnBle.classList.add('active-ble');
+      else btnBle.classList.add('inactive');
+
       document.getElementById('dpad').classList.toggle('disabled', followOn);
     }
 
@@ -1526,6 +1594,18 @@
 
     function setDetectOnly(active) {
       wsSend({ type: 'tracking', enabled: false, detect_only: active });
+    }
+
+    function setBleFollow(enabled) {
+      fetch('/api/tracking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ble_follow_enabled: enabled }),
+      }).then(r => r.json()).then(d => {
+        bleFollowOn = !!d.ble_follow_enabled;
+        updateTrackingButtons();
+        toast(enabled ? 'BLE fallback ON' : 'BLE fallback OFF');
+      }).catch(() => toast('BLE toggle failed'));
     }
 
     function wsSend(payload) {
@@ -1723,6 +1803,10 @@
         setTracking(next);
         toast(next ? 'FOLLOW ON' : 'FOLLOW OFF');
       } catch (e) { toast(e.message); }
+    };
+
+    document.getElementById('btn-ble').onclick = () => {
+      setBleFollow(!bleFollowOn);
     };
 
     updateTrackingButtons();

@@ -1,0 +1,87 @@
+# CLAUDE.md — ROVER2
+
+**Start every session: `Read HANDOFF.md in full before making changes.`**
+
+## Project priorities (non-negotiable order)
+
+1. **Energy / resource efficiency** — idle = zero CPU. No polling, no spin loops when inactive.
+2. **Performance** — speed and responsiveness of what is already built.
+3. **Features** — only after 1 and 2 are satisfied.
+
+## Hard rules
+
+- Hailo does all inference. Never run vision/ML on CPU.
+- CPU governor: `schedutil` always.
+- rover2-api memory target: <150 MB RSS.
+- `stress-ng` / virtual USB dongle: only on battery, always off on mains.
+
+## Layout
+
+| Path | Purpose |
+|------|---------|
+| `pi/` | Service code (deployed to `/opt/rover2/`) |
+| `pi/config.yaml` | All runtime tuning — edit here, deploy via `deploy_pi.sh` |
+| `pi/web/static/index.html` | Single-page control UI |
+| `systemd/` | Service unit files |
+| `scripts/` | Deploy / setup helpers |
+| `docs/` | Test plans, results, roadmap |
+
+## Pi access
+
+```bash
+ssh ambassad0r@192.168.70.11      # eth0 (cable) — always preferred
+ssh ambassad0r@192.168.250.254    # WiFi — only from devices on local WiFi
+ssh ambassad0r@100.67.13.10       # Tailscale
+```
+
+Deploy: `./deploy_pi.sh`  
+Logs: `ssh ambassad0r@192.168.70.11 journalctl -u rover2-api -f`
+
+## Current branch: `dev`
+
+Push to GitHub with `git push origin dev`. PR to `main` only for stable milestones.
+
+## Key config values (pi/config.yaml)
+
+```yaml
+drive:
+  max_speed: 230
+  direction_map:
+    forward: [1, -1]
+    back: [-1, 1]
+    left: [0, -1]      # arc turn — one wheel rolls
+    right: [1, 0]
+body_tracker:
+  turn_speed: 210
+  forward_speed: 170
+  frame_interval_s: 0.25   # 4 fps — power cap
+  hailo_warmup_s: 30.0     # lazy init delay
+websocket:
+  heartbeat_timeout_s: 10.0
+```
+
+## Power situation (as of 2026-05-22)
+
+Viking PN-964PD bank + 3A USB-C cable = 15W ceiling. Pi 5 + Hailo needs 18-20W.
+**Real fix**: 5A/100W e-marked cable ordered. Until it arrives, Hailo loads lazily (30s warmup).
+Mitigations in place: lazy init, 4fps, CPU cap 1800MHz, `arm_freq=1800` in `/boot/firmware/config.txt`.
+
+## Boot partition
+
+`/boot/firmware` is mounted **read-only** in `/etc/fstab` (`ro,defaults`) to prevent cmdline.txt corruption on hard power cut. Before firmware updates: `sudo mount -o remount,rw /boot/firmware`.
+
+## WebSocket API (port 8082)
+
+| Message | Effect |
+|---------|--------|
+| `{type: "drive", direction: "forward", speed: 1.0}` | Drive |
+| `{type: "stop"}` | Stop motors |
+| `{type: "tracking", enabled: true}` | Enable person follow |
+| `{type: "tracking", detect_only: true}` | Detect without driving |
+| `{type: "ping"}` | Keepalive → pong |
+
+REST: `POST /api/tracking` — body `{enabled, detect_only, ble_follow_enabled}`
+
+## BLE fallback
+
+Galaxy Z Flip 6 (UUID `0000fcf1-…`) auto-activates as beacon when camera loses person for 2+ seconds. Toggle via BLE button in UI or `POST /api/tracking {"ble_follow_enabled": false}`.

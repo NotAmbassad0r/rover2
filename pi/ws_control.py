@@ -50,6 +50,7 @@ def build_telemetry(
         payload["tracking_hailo_ready"] = state["hailo_ready"]
         payload["person_detected"] = state["person_detected"]
         payload["ble_active"] = state.get("ble_active", False)
+        payload["ble_follow_enabled"] = state.get("ble_follow_enabled", True)
         ble = state.get("ble")
         if ble:
             payload["ble_available"] = ble.get("available", False)

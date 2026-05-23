@@ -984,6 +984,8 @@ def create_app(
         detect_only = bool(body.get("detect_only", False))
         if (enabled or detect_only) and not body_tracker.available:
             raise HTTPException(status_code=503, detail="Hailo not available")
+        if "ble_follow_enabled" in body:
+            body_tracker.set_ble_follow_enabled(bool(body["ble_follow_enabled"]))
         if detect_only:
             body_tracker.set_detect_only(True)
         elif enabled:
@@ -999,6 +1001,7 @@ def create_app(
             "status": "ok",
             "enabled": body_tracker.enabled,
             "detect_only": body_tracker.detect_only,
+            "ble_follow_enabled": body_tracker._ble_follow_enabled,
         })
 
     @app.post("/api/drive")

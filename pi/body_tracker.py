@@ -65,6 +65,8 @@ class BodyTracker:
         self._turn_speed = int(cfg.get("turn_speed", 100))
         self._forward_speed = int(cfg.get("forward_speed", 120))
         self._frame_interval_s = float(cfg.get("frame_interval_s", 0.10))
+        self._hailo_warmup_s = float(cfg.get("hailo_warmup_s", 30.0))
+        self._start_time = 0.0  # set in start()
 
         self._left_bound = 0.5 - self._centre_zone / 2
         self._right_bound = 0.5 + self._centre_zone / 2
@@ -93,6 +95,7 @@ class BodyTracker:
 
         # BLE fallback state
         self._ble: BLETracker | None = ble_tracker
+        self._ble_follow_enabled: bool = bool(cfg.get("ble_follow_enabled", True))
         self._ble_active = False
         self._camera_lost_at: float = 0.0
         self._ble_search_dir: str = "right"
@@ -177,6 +180,7 @@ class BodyTracker:
             "last_error": self._last_error,
             "camera_url": self._camera_url,
             "ble_active": self._ble_active,
+            "ble_follow_enabled": self._ble_follow_enabled,
         }
         if self._ble is not None:
             state["ble"] = self._ble.get_state()
@@ -190,9 +194,10 @@ class BodyTracker:
             logger.warning("BodyTracker: %s", self._last_error)
             return
         self._stop_event.clear()
+        self._start_time = time.monotonic()
         self._thread = threading.Thread(target=self._run, name="body-tracker", daemon=True)
         self._thread.start()
-        logger.info("BodyTracker started (hef=%s)", self._hef_path)
+        logger.info("BodyTracker started (hef=%s, warmup=%.0fs)", self._hef_path, self._hailo_warmup_s)
 
     def stop(self) -> None:
         self.set_enabled(False)
@@ -218,6 +223,11 @@ class BodyTracker:
             self._reset_tracking_state()
             self._drive(0, 0, force=True)
 
+    def set_ble_follow_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._ble_follow_enabled = enabled
+        logger.info("BodyTracker: BLE fallback %s", "ON" if enabled else "OFF")
+
     def set_detect_only(self, active: bool) -> None:
         with self._lock:
             self._detect_only = active
@@ -226,6 +236,20 @@ class BodyTracker:
         logger.info("BodyTracker: detect-only %s", "ON" if active else "OFF")
         if not active:
             self._reset_tracking_state()
+
+    def _log_pmic(self, label: str) -> None:
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["vcgencmd", "pmic_read_adc"], capture_output=True, text=True, timeout=2
+            ).stdout
+            interesting = {
+                "EXT5V_V", "VDD_CORE_A", "VDD_CORE_V", "1V1_SYS_A", "0V8_SW_A", "3V7_WL_SW_A"
+            }
+            lines = [l.strip() for l in out.splitlines() if any(k in l for k in interesting)]
+            logger.info("PMIC [%s]: %s", label, " | ".join(lines))
+        except Exception as exc:
+            logger.warning("PMIC read failed (%s): %s", label, exc)
 
     def _reset_tracking_state(self) -> None:
         self._person_detected = False
@@ -371,14 +395,25 @@ class BodyTracker:
                 continue
 
             # Lazy Hailo init — load model only when first needed, not at service start.
-            # This avoids a power spike during boot when the CPU is already busy.
+            # Enforce a warmup window so the CPU idles before the model-load power spike.
             if self._hailo is None:
+                elapsed = time.monotonic() - self._start_time
+                if elapsed < self._hailo_warmup_s:
+                    remaining = self._hailo_warmup_s - elapsed
+                    logger.info(
+                        "BodyTracker: warmup — Hailo load in %.0fs (CPU settling)", remaining
+                    )
+                    self._stop_event.wait(min(remaining, 2.0))
+                    continue
+
+                self._log_pmic("pre-hailo-load")
                 backoff = 2.0
                 while not self._stop_event.is_set():
                     try:
                         self._hailo = _HailoInference(self._hef_path, self._hailo_group_id)
                         self._hailo_ready = True
                         self._last_error = None
+                        self._log_pmic("post-hailo-load")
                         logger.info("BodyTracker: Hailo ready")
                         break
                     except Exception as exc:
@@ -500,6 +535,7 @@ class BodyTracker:
         if not self._person_tracked or best is None:
             if (
                 self._ble is not None
+                and self._ble_follow_enabled
                 and self._camera_lost_at > 0.0
                 and time.monotonic() - self._camera_lost_at >= _BLE_HANDOFF_DELAY_S
             ):
