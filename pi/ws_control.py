@@ -56,6 +56,7 @@ def build_telemetry(
         payload["person_detected"] = state["person_detected"]
         payload["ble_active"] = state.get("ble_active", False)
         payload["ble_follow_enabled"] = state.get("ble_follow_enabled", True)
+        payload["follow_mode"] = state.get("follow_mode", "fused")
         ble = state.get("ble")
         if ble:
             payload["ble_available"] = ble.get("available", False)
@@ -68,6 +69,7 @@ def build_telemetry(
         payload["tracking_enabled"] = False
         payload["tracking_detect_only"] = False
         payload["ble_active"] = False
+        payload["follow_mode"] = "fused"
     if guard_controller is not None:
         payload["guard_state"]      = guard_controller.get_state()
         payload["guard_detections"] = guard_controller.get_stats().get("detections_this_session", 0)

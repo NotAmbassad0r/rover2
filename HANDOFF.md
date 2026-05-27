@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-27 (TTS voice → en_GB-cori-high, _preprocess_for_tts, length_scale 1.05, sox optional)
+Last updated: 2026-05-27 (TTS cori-high, follow mode selector CAMERA/FUSED/BLE, guard mode, A32 fixes)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -372,7 +372,11 @@ ssh ambassad0r@192.168.250.254 "curl -sk https://localhost:8082/api/status | pyt
 | DRIVE | D-pad; disabled while FOLLOW on |
 | GRIP / E-STOP | Gripper + emergency stop |
 
-**Follow UI note:** BLE fallback is **always on by default**. If you want camera-only follow (no BLE rotation when camera loses person), press the BLE button to disable it (goes dim).
+**Follow mode selector:** `DETECT | CAMERA | FUSED | BLE` — four buttons replace the old FOLLOW+BLE pair:
+- **CAMERA** (green) — camera-only follow, no BLE fallback
+- **FUSED** (teal) — camera primary + BLE fallback when camera loses person (default)
+- **BLE** (blue) — BLE-only follow, Hailo not used, zero camera inference power
+- Clicking the active mode button turns follow OFF.
 
 ### TOOLS / DIAG / CHAT / METRICS tabs
 
@@ -466,7 +470,7 @@ ble_tracker:
 15. **Face PWA on A32** — server now runs HTTPS, so getUserMedia works without `chrome://flags`. Accept the self-signed cert warning once on first visit to `https://192.168.250.254:8082/`.
 16. **HTTPS self-signed cert** — Browsers warn on first visit. Accept once (Advanced → Proceed). Curl on Pi needs `-k` flag. Cert files: `/opt/rover2/rover.key` + `rover.crt` (owned root:ambassad0r, mode 640). Not in repo — regenerate with `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout rover.key -out rover.crt -days 3650 -nodes -subj "/CN=rover"` if lost.
 17. **Left/right direction was inverted** — Fixed 2026-05-26 by swapping direction_map in config.yaml: `left: [1,0]`, `right: [0,-1]`. Root cause: PORT1B is wired to the physical right motor, so firmware's "left motor" is actually the right wheel. D-pad, follow, BLE turns, and obstacle avoidance all fixed by this single config change.
-11. **MegaPi on AA batteries** — Brand new AAs may not provide enough current for arc turns at speed 210. If motors stall, use MegaPi mains or reduce turn_speed.
+18. **MegaPi on AA batteries** — Brand new AAs may not provide enough current for arc turns at speed 210. If motors stall, use MegaPi mains or reduce turn_speed.
 
 ---
 

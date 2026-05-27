@@ -127,6 +127,11 @@
       color: #fff;
       border-color: #1f6feb;
     }
+    .mode-btn.active-fused {
+      background: #1a7f7f;
+      color: #fff;
+      border-color: #1a7f7f;
+    }
     .mode-btn.inactive {
       opacity: 0.5;
     }
@@ -627,9 +632,10 @@
     </div>
 
     <div class="mode-row">
-      <button type="button" id="btn-detect" class="mode-btn">DETECT</button>
-      <button type="button" id="btn-follow" class="mode-btn">FOLLOW</button>
-      <button type="button" id="btn-ble" class="mode-btn">BLE</button>
+      <button type="button" id="btn-detect"       class="mode-btn">DETECT</button>
+      <button type="button" id="btn-mode-camera"  class="mode-btn">CAMERA</button>
+      <button type="button" id="btn-mode-fused"   class="mode-btn">FUSED</button>
+      <button type="button" id="btn-mode-ble"     class="mode-btn">BLE</button>
     </div>
     <div class="row">
       <button type="button" id="btn-grip-open">GRIP OPEN</button>
@@ -874,9 +880,10 @@
     <div class="panel" style="padding:0.75rem 1.25rem;">
       <p class="panel-title">TRACKING MODE</p>
       <div class="mode-row">
-        <button type="button" id="btn-detect-chat" class="mode-btn">DETECT</button>
-        <button type="button" id="btn-follow-chat" class="mode-btn">FOLLOW</button>
-        <button type="button" id="btn-ble-chat" class="mode-btn">BLE</button>
+        <button type="button" id="btn-detect-chat"       class="mode-btn">DETECT</button>
+        <button type="button" id="btn-mode-camera-chat"  class="mode-btn">CAMERA</button>
+        <button type="button" id="btn-mode-fused-chat"   class="mode-btn">FUSED</button>
+        <button type="button" id="btn-mode-ble-chat"     class="mode-btn">BLE</button>
       </div>
     </div>
 
@@ -969,8 +976,9 @@
     let reconnectTimer = null;
     let activeDir = null;
     let followOn = false;
+    let followMode = 'fused';   // 'camera' | 'fused' | 'ble'
     let detectOn = false;
-    let bleFollowOn = false;
+    let bleFollowOn = false;    // kept for legacy telemetry compat
     let cameraSleeping = false;
     const RECONNECT_MS = 1500;
 
@@ -1246,7 +1254,7 @@
       _diagCharts.ultra    = _mkChart('ch-ultra',    [_ds('cm', C.yellow, true)],           { min:0 });
       _diagCharts.ble      = _mkChart('ch-ble',      [_ds('dBm', C.purple, true)]);
       _diagCharts.follow   = _mkChart('ch-follow',   [_dsStepped('state', C.green)],
-        { min:0, max:3, ticks: { ...{color:'#8b949e',font:{size:9},maxTicksLimit:4}, callback: v=>['off','detect','camera','BLE'][v]||'' } });
+        { min:0, max:4, ticks: { ...{color:'#8b949e',font:{size:9},maxTicksLimit:5}, callback: v=>['off','detect','camera','fused','BLE'][v]||'' } });
       _diagCharts.events   = _mkChart('ch-events',   [_dsStepped('person', C.green), _dsStepped('safety', C.red)], { min:0, max:1 }, true);
     }
 
@@ -1467,7 +1475,10 @@
       rows.push(metricRow('BLE fallback', d.ble_follow_enabled ? 'ON' : 'OFF', null, d.ble_follow_enabled ? 'ok' : 'info'));
       if (d.tracking_available) {
         rows.push(metricRow('person', d.person_detected ? 'DETECTED' : 'not seen', null, d.person_detected ? 'ok' : 'info'));
-        const mode = d.tracking_enabled ? (d.ble_active ? 'FOLLOW · BLE' : 'FOLLOW · camera') : (d.tracking_detect_only ? 'DETECT' : 'off');
+        const fmLabel = d.follow_mode ? d.follow_mode.toUpperCase() : 'FUSED';
+        const mode = d.tracking_enabled
+          ? (d.ble_active ? `${fmLabel} · BLE active` : `${fmLabel}`)
+          : (d.tracking_detect_only ? 'DETECT' : 'off');
         rows.push(metricRow('follow mode', mode, null, 'info'));
       }
       el.innerHTML = rows.join('') || '<span class="muted">—</span>';
@@ -1770,8 +1781,10 @@
         trackEl.textContent = 'N/A';
         trackRow.className = 'status-row';
       } else if (d.tracking_enabled) {
-        trackEl.textContent = d.tracking_hailo_ready ? 'FOLLOW' : 'STARTING';
-        trackRow.className = 'status-row' + (d.tracking_hailo_ready ? '' : ' warn');
+        const mLabel = { camera: 'CAMERA', fused: 'FUSED', ble: 'BLE' }[d.follow_mode] || 'FOLLOW';
+        const bleOnly = d.follow_mode === 'ble';
+        trackEl.textContent = (bleOnly || d.tracking_hailo_ready) ? mLabel : 'STARTING';
+        trackRow.className = 'status-row' + ((bleOnly || d.tracking_hailo_ready) ? '' : ' warn');
       } else if (d.tracking_detect_only) {
         trackEl.textContent = d.tracking_hailo_ready ? 'DETECT' : 'STARTING';
         trackRow.className = 'status-row warn';
@@ -1816,10 +1829,12 @@
         personEl.style.fontWeight = trackingActive ? '700' : '';
       }
       if (d.tracking_enabled !== followOn || d.tracking_detect_only !== detectOn
-          || (d.ble_follow_enabled !== undefined && d.ble_follow_enabled !== bleFollowOn)) {
+          || (d.ble_follow_enabled !== undefined && d.ble_follow_enabled !== bleFollowOn)
+          || (d.follow_mode !== undefined && d.follow_mode !== followMode)) {
         followOn = !!d.tracking_enabled;
         detectOn = !!d.tracking_detect_only;
         if (d.ble_follow_enabled !== undefined) bleFollowOn = !!d.ble_follow_enabled;
+        if (d.follow_mode !== undefined) followMode = d.follow_mode;
         updateTrackingButtons();
       }
       _updateDiagRobot(d);
@@ -1877,18 +1892,24 @@
     }
 
     function updateTrackingButtons() {
-      [
-        ['btn-follow',      'active-follow',  followOn],
-        ['btn-detect',      'active-detect',  detectOn],
-        ['btn-ble',         'active-ble',     bleFollowOn],
-        ['btn-follow-chat', 'active-follow',  followOn],
-        ['btn-detect-chat', 'active-detect',  detectOn],
-        ['btn-ble-chat',    'active-ble',     bleFollowOn],
-      ].forEach(([id, activeClass, on]) => {
+      // Follow mode buttons: only the active mode is highlighted
+      const modeMap = { camera: 'active-follow', fused: 'active-fused', ble: 'active-ble' };
+      ['camera', 'fused', 'ble'].forEach(m => {
+        const on = followOn && followMode === m;
+        const cls = modeMap[m];
+        ['btn-mode-' + m, 'btn-mode-' + m + '-chat'].forEach(id => {
+          const btn = document.getElementById(id);
+          if (!btn) return;
+          btn.classList.remove('active-follow', 'active-fused', 'active-ble', 'active-detect', 'inactive');
+          btn.classList.add(on ? cls : 'inactive');
+        });
+      });
+      // Detect button
+      ['btn-detect', 'btn-detect-chat'].forEach(id => {
         const btn = document.getElementById(id);
         if (!btn) return;
-        btn.classList.remove('active-follow', 'active-detect', 'active-ble', 'inactive');
-        btn.classList.add(on ? activeClass : 'inactive');
+        btn.classList.remove('active-follow', 'active-fused', 'active-ble', 'active-detect', 'inactive');
+        btn.classList.add(detectOn ? 'active-detect' : 'inactive');
       });
       document.getElementById('dpad').classList.toggle('disabled', followOn);
     }
@@ -1911,6 +1932,22 @@
         updateTrackingButtons();
         toast(enabled ? 'BLE fallback ON' : 'BLE fallback OFF');
       }).catch(() => toast('BLE toggle failed'));
+    }
+
+    function setFollowMode(mode) {
+      // POST /api/tracking {follow_mode} — starts follow in requested mode
+      fetch('/api/tracking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ follow_mode: mode }),
+      }).then(r => r.json()).then(d => {
+        followOn = !!d.enabled;
+        followMode = d.follow_mode || mode;
+        bleFollowOn = !!d.ble_follow_enabled;
+        detectOn = false;
+        updateTrackingButtons();
+        toast('FOLLOW: ' + mode.toUpperCase());
+      }).catch(() => toast('Follow mode failed'));
     }
 
     function wsSend(payload) {
@@ -2100,24 +2137,26 @@
       } catch (e) { toast(e.message); }
     };
 
-    document.getElementById('btn-follow').onclick = () => {
-      if (!wsConnected) { toast('Not connected'); return; }
-      if (detectOn) setDetectOnly(false);
-      const next = !followOn;
-      try {
-        setTracking(next);
-        toast(next ? 'FOLLOW ON' : 'FOLLOW OFF');
-      } catch (e) { toast(e.message); }
-    };
+    // Follow mode buttons: CAMERA | FUSED | BLE
+    // Clicking active mode toggles follow off; clicking inactive mode activates that mode.
+    ['camera', 'fused', 'ble'].forEach(mode => {
+      const handler = () => {
+        if (!wsConnected) { toast('Not connected'); return; }
+        if (detectOn) setDetectOnly(false);
+        if (followOn && followMode === mode) {
+          try { setTracking(false); toast('FOLLOW OFF'); } catch (e) { toast(e.message); }
+        } else {
+          setFollowMode(mode);
+        }
+      };
+      const btn = document.getElementById('btn-mode-' + mode);
+      if (btn) btn.onclick = handler;
+      const chatBtn = document.getElementById('btn-mode-' + mode + '-chat');
+      if (chatBtn) chatBtn.onclick = handler;
+    });
 
-    document.getElementById('btn-ble').onclick = () => {
-      setBleFollow(!bleFollowOn);
-    };
-
-    // Chat tab mode buttons delegate to control tab handlers
+    // Chat tab detect delegates to control tab
     document.getElementById('btn-detect-chat').onclick = () => document.getElementById('btn-detect').click();
-    document.getElementById('btn-follow-chat').onclick = () => document.getElementById('btn-follow').click();
-    document.getElementById('btn-ble-chat').onclick    = () => document.getElementById('btn-ble').click();
 
     updateTrackingButtons();
     document.getElementById('camera').src = cameraStreamUrl();

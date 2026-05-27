@@ -93,9 +93,14 @@ class BodyTracker:
         self._safety: SafetyMonitor | None = safety
         self._avoid_default = str(cfg.get("avoid_default", "left"))
 
+        # Follow mode: "fused" (camera + BLE fallback), "camera" (camera only), "ble" (BLE only)
+        self._follow_mode: str = str(cfg.get("follow_mode", "fused"))
+
         # BLE fallback state
         self._ble: BLETracker | None = ble_tracker
-        self._ble_follow_enabled: bool = bool(cfg.get("ble_follow_enabled", False))
+        # ble_follow_enabled derived from follow_mode; config override still respected
+        _ble_cfg_default = self._follow_mode in ("fused", "ble")
+        self._ble_follow_enabled: bool = bool(cfg.get("ble_follow_enabled", _ble_cfg_default))
         self._ble_active = False
         self._camera_lost_at: float = 0.0
         self._ble_search_dir: str = "right"
@@ -197,6 +202,7 @@ class BodyTracker:
             "person_tracked": self._person_tracked,
             "last_error": self._last_error,
             "camera_url": self._camera_url,
+            "follow_mode": self._follow_mode,
             "ble_active": self._ble_active,
             "ble_follow_enabled": self._ble_follow_enabled,
         }
@@ -240,6 +246,31 @@ class BodyTracker:
         if not enabled:
             self._reset_tracking_state()
             self._drive(0, 0, force=True)
+
+    def set_follow_mode(self, mode: str) -> None:
+        """Set follow mode: 'fused' | 'camera' | 'ble'.
+
+        'fused'  — camera primary, BLE fallback when camera loses person (default)
+        'camera' — camera only, no BLE fallback
+        'ble'    — BLE-only; skip Hailo inference entirely
+
+        Automatically updates ble_follow_enabled and enabled state.
+        """
+        if mode not in ("fused", "camera", "ble"):
+            logger.warning("BodyTracker: unknown follow_mode %r — ignored", mode)
+            return
+        with self._lock:
+            self._follow_mode = mode
+            if mode == "fused":
+                self._ble_follow_enabled = True
+            elif mode == "camera":
+                self._ble_follow_enabled = False
+            else:  # ble
+                self._ble_follow_enabled = True
+                # BLE-only: enabled=True so _run() activates, _run() checks mode
+                self._enabled = True
+                self._detect_only = False
+        logger.info("BodyTracker: follow_mode=%s ble_follow=%s", mode, self._ble_follow_enabled)
 
     def set_ble_follow_enabled(self, enabled: bool) -> None:
         with self._lock:
@@ -402,14 +433,39 @@ class BodyTracker:
             logger.debug("BLE follow: tracking (rssi=%d dBm) → FWD", rssi)
             self._follow_drive("forward", self._ble_fwd_speed, ble_turn=self._ble_search_dir)
 
+    def _ble_only_loop(self) -> None:
+        """BLE-only follow — no camera stream, no Hailo. Runs until mode changes or disabled."""
+        logger.info("BodyTracker: BLE-only follow loop started")
+        self._ble_active = True
+        try:
+            while not self._stop_event.is_set():
+                with self._lock:
+                    active = self._enabled
+                    mode = self._follow_mode
+                if not active or mode != "ble":
+                    break
+                if self._ble is not None:
+                    self._ble_drive()
+                self._stop_event.wait(0.5)
+        finally:
+            self._ble_active = False
+            self._drive(0, 0, force=True)
+            logger.info("BodyTracker: BLE-only follow loop stopped")
+
     def _run(self) -> None:
         self._running = True
         while not self._stop_event.is_set():
             # Idle wait — do not open the stream unless DETECT or FOLLOW is active.
             with self._lock:
                 active = self._enabled or self._detect_only
+                mode = self._follow_mode
             if not active:
                 self._stop_event.wait(0.2)
+                continue
+
+            # BLE-only mode: skip Hailo entirely, run BLE drive loop directly.
+            if mode == "ble" and self._enabled:
+                self._ble_only_loop()
                 continue
 
             # Lazy Hailo init — load model only when first needed, not at service start.
@@ -561,9 +617,13 @@ class BodyTracker:
         if detect_only:
             return
 
+        with self._lock:
+            follow_mode = self._follow_mode
+
         if not self._person_tracked or best is None:
             if (
-                self._ble is not None
+                follow_mode != "camera"          # camera mode: never activate BLE
+                and self._ble is not None
                 and self._ble_follow_enabled
                 and self._camera_lost_at > 0.0
                 and time.monotonic() - self._camera_lost_at >= _BLE_HANDOFF_DELAY_S
@@ -571,8 +631,9 @@ class BodyTracker:
                 if not self._ble_active:
                     self._ble_active = True
                     logger.info(
-                        "BLE follow: activated (camera LOST %.1fs ago)",
+                        "BLE follow: activated (camera LOST %.1fs ago, mode=%s)",
                         time.monotonic() - self._camera_lost_at,
+                        follow_mode,
                     )
                 self._ble_drive()
             else:

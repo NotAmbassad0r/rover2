@@ -340,9 +340,15 @@ def create_app(
                     points["follow_enabled"]  = 1.0 if st.get("enabled") else 0.0
                     points["detect_only"]     = 1.0 if st.get("detect_only") else 0.0
                     points["person_detected"] = 1.0 if st.get("person_detected") else 0.0
-                    # follow_state: 0=off 1=detect 2=camera 3=ble
+                    # follow_state: 0=off 1=detect 2=camera 3=fused 4=ble
                     if st.get("enabled"):
-                        points["follow_state"] = 3.0 if st.get("ble_active") else 2.0
+                        _fm = st.get("follow_mode", "fused")
+                        if _fm == "ble":
+                            points["follow_state"] = 4.0
+                        elif _fm == "camera":
+                            points["follow_state"] = 2.0
+                        else:  # fused (default)
+                            points["follow_state"] = 3.0
                     elif st.get("detect_only"):
                         points["follow_state"] = 1.0
                     else:
@@ -1596,29 +1602,45 @@ def create_app(
             raise HTTPException(status_code=400, detail="Invalid JSON") from exc
         enabled = bool(body.get("enabled", False))
         detect_only = bool(body.get("detect_only", False))
-        if (enabled or detect_only) and not body_tracker.available:
-            raise HTTPException(status_code=503, detail="Hailo not available")
-        if "ble_follow_enabled" in body:
-            body_tracker.set_ble_follow_enabled(bool(body["ble_follow_enabled"]))
-        if detect_only:
+        follow_mode = body.get("follow_mode")  # "fused" | "camera" | "ble" | None
+
+        # follow_mode is a higher-level shorthand — apply first, then legacy flags
+        if follow_mode is not None:
+            if follow_mode not in ("fused", "camera", "ble"):
+                raise HTTPException(status_code=400, detail="follow_mode must be 'fused', 'camera', or 'ble'")
+            if not body_tracker.available and follow_mode != "ble":
+                raise HTTPException(status_code=503, detail="Hailo not available")
             if cam_idle is not None:
                 cam_idle.notify_tracking_active()
-            body_tracker.set_detect_only(True)
-        elif enabled:
-            if cam_idle is not None:
-                cam_idle.notify_tracking_active()
-            body_tracker.set_enabled(True)
+            body_tracker.set_follow_mode(follow_mode)
+            # set_follow_mode already sets enabled=True for "ble" mode; mirror for camera/fused
+            if follow_mode in ("camera", "fused"):
+                body_tracker.set_enabled(True)
         else:
-            body_tracker.set_enabled(False)
-            body_tracker.set_detect_only(False)
-            try:
-                megapi.stop_motors()
-            except RuntimeError as exc:
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            if (enabled or detect_only) and not body_tracker.available:
+                raise HTTPException(status_code=503, detail="Hailo not available")
+            if "ble_follow_enabled" in body:
+                body_tracker.set_ble_follow_enabled(bool(body["ble_follow_enabled"]))
+            if detect_only:
+                if cam_idle is not None:
+                    cam_idle.notify_tracking_active()
+                body_tracker.set_detect_only(True)
+            elif enabled:
+                if cam_idle is not None:
+                    cam_idle.notify_tracking_active()
+                body_tracker.set_enabled(True)
+            else:
+                body_tracker.set_enabled(False)
+                body_tracker.set_detect_only(False)
+                try:
+                    megapi.stop_motors()
+                except RuntimeError as exc:
+                    raise HTTPException(status_code=503, detail=str(exc)) from exc
         return JSONResponse({
             "status": "ok",
             "enabled": body_tracker.enabled,
             "detect_only": body_tracker.detect_only,
+            "follow_mode": body_tracker._follow_mode,
             "ble_follow_enabled": body_tracker._ble_follow_enabled,
         })
 
