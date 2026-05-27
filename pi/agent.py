@@ -382,6 +382,29 @@ RULES:
 _MAX_TOOL_ROUNDS = 4
 _DEFAULT_OLLAMA_TIMEOUT_S = 180
 
+_SPOKEN_CPU_BASE = "http://127.0.0.1:11434"
+_SPOKEN_MODEL = "llama3.2:1b"
+_SPOKEN_TIMEOUT_S = 90.0  # allow for model load on first call; keep-alive prevents repeat waits
+_KEEPALIVE_INTERVAL_S = 240  # 4 minutes — keeps model loaded between spoken requests
+
+# hailo-ollama supports /api/chat when message content has no newlines.
+# /api/generate with any prompt fails to anchor the ROVER persona in qwen2.5-instruct:1.5b
+# because the instruction-tuned model ignores raw-prompt few-shot when not in ChatML format.
+# Solution: /api/chat with flat (no-newline) system prompt + 3 few-shot prior turns.
+_ROVER_HAILO_SYSTEM = (
+    "You are ROVER, the AI of an autonomous robot. "
+    "Dry sardonic British wit. Never say certainly, absolutely, I cannot, or I am unable. "
+    "Call owner sir. 2-3 sentences. No preamble, no lists."
+)
+_ROVER_HAILO_FEW_SHOT: list[dict] = [
+    {"role": "user",      "content": "Tell me a joke."},
+    {"role": "assistant", "content": "Why do programmers prefer dark mode? Because light attracts bugs, sir. I trust that suffices."},
+    {"role": "user",      "content": "Are you okay?"},
+    {"role": "assistant", "content": "All systems nominal. Though you did just ask a robot how it is feeling, sir."},
+    {"role": "user",      "content": "What can you do?"},
+    {"role": "assistant", "content": "I can see, move, follow people, and monitor my own vitals, sir. I can also detect when a question is rhetorical, though I answer regardless."},
+]
+
 _TOOLS_ONLY_REPLY = (
     "Pi is in bridge mode (A32 ↔ MegaPi): no CPU LLM. "
     "Use quick actions (TEMPS, CHECK LOGS, DIAG ASK AI) or enable hailo-ollama on the AI HAT+ "
@@ -648,7 +671,8 @@ class RoverAgent:
     """Agentic loop: Ollama model + rover2 REST tools."""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        cfg = (config or {}).get("agent", {})
+        self._full_config = config or {}
+        cfg = self._full_config.get("agent", {})
         self._backend   = str(cfg.get("backend", "hailo")).lower().strip()
         self._cpu_model = str(cfg.get("model", "llama3.2:1b"))
         self._hailo_model = str(cfg.get("hailo_model", "qwen2:1.5b"))
@@ -666,11 +690,42 @@ class RoverAgent:
             self._base = str(cfg.get("hailo_ollama_base", "http://127.0.0.1:8000"))
             self._model = self._hailo_model
         self._available: bool | None = None
+        self._last_availability_check: float = 0.0
+        self._availability_recheck_interval_s: float = 30.0
         self._last_model_error: str | None = None
+        self._keepalive_task: asyncio.Task | None = None
+        # Tracks which backend/model the last spoken turn used (for keepalive)
+        self._spoken_base: str = _SPOKEN_CPU_BASE
+        self._spoken_model: str = _SPOKEN_MODEL
 
     # ── Public API ──────────────────────────────────────────────────────────
 
+    async def _check_availability(self) -> bool:
+        """Check Ollama availability; skip re-check if result is fresh (<30s)."""
+        now = time.monotonic()
+        if (self._available is True and
+                now - self._last_availability_check < self._availability_recheck_interval_s):
+            return True
+        if self._backend == "tools_only":
+            self._available = True
+            self._last_availability_check = now
+            return True
+        if not self._base:
+            self._available = False
+            self._last_availability_check = now
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as c:
+                r = await c.get(f"{self._base}/api/tags")
+                self._available = r.status_code == 200
+        except Exception as exc:
+            logger.debug("Agent: availability check: %s", exc)
+            self._available = False
+        self._last_availability_check = now
+        return bool(self._available)
+
     async def check_available(self) -> bool:
+        """Public alias — full model-list check (used by /api/status)."""
         if self._backend == "tools_only":
             self._available = True
             return True
@@ -691,6 +746,7 @@ class RoverAgent:
         except Exception as exc:
             logger.debug("Agent: Ollama check: %s", exc)
             self._available = False
+        self._last_availability_check = time.monotonic()
         return bool(self._available)
 
     async def wait_for_ollama(self, max_wait_s: float = 120.0) -> bool:
@@ -706,6 +762,8 @@ class RoverAgent:
         """Load model after boot so the first user question is not a 60s timeout."""
         if not self._warmup or self._backend == "tools_only" or not self._base:
             return
+        if self._backend == "hailo":
+            return  # _warmup_hailo() in server.py handles hailo with proper retry
         if not await self.wait_for_ollama():
             logger.warning("Agent: Ollama not ready within 120s — agent may fail until it starts")
             return
@@ -726,6 +784,147 @@ class RoverAgent:
                     logger.warning("Agent: Ollama warmup HTTP %d — %s", r.status_code, r.text[:120])
         except Exception as exc:
             logger.warning("Agent: Ollama warmup failed (will retry on first chat): %s", exc)
+
+    async def run_spoken_turn(self, user_text: str, lang: str = "en") -> str:
+        """ROVER personality spoken response — bypasses fast-path and all tool use.
+
+        Tries hailo-ollama first (if enabled in config), falls back to CPU ollama.
+        """
+        logger.info("Agent: run_spoken_turn called, user_text=%r, lang=%s", user_text[:50], lang)
+        from voice_engine import ROVER_SYSTEM_PROMPT  # lazy import — avoids circular dep
+
+        hailo_cfg = self._full_config.get("hailo_ollama", {})
+        use_hailo = hailo_cfg.get("enabled", False)
+        fallback_to_cpu = hailo_cfg.get("fallback_to_cpu", True)
+
+        lang_note = (
+            f"Respond in this language: {lang}. If lang is 'cs', respond in Czech. "
+            if lang and lang not in ("en", "auto")
+            else ""
+        )
+
+        if use_hailo:
+            h_base  = hailo_cfg.get("host", "http://localhost:8000")
+            h_model = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
+            h_predict = int(hailo_cfg.get("num_predict", 120))
+            h_temp    = float(hailo_cfg.get("temperature", 0.85))
+            # hailo-ollama supports /api/chat when content has no newlines.
+            # /api/generate cannot anchor ROVER persona in instruction-tuned qwen2.5-instruct:1.5b.
+            # Flatten user_text to strip any accidental newlines from Whisper output.
+            import re as _re
+            def _flatten(s: str) -> str:
+                return _re.sub(r"\s+", " ", s).strip()
+
+            # Quick reachability check before sending — retry once after 5s if down
+            async def _hailo_reachable() -> bool:
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as _c:
+                        return (await _c.get(f"{h_base}/api/tags")).status_code == 200
+                except Exception:
+                    return False
+
+            if not await _hailo_reachable():
+                logger.info("Agent: hailo-ollama not ready — waiting 5s then retrying")
+                await asyncio.sleep(5.0)
+                if not await _hailo_reachable():
+                    logger.warning("Agent: hailo-ollama unavailable — falling back to CPU")
+                    if not fallback_to_cpu:
+                        return ""
+                    # skip hailo attempt, go straight to CPU path below
+                else:
+                    use_hailo = True  # reachable after retry — proceed
+
+            if use_hailo:
+                try:
+                    async with httpx.AsyncClient(timeout=60.0) as c:
+                        # /api/chat with flat (no-newline) content — hailo-ollama supports it.
+                        # System + 3 few-shot prior turns anchor the ROVER persona reliably.
+                        h_messages = (
+                            [{"role": "system", "content": _ROVER_HAILO_SYSTEM}]
+                            + _ROVER_HAILO_FEW_SHOT
+                            + [{"role": "user", "content": _flatten(user_text)}]
+                        )
+                        r = await c.post(
+                            f"{h_base}/api/chat",
+                            json={
+                                "model":    h_model,
+                                "messages": h_messages,
+                                "stream":   False,
+                                "options":  {"num_predict": h_predict, "temperature": h_temp,
+                                             "top_p": 0.92},
+                            },
+                        )
+                        if r.status_code == 200:
+                            reply = r.json().get("message", {}).get("content", "").strip()
+                            logger.info("Agent: spoken turn OK (%d chars) via hailo", len(reply))
+                            self._spoken_base  = h_base
+                            self._spoken_model = h_model
+                            self._start_keepalive()
+                            return reply
+                        logger.warning("Agent: hailo spoken turn HTTP %d — %s", r.status_code, r.text[:120])
+                except Exception as exc:
+                    logger.warning("Agent: hailo spoken turn error: %s", exc)
+                if not fallback_to_cpu:
+                    return ""
+
+        # CPU ollama fallback (or primary when hailo disabled)
+        user_msg = (
+            f"{user_text}\n\n"
+            f"(Respond in 2-4 spoken sentences. No formatting. "
+            f"{lang_note}Respond in the same language the user spoke in: {lang}.)"
+        )
+        messages = [
+            {"role": "system", "content": ROVER_SYSTEM_PROMPT.strip()},
+            {"role": "user",   "content": user_msg},
+        ]
+        try:
+            async with httpx.AsyncClient(timeout=_SPOKEN_TIMEOUT_S) as c:
+                r = await c.post(
+                    f"{_SPOKEN_CPU_BASE}/api/chat",
+                    json={
+                        "model":    _SPOKEN_MODEL,
+                        "messages": messages,
+                        "stream":   False,
+                        "options":  {"num_predict": 120, "temperature": 0.85, "top_p": 0.92},
+                    },
+                )
+                if r.status_code == 200:
+                    reply = r.json().get("message", {}).get("content", "").strip()
+                    logger.info("Agent: spoken turn OK (%d chars) via cpu", len(reply))
+                    self._spoken_base  = _SPOKEN_CPU_BASE
+                    self._spoken_model = _SPOKEN_MODEL
+                    self._start_keepalive()
+                    return reply
+                logger.warning("Agent: cpu spoken turn HTTP %d — %s", r.status_code, r.text[:120])
+        except Exception as exc:
+            logger.warning("Agent: cpu spoken turn error: %s", exc)
+        return ""
+
+    def _start_keepalive(self) -> None:
+        if self._keepalive_task is not None and not self._keepalive_task.done():
+            return
+        try:
+            self._keepalive_task = asyncio.get_event_loop().create_task(self._keepalive_loop())
+            logger.debug("Agent: Ollama keep-alive loop started")
+        except Exception as exc:
+            logger.debug("Agent: keepalive task start failed: %s", exc)
+
+    async def _keepalive_loop(self) -> None:
+        """Ping the active spoken backend every 4 min to prevent model unloading."""
+        while True:
+            await asyncio.sleep(_KEEPALIVE_INTERVAL_S)
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as c:
+                    # hailo-ollama requires a prompt in /api/generate (no prompt-less keep_alive)
+                    await c.post(
+                        f"{self._spoken_base}/api/generate",
+                        json={"model": self._spoken_model, "prompt": "hi",
+                              "stream": False, "options": {"num_predict": 1},
+                              "keep_alive": "10m"},
+                    )
+                logger.debug("Agent: keep-alive ping → %s", self._spoken_base)
+            except Exception:
+                pass
 
     async def run_turn(self, messages: list[dict]) -> AgentTurn:
         # Fast path: pattern-matched queries answer directly without Ollama.
@@ -1032,9 +1231,35 @@ class RoverAgent:
             return r.json()
 
     async def _call_model(self, messages: list[dict]) -> dict | None:
+        self._last_model_error = None
+
+        # hailo-ollama only supports /api/generate (not /api/chat or tools)
+        if self._backend == "hailo":
+            import re as _re
+            flat_parts = [
+                f"{m.get('role','user').capitalize()}: {_re.sub(r'\s+', ' ', m.get('content','') or '').strip()}"
+                for m in messages
+            ]
+            flat_prompt = (" ".join(flat_parts) + " Assistant:").replace('\n', ' ').replace('\r', ' ')
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout_s) as c:
+                    r = await c.post(
+                        f"{self._base}/api/generate",
+                        json={"model": self._model, "prompt": flat_prompt,
+                              "stream": False, "options": {"num_predict": 300}},
+                    )
+                    if r.status_code == 200:
+                        return {"message": {"content": r.json().get("response", "").strip(),
+                                            "tool_calls": []}}
+                    self._last_model_error = r.text[:200]
+                    logger.warning("Agent: hailo /api/generate HTTP %d", r.status_code)
+            except Exception as exc:
+                self._last_model_error = str(exc)
+                logger.warning("Agent: hailo _call_model error: %s", exc)
+            return None
+
         payload = {"model": self._model, "messages": messages,
                    "tools": _ALL_TOOLS, "stream": False}
-        self._last_model_error = None
         attempts = 1 if self._timeout_s >= 120 else 2
         for attempt in range(attempts):
             try:

@@ -11,6 +11,7 @@ import yaml
 
 from ble_tracker import BLETracker
 from body_tracker import BodyTracker
+from guard import GuardController
 from megapi import MegaPiBridge
 from safety import SafetyMonitor
 from log_buffer import install_log_ring_buffer
@@ -81,6 +82,13 @@ def main() -> None:
 
     rover_agent = RoverAgent(config=config) if config.get("agent", {}).get("enabled", True) else None
 
+    # Guard controller — created always (enabled flag controls behaviour)
+    guard = GuardController(
+        config=config,
+        ble_tracker=ble_tracker,
+        body_tracker=body_tracker,
+    )
+
     server_cfg = config.get("server", {})
     app = create_app(
         megapi,
@@ -89,6 +97,7 @@ def main() -> None:
         body_tracker=body_tracker,
         vlm_engine=vlm_engine,
         rover_agent=rover_agent,
+        guard_controller=guard,
     )
 
     try:
@@ -97,6 +106,8 @@ def main() -> None:
             host=server_cfg.get("host", "0.0.0.0"),
             port=int(server_cfg.get("port", 8080)),
             log_level="info",
+            ssl_keyfile="/opt/rover2/rover.key",
+            ssl_certfile="/opt/rover2/rover.crt",
         )
     finally:
         if body_tracker is not None:

@@ -332,6 +332,7 @@
     .metric-row.ok .val { color: var(--accent); }
     .metric-row.warn .val { color: var(--warn); }
     .metric-row.error .val { color: var(--danger); }
+    .metric-row.emergency .val { color: var(--danger); animation: pulse 1s infinite; }
     .metric-row.info .val { color: var(--text); }
     .core-grid { display: flex; gap: 0.25rem; flex-wrap: wrap; margin: 0.3rem 0; }
     .core-cell { font-size: 0.65rem; padding: 0.15rem 0.3rem; border-radius: 3px; background: #21262d; border: 1px solid var(--border); }
@@ -822,6 +823,17 @@
       <p class="muted" id="fault-ts">Not loaded</p>
       <div id="fd-faults" style="max-height:220px;overflow-y:auto;"></div>
     </div>
+
+    <div class="panel">
+      <p class="panel-title">GUARD MODE</p>
+      <div class="tools-actions">
+        <button type="button" id="guard-arm-btn">ARM</button>
+        <button type="button" id="guard-disarm-btn">DISARM</button>
+        <button type="button" id="guard-toggle-btn">ENABLE</button>
+      </div>
+      <p class="muted" id="guard-ts">Not loaded</p>
+      <div class="diag-grid" id="guard-status-grid"></div>
+    </div>
   </div>
 
   <div id="tab-chat" class="tab-page">
@@ -1092,7 +1104,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1436,7 +1448,7 @@
         _diagAutoTimer = null;
         this.classList.remove('active');
       } else {
-        _diagAutoTimer = setInterval(loadFullDiagnostics, 5000);
+        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); }, 5000);
         this.classList.add('active');
         loadFullDiagnostics();
       }
@@ -1487,10 +1499,14 @@
       if (cam.responsive != null) {
         xRows.push(metricRow('camera stream', cam.responsive ? 'responsive' : 'unresponsive', null, cam.responsive ? 'ok' : 'warn'));
       }
-      if (d.memory_rss_mb != null) {
-        const mb = d.memory_rss_mb;
-        const cls = mb > 200 ? 'error' : mb > 150 ? 'warn' : mb > 130 ? 'info' : 'ok';
-        xRows.push(metricRow('rover2-api RSS', `${mb} MB`, null, cls));
+      if (d.memory != null || d.memory_rss_mb != null) {
+        const mem = d.memory || { rss_mb: d.memory_rss_mb, level: null };
+        const mb = mem.rss_mb;
+        const levelCls = { ok: 'ok', warn: 'warn', critical: 'error', emergency: 'emergency' };
+        const cls = mem.level ? (levelCls[mem.level] || 'ok')
+                              : (mb > 350 ? 'error' : mb > 280 ? 'warn' : 'ok');
+        const label = mem.target_mb ? `rover2-api RSS (budget ${mem.target_mb} MB)` : 'rover2-api RSS';
+        xRows.push(metricRow(label, `${mb} MB`, null, cls));
       }
       if (d.disk_root_pct != null) {
         const cls = d.disk_root_pct > 90 ? 'error' : d.disk_root_pct > 80 ? 'warn' : 'ok';
@@ -1588,6 +1604,69 @@
         toast('Fault history cleared');
       } catch (e) { toast('Clear error: ' + e.message); }
     };
+
+    // ── Guard mode ────────────────────────────────────────────────────────────
+    const _GUARD_STATE_COLORS = {
+      DISARMED:  'var(--accent)',
+      ARMING:    'var(--warn)',
+      ARMED:     '#4fc3f7',
+      ALERT:     'var(--danger)',
+      DISARMING: 'var(--warn)',
+    };
+
+    async function loadGuardStatus() {
+      try {
+        const r = await fetch(apiBase() + '/api/guard/status');
+        const d = await r.json();
+        const grid = document.getElementById('guard-status-grid');
+        const state = d.state || 'DISARMED';
+        const color = _GUARD_STATE_COLORS[state] || 'var(--muted)';
+        const pulse = state === 'ALERT' ? 'animation:pulse 0.8s infinite;' : '';
+        const rows = [
+          ['STATE',       `<span style="color:${color};font-weight:700;${pulse}">${state}</span>`],
+          ['ENABLED',     d.guard_enabled ? '<span style="color:var(--accent)">YES</span>' : '<span style="color:var(--muted)">no</span>'],
+          ['BEACON RSSI', d.beacon_rssi != null ? d.beacon_rssi + ' dBm' : '—'],
+          ['ARMED SINCE', d.armed_since ? new Date(d.armed_since).toLocaleTimeString() : '—'],
+          ['DETECTIONS',  String(d.detections_this_session ?? 0)],
+          ['LAST DETECT', d.last_detection ? new Date(d.last_detection).toLocaleTimeString() : '—'],
+          ['HA WEBHOOK',  d.last_webhook_ok == null ? '—' : d.last_webhook_ok ? '<span style="color:var(--accent)">ok</span>' : '<span style="color:var(--danger)">failed</span>'],
+        ];
+        grid.innerHTML = rows.map(([k, v]) =>
+          `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
+        ).join('');
+        document.getElementById('guard-ts').textContent = 'Updated ' + new Date().toLocaleTimeString();
+        // Update toggle button label
+        document.getElementById('guard-toggle-btn').textContent = d.guard_enabled ? 'DISABLE' : 'ENABLE';
+      } catch (e) {
+        document.getElementById('guard-ts').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function guardOverride(action) {
+      try {
+        const r = await fetch(apiBase() + '/api/guard/override', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action}),
+        });
+        const d = await r.json();
+        toast('Guard: ' + d.state);
+        await loadGuardStatus();
+      } catch (e) { toast('Guard error: ' + e.message); }
+    }
+
+    document.getElementById('guard-arm-btn').onclick    = () => guardOverride('arm');
+    document.getElementById('guard-disarm-btn').onclick = () => guardOverride('disarm');
+    document.getElementById('guard-toggle-btn').onclick = async () => {
+      const btn = document.getElementById('guard-toggle-btn');
+      const action = btn.textContent.trim() === 'ENABLE' ? 'enable' : 'disable';
+      await guardOverride(action);
+    };
+
+    // Refresh guard status alongside DIAG auto-refresh
+    const _origDiagRefresh = typeof loadFullDiag === 'function' ? loadFullDiag : null;
+    loadGuardStatus().catch(() => {});
+
     // ─────────────────────────────────────────────────────────────────────────
 
     async function loadScripts() {

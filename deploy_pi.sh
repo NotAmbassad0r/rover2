@@ -27,11 +27,25 @@ rsync -avz --progress --delete \
   --exclude 'venv/' \
   --exclude 'tools/' \
   --exclude 'scripts/' \
+  --exclude 'voices/' \
+  --exclude 'piper/' \
+  --exclude 'whisper-models/' \
+  --exclude 'rover.crt' \
+  --exclude 'rover.key' \
+  --exclude 'rover-ca.crt' \
+  --exclude 'rover-ca.key' \
   "$LOCAL_PATH" "$PI_HOST:$PI_PATH"
 
 echo "==> Syncing scripts to $PI_HOST:/opt/rover2/scripts/"
 ssh "$PI_HOST" "mkdir -p /opt/rover2/scripts"
 rsync -avz "$SCRIPTS_PATH" "$PI_HOST:/opt/rover2/scripts/"
+
+FACE_PATH="$ROOT/face/"
+if [ -d "$FACE_PATH" ]; then
+  echo "==> Syncing face/ PWA to $PI_HOST:/opt/rover2/face/"
+  ssh "$PI_HOST" "mkdir -p /opt/rover2/face"
+  rsync -avz "$FACE_PATH" "$PI_HOST:/opt/rover2/face/"
+fi
 ssh "$PI_HOST" "chmod +x /opt/rover2/scripts/*.sh 2>/dev/null || true"
 ssh "$PI_HOST" "chmod +x /opt/rover2/scripts/setup_ai_on_hailo.sh /opt/rover2/scripts/setup_ai_on_cpu.sh 2>/dev/null || true"
 
@@ -114,6 +128,33 @@ PYEOF
   echo "    bleak sideloaded OK"
 else
   echo "    bleak already installed"
+fi
+
+# piper TTS binary — piper-phonemize has no cp313 aarch64 wheel; use the
+# statically-linked piper binary (bundles espeak-ng, RPATH=$ORIGIN).
+echo ""
+echo "==> Checking piper TTS binary..."
+if ! ssh "$PI_HOST" "[ -x /opt/rover2/piper/piper ]" 2>/dev/null; then
+  echo "    piper binary not on Pi — downloading on dev machine (~13 MB)..."
+  PIPER_BIN_TMP=$(mktemp -d)
+  python3 - "$PIPER_BIN_TMP" <<'PYEOF'
+import urllib.request, sys, os
+dest = os.path.join(sys.argv[1], "piper.tar.gz")
+url = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz"
+print("  downloading piper aarch64 binary...")
+urllib.request.urlretrieve(url, dest)
+print(f"  ok: {os.path.getsize(dest)//1024//1024} MB")
+PYEOF
+  if [ -f "$PIPER_BIN_TMP/piper.tar.gz" ]; then
+    scp "$PIPER_BIN_TMP/piper.tar.gz" "$PI_HOST:/tmp/piper.tar.gz"
+    ssh "$PI_HOST" "mkdir -p /opt/rover2/piper && cd /opt/rover2/piper && tar xzf /tmp/piper.tar.gz --strip-components=1 && chmod +x piper && rm /tmp/piper.tar.gz"
+    echo "    piper binary installed at /opt/rover2/piper/piper"
+  else
+    echo "    WARN: piper binary download failed — TTS disabled"
+  fi
+  rm -rf "$PIPER_BIN_TMP"
+else
+  echo "    piper binary already present"
 fi
 
 echo ""

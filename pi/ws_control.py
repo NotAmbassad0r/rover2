@@ -24,6 +24,7 @@ def build_telemetry(
     public_ultrasonic_cm: Any,
     body_tracker: BodyTracker | None = None,
     cam_idle: Any = None,
+    guard_controller: Any = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": "telemetry",
@@ -67,6 +68,12 @@ def build_telemetry(
         payload["tracking_enabled"] = False
         payload["tracking_detect_only"] = False
         payload["ble_active"] = False
+    if guard_controller is not None:
+        payload["guard_state"]      = guard_controller.get_state()
+        payload["guard_detections"] = guard_controller.get_stats().get("detections_this_session", 0)
+    else:
+        payload["guard_state"]      = "DISARMED"
+        payload["guard_detections"] = 0
     return payload
 
 
@@ -85,6 +92,7 @@ class ControlHub:
         body_tracker: BodyTracker | None = None,
         config: dict[str, Any] | None = None,
         cam_idle: Any = None,
+        guard_controller: Any = None,
     ) -> None:
         self._megapi = megapi
         self._directions = directions
@@ -96,6 +104,7 @@ class ControlHub:
         self._body_tracker = body_tracker
         self._config = config or {}
         self._cam_idle = cam_idle
+        self._guard_controller = guard_controller
         self._clients: set[WebSocket] = set()
         self._driver: WebSocket | None = None
         self._driver_direction: str | None = None
@@ -213,6 +222,7 @@ class ControlHub:
                     self._public_ultrasonic_cm,
                     self._body_tracker,
                     self._cam_idle,
+                    self._guard_controller,
                 )
                 if self._telemetry_extra:
                     payload.update(self._telemetry_extra)

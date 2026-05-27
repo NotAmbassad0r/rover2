@@ -45,12 +45,12 @@ Push to GitHub with `git push origin dev`. PR to `main` only for stable mileston
 
 ```yaml
 drive:
-  max_speed: 230
+  max_speed: 255
   direction_map:
     forward: [1, -1]
     back: [-1, 1]
-    left: [0, -1]      # arc turn — one wheel rolls
-    right: [1, 0]
+    left: [1, 0]       # arc turn — left motor only (fixed 2026-05-26)
+    right: [0, -1]     # arc turn — right motor only (fixed 2026-05-26)
 body_tracker:
   turn_speed: 210
   forward_speed: 170
@@ -59,6 +59,19 @@ body_tracker:
 websocket:
   heartbeat_timeout_s: 10.0
 ```
+
+## HTTPS (as of 2026-05-26)
+
+`rover2-api` runs on **HTTPS** (self-signed cert). Always use `https://`:
+
+```
+https://192.168.250.254:8082/   # WiFi
+https://192.168.70.11:8082/     # eth0
+```
+
+Certs live at `/opt/rover2/rover.key` and `/opt/rover2/rover.crt` (generated once, not in repo).
+First visit: browser will warn about self-signed cert — click **Advanced → Proceed**.
+The UI auto-upgrades WebSocket to `wss://` when served over HTTPS.
 
 ## Power situation (as of 2026-05-22)
 
@@ -70,7 +83,10 @@ Mitigations in place: lazy init, 4fps, CPU cap 1800MHz, `arm_freq=1800` in `/boo
 
 `/boot/firmware` is mounted **read-only** in `/etc/fstab` (`ro,defaults`) to prevent cmdline.txt corruption on hard power cut. Before firmware updates: `sudo mount -o remount,rw /boot/firmware`.
 
-## WebSocket API (port 8082)
+## WebSocket API (port 8082 — HTTPS/WSS)
+
+> API runs on **HTTPS**. Use `https://` in browser and `curl -k`. WebSocket is `wss://`.
+> Self-signed cert at `/opt/rover2/rover.crt`. Accept browser warning once on first visit.
 
 | Message | Effect |
 |---------|--------|

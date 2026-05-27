@@ -1,0 +1,780 @@
+<!DOCTYPE html><!-- ROVER Face PWA v1.0 — Samsung Galaxy A32 emotional display -->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#000000"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<title>ROVER</title>
+<link rel="manifest" href="/face/manifest.json"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#e6edf3;
+  font-family:'Courier New',Courier,monospace;user-select:none}
+canvas{display:block;image-rendering:pixelated}
+#ui{position:fixed;bottom:0;left:0;right:0;display:flex;flex-direction:column;
+  align-items:center;gap:0;padding-bottom:env(safe-area-inset-bottom,16px);
+  background:linear-gradient(transparent,rgba(0,0,0,.92) 30%)}
+#status-bar{width:100%;display:flex;justify-content:space-between;
+  padding:6px 16px 2px;font-size:11px;color:#8b949e;letter-spacing:.06em}
+#status-bar span{display:flex;align-items:center;gap:4px}
+.dot{width:7px;height:7px;border-radius:50%;background:#30363d;flex-shrink:0}
+.dot.ok{background:#3fb950}.dot.warn{background:#d29922}.dot.err{background:#f85149}
+#mode-label{font-size:13px;letter-spacing:.12em;color:#8b949e;padding:2px 0 6px}
+#chat-bubble{max-width:340px;width:90%;min-height:36px;background:rgba(22,27,34,.9);
+  border:1px solid #30363d;border-radius:12px;padding:10px 14px;font-size:13px;
+  line-height:1.5;margin-bottom:8px;text-align:center;
+  display:none;white-space:pre-wrap}
+#chat-bubble.user{color:#58a6ff;border-color:#1f6feb}
+#chat-bubble.rover{color:#e6edf3;border-color:#3fb950}
+#btn-row{display:flex;gap:12px;margin-bottom:10px}
+.btn{padding:10px 22px;border-radius:8px;border:1px solid #30363d;
+  background:rgba(22,27,34,.8);color:#e6edf3;font-family:inherit;font-size:13px;
+  letter-spacing:.08em;cursor:pointer;transition:background .1s,border-color .1s}
+.btn:active{background:rgba(48,54,61,.9)}
+.btn.recording{background:rgba(248,81,73,.2);border-color:#f85149;color:#f85149}
+.btn.audio-active{background:rgba(63,185,80,.15);border-color:#3fb950}
+#btn-audio-route{font-size:11px;padding:8px 14px}
+#alert-bar{width:100%;padding:4px 16px;font-size:11px;color:#d29922;
+  text-align:center;min-height:18px;letter-spacing:.05em}
+/* DEBUG OVERLAY — remove before final demo */
+#dbg-panel{width:100%;background:rgba(0,0,0,.80);padding:5px 14px 6px;cursor:pointer;
+  font-size:10px;line-height:1.75;border-top:1px solid #21262d}
+.dbg-row{display:flex;gap:8px}
+.dbg-key{color:#8b949e;min-width:34px;flex-shrink:0}
+</style>
+</head>
+<body>
+<canvas id="face"></canvas>
+
+<div id="ui">
+  <!-- DEBUG OVERLAY — remove before final demo -->
+  <div id="dbg-panel" onclick="dbgToggle()">
+    <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
+    <div class="dbg-row"><span class="dbg-key">VAD</span><span id="dbg-vad">idle</span></div>
+    <div class="dbg-row"><span class="dbg-key">LAST</span><span id="dbg-last">—</span></div>
+    <div class="dbg-row"><span class="dbg-key">WSS</span><span id="dbg-wss">disconnected</span></div>
+    <div class="dbg-row"><span class="dbg-key">SSL</span><span id="dbg-ssl">?</span></div>
+  </div>
+  <div id="alert-bar"></div>
+  <div id="status-bar">
+    <span><span class="dot" id="dot-ws"></span>WS</span>
+    <span><span class="dot" id="dot-serial"></span>SERIAL</span>
+    <span><span class="dot" id="dot-follow"></span>FOLLOW</span>
+    <span><span class="dot" id="dot-person"></span>PERSON</span>
+    <span id="uptime-txt">—</span>
+  </div>
+  <div id="mode-label">IDLE</div>
+  <div id="chat-bubble"></div>
+  <div id="btn-row">
+    <button class="btn" id="btn-mic" onclick="toggleVoice()">MIC</button>
+    <button class="btn" id="btn-audio-route" onclick="toggleAudioRoute()">ROVER A32</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Config ──────────────────────────────────────────────────────────────────
+const PI_HOST   = '192.168.250.254';
+const PI_PORT   = 8082;
+const API_BASE  = `https://${PI_HOST}:${PI_PORT}`;
+const WS_URL    = `wss://${PI_HOST}:${PI_PORT}/ws`;
+const WSA_URL   = `wss://${PI_HOST}:${PI_PORT}/ws/audio`;
+
+// ── Canvas setup ─────────────────────────────────────────────────────────────
+const canvas = document.getElementById('face');
+const ctx    = canvas.getContext('2d');
+
+let W, H, SCALE;
+function resizeCanvas() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  SCALE = Math.max(6, Math.floor(W / 24));
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ── Face state machine ───────────────────────────────────────────────────────
+const STATE = {IDLE:'idle',DETECT:'detect',FOLLOW:'follow',SEARCH:'search',
+               BLOCK:'block',SPEAK:'speak',ALERT:'alert',OFFLINE:'offline'};
+
+let faceState   = STATE.OFFLINE;
+let prevState   = STATE.OFFLINE;
+let _stateAt    = 0;
+let _personDir  = 0;   // -1=left, 0=center, 1=right — drives pupil
+let _speakUntil = 0;   // monotonic ms
+let _alertMsg   = '';
+
+function setState(s) {
+  if (s === faceState) return;
+  prevState  = faceState;
+  faceState  = s;
+  _stateAt   = Date.now();
+}
+
+// ── Voxel face renderer ──────────────────────────────────────────────────────
+// Coordinate system: voxel grid anchored at canvas center
+// Face dimensions in voxels (SCALE px each):
+const FACE_W = 14;   // face width in voxels
+const FACE_H = 18;   // face height in voxels
+
+// Colors
+const C = {
+  bg:       '#000008',
+  face:     '#0d101a',
+  face_hl:  '#141824',
+  eye_bg:   '#111828',
+  iris_idle:   '#2d6ea8',
+  iris_detect: '#3a8fc8',
+  iris_follow: '#2ea043',
+  iris_search: '#d29922',
+  iris_block:  '#f85149',
+  iris_speak:  '#4a9eda',
+  iris_alert:  '#f85149',
+  iris_off:    '#21262d',
+  pupil:    '#000008',
+  mouth:    '#0d1820',
+  mouth_hi: '#1f3048',
+};
+
+// Blink animation
+let _blinkT = 0;
+let _blinkOpen = 1.0;   // 0=closed, 1=open
+let _nextBlink = 4000;
+let _blinkStart = 0;
+const BLINK_DUR = 140;
+
+// Pupil animation
+let _pupilX = 0, _pupilY = 0;   // offset in voxels, lerped
+let _targetPX = 0, _targetPY = 0;
+let _scanDir = 1, _scanT = 0;
+
+// Mouth animation for speak state
+let _mouthPhase = 0;
+
+function _irisColor() {
+  switch (faceState) {
+    case STATE.DETECT:   return C.iris_detect;
+    case STATE.FOLLOW:   return C.iris_follow;
+    case STATE.SEARCH:   return C.iris_search;
+    case STATE.BLOCK:    return C.iris_block;
+    case STATE.SPEAK:    return C.iris_speak;
+    case STATE.ALERT:    return C.iris_alert;
+    case STATE.OFFLINE:  return C.iris_off;
+    default:             return C.iris_idle;
+  }
+}
+
+function _drawBlock(x, y, w, h, color, alpha) {
+  if (alpha !== undefined && alpha < 1) ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  const px = x * SCALE, py = y * SCALE;
+  ctx.fillRect(px, py, w * SCALE - 1, h * SCALE - 1);
+  if (alpha !== undefined && alpha < 1) ctx.globalAlpha = 1;
+}
+
+function _drawFace(now) {
+  // Face center in voxel coords
+  const cx = Math.floor(W / SCALE / 2);
+  const cy = Math.floor(H / SCALE / 2) - 2;
+  const fx = cx - Math.floor(FACE_W / 2);
+  const fy = cy - Math.floor(FACE_H / 2);
+
+  // ── Background ──
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Face plate ──
+  _drawBlock(fx + 1, fy + 1, FACE_W - 2, FACE_H - 2, C.face);
+  // subtle highlight edge
+  _drawBlock(fx + 1, fy + 1, FACE_W - 2, 1, C.face_hl);
+
+  // ── Eyes ──
+  const EYE_W = 4, EYE_H_MAX = 5;
+  const eyeLx = fx + 1, eyeRx = fx + FACE_W - 1 - EYE_W;
+  const eyeY  = fy + 4;
+
+  // Blink: eye height shrinks to 0 during blink
+  let eyeH = EYE_H_MAX;
+  if (faceState === STATE.OFFLINE) {
+    eyeH = 1;
+  } else if (faceState === STATE.BLOCK) {
+    eyeH = EYE_H_MAX;
+  } else if (faceState === STATE.SEARCH) {
+    eyeH = 3;
+  }
+  eyeH = Math.round(eyeH * _blinkOpen);
+  if (eyeH < 1) eyeH = 1;
+
+  const irisColor = _irisColor();
+  // Left eye
+  _drawBlock(eyeLx, eyeY, EYE_W, eyeH, C.eye_bg);
+  if (faceState !== STATE.OFFLINE) {
+    // Iris (2×2 voxels, can shift)
+    const ipx = Math.round(Math.max(0, Math.min(EYE_W - 2, 1 + _pupilX)));
+    const ipy = Math.round(Math.max(0, Math.min(eyeH - 2, Math.floor(eyeH / 2) - 1 + _pupilY)));
+    _drawBlock(eyeLx + ipx, eyeY + ipy, 2, Math.min(2, eyeH), irisColor);
+    // Pupil (1×1 center of iris)
+    _drawBlock(eyeLx + ipx, eyeY + ipy, 1, 1, C.pupil);
+    // Specular highlight
+    _drawBlock(eyeLx + ipx + 1, eyeY + ipy, 1, 1, C.pupil);
+  }
+
+  // Right eye
+  _drawBlock(eyeRx, eyeY, EYE_W, eyeH, C.eye_bg);
+  if (faceState !== STATE.OFFLINE) {
+    const ipx = Math.round(Math.max(0, Math.min(EYE_W - 2, 1 - _pupilX)));
+    const ipy = Math.round(Math.max(0, Math.min(eyeH - 2, Math.floor(eyeH / 2) - 1 + _pupilY)));
+    _drawBlock(eyeRx + ipx, eyeY + ipy, 2, Math.min(2, eyeH), irisColor);
+    _drawBlock(eyeRx + ipx, eyeY + ipy, 1, 1, C.pupil);
+    _drawBlock(eyeRx + ipx + 1, eyeY + ipy, 1, 1, C.pupil);
+  }
+
+  // ── Eyebrows ──
+  if (faceState !== STATE.OFFLINE) {
+    const browY = eyeY - 2;
+    if (faceState === STATE.BLOCK || faceState === STATE.ALERT) {
+      // V shape — worried
+      _drawBlock(eyeLx,          browY + 1, 2, 1, irisColor, .6);
+      _drawBlock(eyeLx + 2,      browY,     2, 1, irisColor, .6);
+      _drawBlock(eyeRx,          browY,     2, 1, irisColor, .6);
+      _drawBlock(eyeRx + 2,      browY + 1, 2, 1, irisColor, .6);
+    } else if (faceState === STATE.FOLLOW) {
+      // Raised slight — happy
+      _drawBlock(eyeLx,     browY, EYE_W, 1, irisColor, .4);
+      _drawBlock(eyeRx,     browY, EYE_W, 1, irisColor, .4);
+    } else {
+      // Flat neutral
+      _drawBlock(eyeLx,     browY + 1, EYE_W, 1, C.eye_bg);
+      _drawBlock(eyeRx,     browY + 1, EYE_W, 1, C.eye_bg);
+    }
+  }
+
+  // ── Mouth ──
+  const mouthY = fy + 12;
+  const mouthX = fx + 2;
+  const mouthW = FACE_W - 4;
+
+  if (faceState === STATE.OFFLINE) {
+    // Single dim line
+    _drawBlock(mouthX, mouthY, mouthW, 1, C.mouth);
+  } else if (faceState === STATE.FOLLOW) {
+    // Smile — curved up at ends
+    _drawBlock(mouthX,         mouthY + 1, 2,         1, C.mouth_hi);
+    _drawBlock(mouthX + 2,     mouthY,     mouthW - 4, 1, C.mouth_hi);
+    _drawBlock(mouthX + mouthW - 2, mouthY + 1, 2,     1, C.mouth_hi);
+  } else if (faceState === STATE.SEARCH || faceState === STATE.ALERT) {
+    // Frown — curved down at ends
+    _drawBlock(mouthX,         mouthY,     2,          1, C.mouth_hi);
+    _drawBlock(mouthX + 2,     mouthY + 1, mouthW - 4, 1, C.mouth_hi);
+    _drawBlock(mouthX + mouthW - 2, mouthY, 2,          1, C.mouth_hi);
+  } else if (faceState === STATE.BLOCK) {
+    // Open O
+    _drawBlock(mouthX + 1, mouthY,     mouthW - 2, 1, C.mouth_hi);
+    _drawBlock(mouthX,     mouthY + 1, 1,          2, C.mouth_hi);
+    _drawBlock(mouthX + mouthW - 1, mouthY + 1, 1, 2, C.mouth_hi);
+    _drawBlock(mouthX + 1, mouthY + 3, mouthW - 2, 1, C.mouth_hi);
+  } else if (faceState === STATE.SPEAK) {
+    // Talking — animated open/close
+    const phase = _mouthPhase;
+    const openH = Math.round(1 + 2 * Math.abs(Math.sin(phase)));
+    _drawBlock(mouthX,     mouthY,     mouthW, 1,     C.mouth_hi);
+    if (openH > 1) {
+      _drawBlock(mouthX,     mouthY + 1, 1,     openH - 1, C.mouth_hi);
+      _drawBlock(mouthX + mouthW - 1, mouthY + 1, 1, openH - 1, C.mouth_hi);
+    }
+    if (openH > 2) {
+      _drawBlock(mouthX + 1, mouthY + openH, mouthW - 2, 1, C.mouth_hi);
+    }
+  } else {
+    // Neutral — flat line
+    _drawBlock(mouthX, mouthY, mouthW, 1, C.mouth_hi);
+  }
+
+  // ── Nose (subtle 2-dot) ──
+  if (faceState !== STATE.OFFLINE) {
+    const noseY = fy + 9;
+    _drawBlock(cx - 1, noseY, 1, 1, C.eye_bg);
+    _drawBlock(cx + 1, noseY, 1, 1, C.eye_bg);
+  }
+}
+
+// ── Animation loop ──────────────────────────────────────────────────────────
+let _lastFrame = 0;
+
+function _animate(now) {
+  requestAnimationFrame(_animate);
+  const dt = now - _lastFrame;
+  _lastFrame = now;
+
+  // Blink
+  const shouldBlink = faceState !== STATE.OFFLINE && faceState !== STATE.BLOCK;
+  if (shouldBlink) {
+    _blinkT += dt;
+    if (_blinkStart === 0 && _blinkT > _nextBlink) {
+      _blinkStart = now;
+      _nextBlink = 3000 + Math.random() * 4000;
+      _blinkT = 0;
+    }
+    if (_blinkStart > 0) {
+      const elapsed = now - _blinkStart;
+      if (elapsed < BLINK_DUR / 2) {
+        _blinkOpen = 1 - elapsed / (BLINK_DUR / 2);
+      } else if (elapsed < BLINK_DUR) {
+        _blinkOpen = (elapsed - BLINK_DUR / 2) / (BLINK_DUR / 2);
+      } else {
+        _blinkOpen = 1;
+        _blinkStart = 0;
+      }
+    }
+  } else {
+    _blinkOpen = 1;
+    _blinkStart = 0;
+  }
+
+  // Pupil movement
+  if (faceState === STATE.FOLLOW) {
+    _targetPX = _personDir * 1.5;
+    _targetPY = 0;
+  } else if (faceState === STATE.SEARCH) {
+    _scanT += dt;
+    if (_scanT > 900) { _scanDir *= -1; _scanT = 0; }
+    _targetPX = _scanDir * 1.5;
+    _targetPY = 0;
+  } else if (faceState === STATE.IDLE || faceState === STATE.DETECT) {
+    _scanT += dt;
+    if (_scanT > 3000 + Math.random() * 2000) {
+      _targetPX = (Math.random() - .5) * 1.5;
+      _targetPY = (Math.random() - .5) * 0.8;
+      _scanT = 0;
+    }
+  } else {
+    _targetPX = 0;
+    _targetPY = 0;
+  }
+  const lf = Math.min(1, dt * 0.006);
+  _pupilX += (_targetPX - _pupilX) * lf;
+  _pupilY += (_targetPY - _pupilY) * lf;
+
+  // Mouth speak animation
+  if (faceState === STATE.SPEAK) {
+    _mouthPhase += dt * 0.012;
+  } else {
+    _mouthPhase = 0;
+  }
+
+  _drawFace(now);
+}
+requestAnimationFrame(_animate);
+
+// ── WebSocket telemetry ──────────────────────────────────────────────────────
+let _ws = null;
+let _wsReconnectTimer = null;
+let _lastTelemetry = null;
+
+function _updateDots(connected) {
+  document.getElementById('dot-ws').className = 'dot ' + (connected ? 'ok' : 'err');
+}
+
+function _applyTelemetry(d) {
+  _lastTelemetry = d;
+  // Dots
+  document.getElementById('dot-serial').className = 'dot ' + (d.serial_connected ? 'ok' : 'err');
+  document.getElementById('dot-follow').className  = 'dot ' + (d.tracking_enabled ? 'ok' : d.tracking_detect_only ? 'warn' : '');
+  document.getElementById('dot-person').className  = 'dot ' + (d.person_detected ? 'ok' : '');
+
+  // Uptime
+  if (d.uptime_s != null) {
+    const h = Math.floor(d.uptime_s / 3600), m = Math.floor((d.uptime_s % 3600) / 60);
+    document.getElementById('uptime-txt').textContent =
+      (h ? h + 'h ' : '') + m + 'm';
+  }
+
+  // Face state — priority order (highest first)
+  const alerts = d.alerts || [];
+  const hasCrit = alerts.some(a => a && a.severity === 'crit');
+  const guardState = d.guard_state || 'DISARMED';
+
+  let newState = STATE.IDLE;
+  if (!d.serial_connected) {
+    newState = STATE.OFFLINE;
+  } else if (hasCrit || guardState === 'ALERT') {
+    // System critical alert OR guard intruder alert → CRITICAL expression
+    newState = STATE.ALERT;
+  } else if (guardState === 'ARMED' || guardState === 'ARMING') {
+    // Guard watching the door — scanning expression
+    newState = STATE.SEARCH;
+  } else if (d.forward_blocked) {
+    newState = STATE.BLOCK;
+  } else if (d.tracking_enabled) {
+    newState = d.person_detected ? STATE.FOLLOW : STATE.SEARCH;
+    if (d.person_detected) {
+      _personDir = 0;
+    }
+  } else if (d.tracking_detect_only) {
+    newState = STATE.DETECT;
+  } else {
+    newState = STATE.IDLE;
+  }
+
+  // Don't interrupt speaking
+  if (Date.now() < _speakUntil && newState !== STATE.BLOCK) {
+    newState = STATE.SPEAK;
+  }
+
+  setState(newState);
+
+  // Mode label
+  const labels = {idle:'IDLE',detect:'DETECT',follow:'FOLLOW',search:'SEARCHING',
+                  block:'STOP',speak:'SPEAKING',alert:'ALERT!',offline:'OFFLINE'};
+  document.getElementById('mode-label').textContent = labels[newState] || newState.toUpperCase();
+
+  // Audio mode button
+  const mode = d.audio_mode || '';
+  const btn = document.getElementById('btn-audio-route');
+  btn.textContent = mode === 'ROVER_A32' ? 'A32 ✓' : mode === 'BUDS' ? 'BUDS' : 'ROUTE';
+  btn.classList.toggle('audio-active', mode === 'ROVER_A32');
+
+  // Alerts bar
+  if (alerts.length > 0) {
+    const msg = alerts[alerts.length - 1].msg || '';
+    _alertMsg = msg.length > 60 ? msg.slice(0, 57) + '…' : msg;
+  } else {
+    _alertMsg = '';
+  }
+  document.getElementById('alert-bar').textContent = _alertMsg;
+}
+
+function _connectWS() {
+  if (_ws && _ws.readyState <= 1) return;
+  _ws = new WebSocket(WS_URL);
+  _ws.onopen  = () => { _updateDots(true); clearTimeout(_wsReconnectTimer); _dbg.wss = 'connected'; _dbgUpdate(); };
+  _ws.onclose = () => {
+    _updateDots(false);
+    setState(STATE.OFFLINE);
+    _dbg.wss = 'disconnected'; _dbgUpdate();
+    _wsReconnectTimer = setTimeout(_connectWS, 3000);
+  };
+  _ws.onerror = () => {};
+  _ws.onmessage = (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'telemetry') _applyTelemetry(d);
+    } catch (_) {}
+  };
+
+  // Keepalive ping
+  setInterval(() => {
+    if (_ws && _ws.readyState === 1) {
+      _ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, 5000);
+}
+_connectWS();
+
+// ── WebSocket audio (receive PCM frames from Pi proactive speech) ─────────
+let _wsAudio = null;
+let _audioCtx = null;
+let _nextPlayTime = 0;
+
+function _getAudioCtx() {
+  if (!_audioCtx) {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  }
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+
+function _playPcmFrame(arrayBuffer) {
+  try {
+    const ac = _getAudioCtx();
+    const int16 = new Int16Array(arrayBuffer);
+    const f32   = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
+    const audioBuf = ac.createBuffer(1, f32.length, 16000);
+    audioBuf.copyToChannel(f32, 0);
+    const src = ac.createBufferSource();
+    src.buffer = audioBuf;
+    src.connect(ac.destination);
+    const now = ac.currentTime;
+    const start = Math.max(now, _nextPlayTime);
+    src.start(start);
+    _nextPlayTime = start + audioBuf.duration;
+    // Mark as speaking
+    _speakUntil = Date.now() + Math.ceil(audioBuf.duration * 1000) + 200;
+    setState(STATE.SPEAK);
+  } catch (e) {
+    console.warn('PCM playback error', e);
+  }
+}
+
+function _connectAudioWS() {
+  if (_wsAudio && _wsAudio.readyState <= 1) return;
+  _wsAudio = new WebSocket(WSA_URL);
+  _wsAudio.binaryType = 'arraybuffer';
+  _wsAudio.onmessage = (e) => {
+    if (e.data instanceof ArrayBuffer) _playPcmFrame(e.data);
+  };
+  _wsAudio.onclose = () => setTimeout(_connectAudioWS, 4000);
+  _wsAudio.onerror = () => {};
+}
+_connectAudioWS();
+
+// ── Debug overlay — remove before final demo ─────────────────────────────────
+// DEBUG OVERLAY — remove before final demo
+const _dbg = { mic: 'pending', vad: 'idle', last: '—', wss: 'disconnected' };
+
+function _dbgUpdate() {
+  document.getElementById('dbg-mic').textContent  = _dbg.mic;
+  document.getElementById('dbg-vad').textContent  = _dbg.vad;
+  const last = _dbg.last;
+  document.getElementById('dbg-last').textContent = last.length > 40 ? last.slice(0, 40) : last;
+  document.getElementById('dbg-wss').textContent  = _dbg.wss;
+  document.getElementById('dbg-ssl').textContent  = window.location.protocol;
+}
+
+function dbgToggle() {
+  const p = document.getElementById('dbg-panel');
+  p.style.display = p.style.display === 'none' ? '' : 'none';
+}
+
+_dbgUpdate();
+
+// ── Voice recording ──────────────────────────────────────────────────────────
+let _mediaRecorder = null;
+let _audioChunks   = [];
+let _recording     = false;
+let _voicePending  = false;
+
+function toggleVoice() {
+  if (_recording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+// Detect best supported audio format for this browser/device
+function _bestMimeType() {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/ogg;codecs=opus',
+    'audio/ogg',
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return '';  // let browser pick
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _dbg.mic = 'granted'; _dbg.vad = 'recording'; _dbgUpdate();
+    const mimeType = _bestMimeType();
+    _dbg.last = 'fmt:' + (mimeType || 'default'); _dbgUpdate();
+    const opts = mimeType ? { mimeType } : {};
+    _mediaRecorder = new MediaRecorder(stream, opts);
+    const actualMime = _mediaRecorder.mimeType || mimeType;
+    _audioChunks = [];
+    _mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) _audioChunks.push(e.data); };
+    _mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      _dbg.vad = 'processing'; _dbgUpdate();
+      const blob = new Blob(_audioChunks, { type: actualMime });
+      _audioChunks = [];
+      await _sendVoice(blob, actualMime);
+    };
+    _mediaRecorder.start(200);
+    _recording = true;
+    document.getElementById('btn-mic').classList.add('recording');
+    document.getElementById('btn-mic').textContent = '■ STOP';
+  } catch (e) {
+    _dbg.mic = e.name === 'NotAllowedError' ? 'denied' : 'error:' + e.name;
+    _dbg.vad = 'idle'; _dbgUpdate();
+    _showBubble('rover', 'Microphone unavailable: ' + e.message);
+  }
+}
+
+function stopRecording() {
+  if (!_recording || !_mediaRecorder) return;
+  _recording = false;
+  _mediaRecorder.stop();
+  document.getElementById('btn-mic').classList.remove('recording');
+  document.getElementById('btn-mic').textContent = 'MIC';
+}
+
+const _TIMEOUT_TRANSCRIBE_MS = 35000;
+const _TIMEOUT_AGENT_MS      = 65000;
+const _TIMEOUT_SPEAK_MS      = 35000;
+
+function _fetchWithTimeout(url, opts, timeoutMs) {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: ctrl.signal })
+    .finally(() => clearTimeout(tid));
+}
+
+async function _sendVoice(blob, mimeType) {
+  if (_voicePending) return;
+  _voicePending = true;
+  try {
+    // 1. Transcribe
+    const ext = mimeType.includes('mp4') ? 'mp4'
+              : mimeType.includes('ogg')  ? 'ogg' : 'webm';
+    const fd = new FormData();
+    fd.append('audio', blob, 'voice.' + ext);
+    fd.append('lang', 'en');
+    _showBubble('user', '…');
+    _dbg.last = 'transcribing…'; _dbgUpdate();
+
+    let r1;
+    try {
+      r1 = await _fetchWithTimeout(
+        API_BASE + '/api/voice/transcribe', { method: 'POST', body: fd },
+        _TIMEOUT_TRANSCRIBE_MS
+      );
+    } catch (e) {
+      _dbg.last = 'transcribe failed: ' + e.message.slice(0, 30); _dbgUpdate();
+      // single retry after 2 s
+      await new Promise(res => setTimeout(res, 2000));
+      _dbg.last = 'transcribe retry…'; _dbgUpdate();
+      try {
+        r1 = await _fetchWithTimeout(
+          API_BASE + '/api/voice/transcribe', { method: 'POST', body: fd },
+          _TIMEOUT_TRANSCRIBE_MS
+        );
+      } catch (e2) {
+        _dbg.last = 'transcribe err(retry): ' + e2.message.slice(0, 25); _dbgUpdate();
+        _hideBubble(); _voicePending = false; return;
+      }
+    }
+
+    const d1 = await r1.json();
+    const transcript = (d1.transcript || '').trim();
+    const detectedLang = d1.language || 'en';
+    if (!transcript) {
+      _dbg.last = d1.error ? 'stt err: ' + d1.error.slice(0, 30) : 'empty transcript'; _dbgUpdate();
+      _hideBubble(); _voicePending = false; return;
+    }
+    _dbg.last = 'transcribed: ' + transcript.slice(0, 22); _dbgUpdate();
+    _showBubble('user', transcript);
+
+    // 2. Agent — spoken=true → ROVER personality
+    const agentBody = JSON.stringify({ message: transcript, spoken: true, lang: detectedLang || 'en' });
+    _dbg.last = 'sending to agent…'; _dbgUpdate();
+
+    let agentResp;
+    try {
+      agentResp = await _fetchWithTimeout(
+        API_BASE + '/api/agent/chat',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: agentBody },
+        _TIMEOUT_AGENT_MS
+      );
+    } catch (e) {
+      _dbg.last = 'agent failed: ' + e.message.slice(0, 30); _dbgUpdate();
+      await new Promise(res => setTimeout(res, 2000));
+      _dbg.last = 'agent retry…'; _dbgUpdate();
+      try {
+        agentResp = await _fetchWithTimeout(
+          API_BASE + '/api/agent/chat',
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: agentBody },
+          _TIMEOUT_AGENT_MS
+        );
+      } catch (e2) {
+        _dbg.last = 'agent err(retry): ' + e2.message.slice(0, 25); _dbgUpdate();
+        _voicePending = false; return;
+      }
+    }
+    if (!agentResp.ok) {
+      _dbg.last = 'agent HTTP ' + agentResp.status; _dbgUpdate();
+      _voicePending = false; return;
+    }
+    const d2 = await agentResp.json();
+    const reply = (d2.reply || '').trim();
+    if (!reply) { _voicePending = false; return; }
+    _showBubble('rover', reply);
+
+    // 3. TTS — speak reply, audio comes back as WAV stream
+    _dbg.last = 'speaking…'; _dbgUpdate();
+    let r3;
+    try {
+      r3 = await _fetchWithTimeout(
+        API_BASE + '/api/voice/speak',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: reply.slice(0, 500), lang: 'en' }),
+        },
+        _TIMEOUT_SPEAK_MS
+      );
+    } catch (e) {
+      _dbg.last = 'speak failed: ' + e.message.slice(0, 30); _dbgUpdate();
+      _voicePending = false; return;
+    }
+    if (r3.ok) {
+      const wav = await r3.arrayBuffer();
+      const ac  = _getAudioCtx();
+      try {
+        const decoded = await ac.decodeAudioData(wav);
+        const src = ac.createBufferSource();
+        src.buffer = decoded;
+        src.connect(ac.destination);
+        src.start();
+        _speakUntil = Date.now() + Math.ceil(decoded.duration * 1000) + 200;
+        setState(STATE.SPEAK);
+        src.onended = () => setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+      } catch (_) {}
+    }
+  } catch (e) {
+    _dbg.last = 'err: ' + e.message.slice(0, 38); _dbgUpdate();
+    _showBubble('rover', 'Error: ' + e.message);
+  } finally {
+    _dbg.vad = 'idle'; _dbgUpdate();
+    _voicePending = false;
+  }
+}
+
+function _showBubble(cls, text) {
+  const el = document.getElementById('chat-bubble');
+  el.className = cls;
+  el.textContent = text;
+  el.style.display = 'block';
+  clearTimeout(_bubbleTimer);
+  _bubbleTimer = setTimeout(_hideBubble, 12000);
+}
+
+function _hideBubble() {
+  document.getElementById('chat-bubble').style.display = 'none';
+}
+let _bubbleTimer = null;
+
+// ── Audio routing toggle ────────────────────────────────────────────────────
+async function toggleAudioRoute() {
+  const current = (_lastTelemetry || {}).audio_mode || 'ROVER_A32';
+  const next    = current === 'ROVER_A32' ? 'BUDS' : 'ROVER_A32';
+  try {
+    await fetch(API_BASE + '/api/audio/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: next }),
+    });
+  } catch (e) {
+    _showBubble('rover', 'Route switch failed: ' + e.message);
+  }
+}
+
+// ── Service worker registration ──────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/face/sw.js', { scope: '/face/' }).catch(() => {});
+}
+
+// Unlock audio context on first touch (mobile browser requirement)
+document.addEventListener('touchstart', () => _getAudioCtx(), { once: true });
+</script>
+</body>
+</html>

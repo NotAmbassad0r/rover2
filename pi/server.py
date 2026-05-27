@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -54,9 +55,28 @@ from agent import RoverAgent
 from vlm_engine import VLMEngine
 from ws_control import ControlHub, build_telemetry
 
+try:
+    from guard import GuardController as _GuardController
+    _GUARD = True
+except ImportError:
+    _GUARD = False
+
+try:
+    from audio_router import AudioRouter as _AudioRouter
+    _AUDIO_ROUTER = True
+except ImportError:
+    _AUDIO_ROUTER = False
+
+try:
+    import voice_engine as _voice_engine
+    _VOICE = True
+except ImportError:
+    _VOICE = False
+
 logger = logging.getLogger(__name__)
 _START = time.monotonic()
 _STATIC = Path(__file__).parent / "web" / "static"
+_FACE  = Path(__file__).parent / "face"
 
 # (left_sign, right_sign) before firmware negation — tuned for Ultimate 2.0 wiring.
 # Override in config.yaml → drive.direction_map if your chassis differs.
@@ -109,6 +129,7 @@ def create_app(
     body_tracker: BodyTracker | None = None,
     vlm_engine: VLMEngine | None = None,
     rover_agent: RoverAgent | None = None,
+    guard_controller: Any | None = None,
 ) -> FastAPI:
     drive_cfg = config.get("drive", {})
     default_speed = int(drive_cfg.get("default_speed", 120))
@@ -135,10 +156,33 @@ def create_app(
         body_tracker=body_tracker,
         config=config,
         cam_idle=cam_idle,
+        guard_controller=guard_controller,
     )
 
+    # Configure voice engine from runtime config (voice model, length_scale, sox)
+    if _VOICE:
+        _voice_engine.configure(config)
+
+    # Audio router — lazy construction (skips if audio_router module not installed)
+    _audio_cfg = config.get("audio_routing", {})
+    audio_router = _AudioRouter(_audio_cfg) if _AUDIO_ROUTER else None  # type: ignore[assignment]
+
+    # Wire guard speak function now that audio_router is available
+    if guard_controller is not None and audio_router is not None and _VOICE:
+        def _guard_speak_fn(event_key: str) -> None:
+            _voice_engine.speak_event(event_key, audio_router=audio_router)
+        guard_controller.set_speak_fn(_guard_speak_fn)
+
     app = FastAPI(title="ROVER2", version="2.0.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+    if _FACE.exists():
+        app.mount("/face", StaticFiles(directory=_FACE, html=True), name="face")
     config_path = Path(__file__).parent / "config.yaml"
 
     import collections as _collections
@@ -181,10 +225,25 @@ def create_app(
     _METRICS_RETENTION_DAYS = int(_metrics_cfg.get("retention_days", 7))
     _PURGE_INTERVAL = max(1, int(3600 / _METRICS_INTERVAL_S))  # purge ~once/hour
 
+    _mem_cfg = config.get("memory_watchdog", {})
+    _MEM_TARGET_MB = float(_mem_cfg.get("target_mb", 300))
+    _MEM_WARN_MB = float(_mem_cfg.get("warn_mb", 280))
+    _MEM_CRITICAL_MB = float(_mem_cfg.get("critical_mb", 350))
+    _MEM_EMERGENCY_MB = float(_mem_cfg.get("emergency_mb", 400))
+    _MEM_WARN_COOLDOWN_S = float(_mem_cfg.get("warn_cooldown_s", 1800))
+    _MEM_CRITICAL_COOLDOWN_S = float(_mem_cfg.get("critical_cooldown_s", 300))
+
     # Alert state — updated each metrics tick, pushed via WebSocket extra
     _active_alerts: list[dict] = []
     _cpu_high_since: float | None = None
     _thermal_alert: dict | None = None  # set by /api/services on-demand evaluation
+
+    # Proactive speech transition tracking
+    _prev_person_detected: bool = False
+    _prev_tracking_active: bool = False
+    _prev_forward_blocked: bool = False
+    _prev_thermal_level: str = "cool"
+    _prev_camera_sleeping: bool = False
 
     async def _hailo_recovery_task() -> None:
         if body_tracker is None:
@@ -390,30 +449,38 @@ def create_app(
                 # Memory watchdog
                 proc_mem = points.get("process_memory_mb")
                 if proc_mem is not None:
-                    if proc_mem > 200:
+                    if proc_mem > _MEM_EMERGENCY_MB:
                         new_alerts.append({
                             "metric": "process_memory_mb", "value": round(proc_mem, 1),
                             "severity": "crit", "ts": int(time.time()),
-                            "msg": f"rover2-api RSS {proc_mem:.0f} MB — critical (target <150 MB)",
+                            "msg": f"rover2-api RSS {proc_mem:.0f} MB — emergency (budget: {_MEM_TARGET_MB:.0f} MB)",
                         })
-                        _add_fault("memory", f"RSS {proc_mem:.0f} MB — critical", "alert")
+                        _add_fault("memory", f"RSS {proc_mem:.0f} MB — emergency", "alert")
                         _mem_warn_ts = now_m
-                    elif proc_mem > 150:
-                        new_alerts.append({
-                            "metric": "process_memory_mb", "value": round(proc_mem, 1),
-                            "severity": "warn", "ts": int(time.time()),
-                            "msg": f"rover2-api RSS {proc_mem:.0f} MB — above target (target <150 MB)",
-                        })
-                        if now_m - _mem_warn_ts >= 1800:
+                        if _VOICE and audio_router is not None:
+                            _voice_engine.speak_event("MEMORY_CRITICAL", {}, audio_router)
+                    elif proc_mem > _MEM_CRITICAL_MB:
+                        if now_m - _mem_warn_ts >= _MEM_CRITICAL_COOLDOWN_S:
+                            new_alerts.append({
+                                "metric": "process_memory_mb", "value": round(proc_mem, 1),
+                                "severity": "crit", "ts": int(time.time()),
+                                "msg": f"rover2-api RSS {proc_mem:.0f} MB — critical (budget: {_MEM_TARGET_MB:.0f} MB)",
+                            })
+                            _add_fault("memory", f"RSS {proc_mem:.0f} MB — critical", "alert")
                             _mem_warn_ts = now_m
+                            if _VOICE and audio_router is not None:
+                                _voice_engine.speak_event("MEMORY_CRITICAL", {}, audio_router)
+                    elif proc_mem > _MEM_WARN_MB:
+                        if now_m - _mem_warn_ts >= _MEM_WARN_COOLDOWN_S:
+                            new_alerts.append({
+                                "metric": "process_memory_mb", "value": round(proc_mem, 1),
+                                "severity": "warn", "ts": int(time.time()),
+                                "msg": f"rover2-api RSS {proc_mem:.0f} MB — approaching budget ({_MEM_TARGET_MB:.0f} MB)",
+                            })
                             _add_fault("memory", f"RSS {proc_mem:.0f} MB — above target", "alert")
-                    elif proc_mem > 130 and now_m - _mem_warn_ts >= 1800:
-                        _mem_warn_ts = now_m
-                        new_alerts.append({
-                            "metric": "process_memory_mb", "value": round(proc_mem, 1),
-                            "severity": "warn", "ts": int(time.time()),
-                            "msg": f"rover2-api RSS {proc_mem:.0f} MB — approaching limit",
-                        })
+                            _mem_warn_ts = now_m
+                            if _VOICE and audio_router is not None:
+                                _voice_engine.speak_event("MEMORY_WARN", {}, audio_router)
 
                 # Ease Pi thermals: sample less often when CPU is already high
                 if cpu_v is not None and cpu_v >= _METRICS_CPU_HOT_PCT:
@@ -428,7 +495,46 @@ def create_app(
                     all_alerts.append(_camera_alert)
                 if _ollama_alert:
                     all_alerts.append(_ollama_alert)
-                hub.set_telemetry_extra({"alerts": all_alerts, "ws_client_count": hub.client_count})
+                # Proactive speech event detection
+                nonlocal _prev_person_detected, _prev_tracking_active
+                nonlocal _prev_forward_blocked, _prev_thermal_level, _prev_camera_sleeping
+                if _VOICE and audio_router is not None:
+                    if body_tracker is not None:
+                        _st2 = body_tracker.get_state()
+                        _pd  = bool(_st2.get("person_detected"))
+                        _ta  = bool(_st2.get("enabled")) or bool(_st2.get("detect_only"))
+                        if _pd and not _prev_person_detected and _ta:
+                            _voice_engine.speak_event("PERSON_FOUND", {}, audio_router)
+                        elif not _pd and _prev_person_detected and _ta:
+                            _voice_engine.speak_event("PERSON_LOST", {}, audio_router)
+                        _prev_person_detected = _pd
+                        _prev_tracking_active = _ta
+                    if safety_monitor is not None:
+                        _fb = safety_monitor.forward_blocked
+                        if _fb and not _prev_forward_blocked:
+                            if body_tracker is not None and body_tracker.enabled:
+                                _voice_engine.speak_event("OBSTACLE_DETECTED", {}, audio_router)
+                        _prev_forward_blocked = _fb
+                    _t_temp = points.get("temp_cpu_thermal")
+                    if _t_temp is not None:
+                        _t_level = "crit" if _t_temp >= 80 else ("warn" if _t_temp >= 70 else "cool")
+                        if _t_level != _prev_thermal_level:
+                            if _t_level == "warn":
+                                _voice_engine.speak_event("THERMAL_WARN", {}, audio_router)
+                            elif _t_level == "crit":
+                                _voice_engine.speak_event("THERMAL_CRITICAL", {}, audio_router)
+                        _prev_thermal_level = _t_level
+                    if cam_idle is not None:
+                        _cs = cam_idle.sleeping
+                        if _cs and not _prev_camera_sleeping:
+                            _voice_engine.speak_event("CAMERA_SLEEPING", {}, audio_router)
+                        _prev_camera_sleeping = _cs
+
+                hub.set_telemetry_extra({
+                    "alerts": all_alerts,
+                    "ws_client_count": hub.client_count,
+                    "audio_mode": audio_router.get_mode() if audio_router else None,
+                })
                 # ───────────────────────────────────────────────────────────
 
                 purge_tick += 1
@@ -438,25 +544,107 @@ def create_app(
             except Exception as exc:
                 logger.debug("metrics_loop error: %s", exc)
 
+    async def _boot_speech_task() -> None:
+        await asyncio.sleep(30.0)
+        if _VOICE and audio_router is not None:
+            _voice_engine.speak_event("BOOT_COMPLETE", {}, audio_router)
+
+    async def _warmup_hailo(max_attempts: int = 5, delay_s: float = 10.0) -> None:
+        """Retry warmup ping to hailo-ollama until it responds or attempts exhausted."""
+        import httpx as _httpx
+        hailo_cfg = config.get("hailo_ollama", {})
+        if not hailo_cfg.get("enabled", False):
+            return
+        h_base  = hailo_cfg.get("host", "http://localhost:8000")
+        h_model = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with _httpx.AsyncClient(timeout=10.0) as c:
+                    # Use a flat single-word prompt — newlines crash hailo-ollama oatpp tokenizer
+                    r = await c.post(
+                        f"{h_base}/api/generate",
+                        json={"model": h_model, "prompt": "hi",
+                              "stream": False, "options": {"num_predict": 1}},
+                    )
+                    if r.status_code == 200:
+                        logger.info("hailo-ollama: warmup OK on attempt %d/%d", attempt, max_attempts)
+                        if rover_agent is not None:
+                            rover_agent._available = True
+                            rover_agent._last_availability_check = time.monotonic()
+                        return
+                    logger.debug("hailo-ollama: warmup HTTP %d on attempt %d", r.status_code, attempt)
+            except Exception as exc:
+                logger.info("hailo-ollama: warmup attempt %d/%d: %s", attempt, max_attempts, exc)
+            if attempt < max_attempts:
+                await asyncio.sleep(delay_s)
+        logger.warning(
+            "hailo-ollama: warmup failed after %d attempts — CPU fallback active until it responds",
+            max_attempts,
+        )
+
     @app.on_event("startup")
     async def _start_metrics() -> None:
         asyncio.create_task(_metrics_loop())
         if rover_agent is not None:
             asyncio.create_task(rover_agent.warmup())
+        asyncio.create_task(_warmup_hailo(max_attempts=5, delay_s=10.0))
         if cam_idle is not None:
             _ultra_poll_s = float(config.get("ultrasonic", {}).get("poll_interval_s", 0.5))
             asyncio.create_task(cam_idle.run(megapi, body_tracker, _ultra_poll_s))
+        if audio_router is not None:
+            await audio_router.start()
+            asyncio.create_task(_boot_speech_task())
+        if guard_controller is not None:
+            await guard_controller.start()
+
+    @app.on_event("shutdown")
+    async def _shutdown() -> None:
+        if audio_router is not None:
+            await audio_router.stop()
+        if guard_controller is not None:
+            await guard_controller.stop()
 
     @app.websocket("/ws")
     async def websocket_control(websocket: WebSocket) -> None:
         await websocket.accept()
         await hub.serve(websocket)
 
+    @app.websocket("/ws/audio")
+    async def websocket_audio(websocket: WebSocket) -> None:
+        """Binary PCM stream for A32 PWA audio playback (TTS frames from audio_router)."""
+        await websocket.accept()
+        if audio_router is not None:
+            audio_router.add_ws_audio_client(websocket)
+        try:
+            while True:
+                await websocket.receive_text()  # keep alive; client may send nothing
+        except Exception:
+            pass
+        finally:
+            if audio_router is not None:
+                audio_router.remove_ws_audio_client(websocket)
+
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(
             _STATIC / "index.html",
             headers={"Cache-Control": "no-cache"},
+        )
+
+    @app.get("/rover-ca.crt")
+    async def rover_ca_cert() -> Response:
+        """Serve the ROVER CA certificate for installation on client devices.
+        Download this once on A32 to eliminate cert warnings permanently."""
+        ca_path = Path("/opt/rover2/rover-ca.crt")
+        if not ca_path.exists():
+            raise HTTPException(status_code=404, detail="CA cert not found — run cert generation script on Pi")
+        return Response(
+            content=ca_path.read_bytes(),
+            media_type="application/x-x509-ca-cert",
+            headers={
+                "Content-Disposition": "attachment; filename=rover-ca.crt",
+                "Cache-Control": "no-cache",
+            },
         )
 
     if _CAMERA_PROXY:
@@ -640,6 +828,70 @@ def create_app(
     async def get_alerts_current() -> JSONResponse:
         return JSONResponse({"alerts": _active_alerts, "count": len(_active_alerts)})
 
+    # ── Audio routing ────────────────────────────────────────────────────────
+
+    @app.post("/api/audio/route")
+    async def audio_route(request: Request) -> JSONResponse:
+        """Switch audio target: {"mode": "ROVER_A32"} or {"mode": "BUDS"}."""
+        if audio_router is None:
+            raise HTTPException(status_code=503, detail="audio_router not available")
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+        mode = str(body.get("mode", ""))
+        if mode not in ("ROVER_A32", "BUDS"):
+            return JSONResponse({"status": "error", "message": f"unknown mode: {mode}"}, status_code=400)
+        await audio_router.set_mode(mode)
+        ip, port = audio_router._target()
+        return JSONResponse({"status": "ok", "mode": mode, "target": f"{ip}:{port}"})
+
+    # ── Voice endpoints ──────────────────────────────────────────────────────
+
+    @app.post("/api/voice/transcribe")
+    async def voice_transcribe(
+        audio: UploadFile = File(...),
+        lang: str = Form("auto"),
+    ) -> JSONResponse:
+        """Multipart: field 'audio' (wav/webm) + optional 'lang'. Always returns JSON."""
+        if not _VOICE:
+            return JSONResponse({"transcript": "", "error": "voice_engine not available"})
+        try:
+            audio_bytes = await audio.read()
+            loop = asyncio.get_event_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, _voice_engine.transcribe, audio_bytes, lang),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            result = {"transcript": "", "error": "timeout"}
+        except Exception as exc:
+            result = {"transcript": "", "error": str(exc)}
+        return JSONResponse(result)
+
+    @app.post("/api/voice/speak")
+    async def voice_speak(request: Request) -> StreamingResponse:
+        """JSON {"text": "...", "lang": "en"} → streaming WAV audio."""
+        if not _VOICE:
+            raise HTTPException(status_code=503, detail="voice_engine not available")
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+        text = str(body.get("text", ""))[:500]
+        lang = str(body.get("lang", "en"))
+        if not text:
+            raise HTTPException(status_code=400, detail="text required")
+        loop = asyncio.get_event_loop()
+        def _generate():
+            return b"".join(_voice_engine.speak(text, lang))
+        wav_bytes = await loop.run_in_executor(None, _generate)
+        return StreamingResponse(
+            iter([wav_bytes]),
+            media_type="audio/wav",
+            headers={"Content-Length": str(len(wav_bytes))},
+        )
+
     @app.get("/api/faults")
     async def get_faults() -> JSONResponse:
         return JSONResponse({"faults": list(_fault_history), "count": len(_fault_history)})
@@ -710,10 +962,14 @@ def create_app(
             except Exception:
                 pass
             try:
-                ru = _resource.getrusage(_resource.RUSAGE_SELF)
-                result["memory_rss_mb"] = round(ru.ru_maxrss / 1024, 1)
+                import psutil as _psu
+                result["memory_rss_mb"] = round(_psu.Process().memory_info().rss / (1024 ** 2), 1)
             except Exception:
-                pass
+                try:
+                    ru = _resource.getrusage(_resource.RUSAGE_SELF)
+                    result["memory_rss_mb"] = round(ru.ru_maxrss / 1024, 1)
+                except Exception:
+                    pass
             try:
                 with open("/proc/mounts") as f:
                     for line in f:
@@ -774,12 +1030,31 @@ def create_app(
         else:
             _camera_alert = None
 
+        _rss = disk_mem.get("memory_rss_mb")
+        if _rss is not None:
+            if _rss > _MEM_EMERGENCY_MB:
+                _mem_level = "emergency"
+            elif _rss > _MEM_CRITICAL_MB:
+                _mem_level = "critical"
+            elif _rss > _MEM_WARN_MB:
+                _mem_level = "warn"
+            else:
+                _mem_level = "ok"
+        else:
+            _mem_level = "ok"
         return JSONResponse({
             "services": services,
             "thermal": thermal_data,
             "ollama": {**ollama_probe, "unresponsive_count": _ollama_unresponsive_count},
             "camera_stream": camera_probe,
-            "memory_rss_mb": disk_mem.get("memory_rss_mb"),
+            "memory": {
+                "rss_mb": _rss,
+                "target_mb": _MEM_TARGET_MB,
+                "warn_mb": _MEM_WARN_MB,
+                "critical_mb": _MEM_CRITICAL_MB,
+                "level": _mem_level,
+            },
+            "memory_rss_mb": _rss,
             "disk_root_pct": disk_mem.get("disk_root_pct"),
             "disk_root_free_gb": disk_mem.get("disk_root_free_gb"),
             "disk_opt_pct": disk_mem.get("disk_opt_pct"),
@@ -956,6 +1231,7 @@ def create_app(
         """Agentic chat: model calls tools autonomously, proposes dangerous actions.
 
         Body: {messages: [{role, content}, ...]}
+        Spoken path: {message: "text", spoken: true, lang: "en"} or legacy {messages: [...]}
         Returns: {reply, tool_log, action_proposal}
         """
         if rover_agent is None:
@@ -964,6 +1240,30 @@ def create_app(
             body = await request.json()
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+
+        # Spoken voice path — bypass all fast-path and tool-use, use ROVER personality
+        if body.get("spoken"):
+            # Accept simple {message: "..."} or legacy {messages: [{role, content}]}
+            user_text = ""
+            if body.get("message"):
+                user_text = str(body.get("message", "")).strip()
+            else:
+                messages = body.get("messages", [])
+                user_text = next(
+                    (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
+                )
+            if not user_text:
+                return JSONResponse({"reply": "", "tool_log": [], "action_proposal": None})
+            lang = str(body.get("lang", "en"))
+            try:
+                reply = await asyncio.wait_for(
+                    rover_agent.run_spoken_turn(user_text, lang),
+                    timeout=95.0,
+                )
+            except asyncio.TimeoutError:
+                reply = ""
+            return JSONResponse({"reply": reply, "tool_log": [], "action_proposal": None})
+
         messages = body.get("messages", [])
         if not messages:
             raise HTTPException(status_code=400, detail="messages required")
@@ -1283,6 +1583,7 @@ def create_app(
         )
         payload.pop("type", None)
         payload["ws_client_count"] = hub.client_count
+        payload["audio_mode"] = audio_router.get_mode() if audio_router else None
         return JSONResponse(payload)
 
     @app.post("/api/tracking")
@@ -1320,6 +1621,29 @@ def create_app(
             "detect_only": body_tracker.detect_only,
             "ble_follow_enabled": body_tracker._ble_follow_enabled,
         })
+
+    @app.get("/api/guard/status")
+    async def guard_status() -> JSONResponse:
+        if guard_controller is None:
+            return JSONResponse({"guard_enabled": False, "state": "DISARMED",
+                                 "beacon_rssi": None, "armed_since": None,
+                                 "detections_this_session": 0, "last_detection": None,
+                                 "last_webhook_ok": None, "last_webhook_at": None})
+        return JSONResponse(guard_controller.get_stats())
+
+    @app.post("/api/guard/override")
+    async def guard_override(request: Request) -> JSONResponse:
+        if guard_controller is None:
+            raise HTTPException(status_code=503, detail="guard not configured")
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+        action = str(body.get("action", "")).lower()
+        if action not in ("arm", "disarm", "enable", "disable"):
+            raise HTTPException(status_code=400, detail="action must be arm|disarm|enable|disable")
+        new_state = await guard_controller.manual_override(action)
+        return JSONResponse({"status": "ok", "state": new_state})
 
     @app.post("/api/drive")
     async def drive(request: Request) -> JSONResponse:

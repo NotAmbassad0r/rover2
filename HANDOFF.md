@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-22 (power investigation, lazy Hailo init, arc turns, BLE toggle UI, boot partition hardening)
+Last updated: 2026-05-27 (TTS voice → en_GB-cori-high, _preprocess_for_tts, length_scale 1.05, sox optional)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -119,9 +119,9 @@ Root cause confirmed via PMIC ADC (`vcgencmd pmic_read_adc`):
 ## Architecture
 
 ```
-Browser (index.html)  http://192.168.70.11:8082/
-    → WebSocket ws://<pi>:8082/ws        drive, grip, arm, tracking, telemetry, alerts
-    → HTTP REST /api/*                   drive, diagnostics, scripts, WiFi, AI agent, metrics
+Browser (index.html)  https://192.168.70.11:8082/
+    → WebSocket wss://<pi>:8082/ws       drive, grip, arm, tracking, telemetry, alerts
+    → HTTPS REST /api/*                  drive, diagnostics, scripts, WiFi, AI agent, metrics
     → Camera preview                     http://<pi>:8081/stream  (rover-camera.service)
 
     ── Python services (pi/) ──────────────────────────────────────────────────
@@ -140,6 +140,18 @@ Browser (index.html)  http://192.168.70.11:8082/
     pi/chat_router.py   Regex NL command router (zero-LLM fast path, 14 commands)
     pi/agent.py         RoverAgent: Ollama tool-use agentic loop (20 tools, fast-path)
     pi/vlm_engine.py    VLMEngine: Hailo Qwen2-VL-2B-Instruct scene description
+    pi/voice_engine.py  Piper TTS (binary subprocess) + Whisper STT stub + ROVER personality
+    pi/audio_router.py  UDP audio router (asyncio, zero-CPU idle) + /ws/audio WebSocket bridge
+
+    ── ROVER Face PWA ────────────────────────────────────────────────────────────
+    face/index.html     Samsung Galaxy A32 voxel face (canvas, 8 states, fullscreen portrait)
+    face/manifest.json  PWA manifest (add to home screen)
+    face/sw.js          Cache-first service worker
+
+    ── Piper TTS binary ──────────────────────────────────────────────────────────
+    /opt/rover2/piper/piper            Statically-linked piper binary (RPATH=$ORIGIN)
+    /opt/rover2/voices/en_GB-cori-high.onnx   British English voice model (preferred)
+    /opt/rover2/voices/en_GB-alan-medium.onnx  Fallback voice (still present)
 
     ── Hailo AI HAT+ 2 ───────────────────────────────────────────────────────
     YOLOv8m_h10.hef     Body tracker (FOLLOW / DETECT)  group_id=rover2
@@ -164,9 +176,9 @@ Browser (index.html)  http://192.168.70.11:8082/
 
 ---
 
-## What works (confirmed 2026-05-22)
+## What works (confirmed 2026-05-26)
 
-- D-pad with arc turns (`left: [0,-1]`, `right: [1,0]`) — single wheel turns, works on hard floor
+- D-pad with arc turns (`left: [1,0]`, `right: [0,-1]`) — single wheel turns, works on hard floor; left/right direction corrected 2026-05-26
 - Gripper open/close (PORT4B)
 - **Arm lift** hold up/down + nudge pulse (PORT3B; firmware 1.0.3)
 - Ultrasonic on **PORT_8** (firmware auto-scan)
@@ -182,6 +194,13 @@ Browser (index.html)  http://192.168.70.11:8082/
 - PMIC power logging at Hailo load (`[pre/post-hailo-load]` in journal)
 - Boot partition read-only (`/etc/fstab`: `ro,defaults`) — cmdline.txt protected from corruption
 - `hailo-ollama.service` permanently disabled
+- **ROVER Face PWA** — `/face/` served by rover2-api; voxel face canvas, 8 states, WebSocket telemetry
+- **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice (upgraded 2026-05-27); `POST /api/voice/speak` streams WAV; length_scale 1.05; text preprocessed via `_preprocess_for_tts()` (abbrevs, temperatures, markdown stripped); optional sox post-processing (sox_enabled: false by default)
+- **Proactive speech** — voice_engine.py fires BOOT_COMPLETE, PERSON_FOUND/LOST, OBSTACLE, THERMAL events (debounced 30s, ROVER_A32 mode only)
+- **Audio routing** — `POST /api/audio/route {mode: ROVER_A32|BUDS}`; `GET /api/status` includes `audio_mode`
+- **`/ws/audio`** WebSocket — binary PCM frames from TTS → browser Web Audio API playback
+- **HTTPS** — rover2-api runs with self-signed TLS cert; certs at `/opt/rover2/rover.key` + `rover.crt`; UI auto-selects `wss://`; microphone (getUserMedia) works without chrome://flags on HTTPS
+- **RSS with TTS** — 88 MB base (piper runs as subprocess, zero persistent RSS)
 - **Web TOOLS tab** — diagnostics, script catalog, follow tuning sliders, RESTORE WIFI
 - **Web DIAG tab** — full system diagnostics with charts
 - **Web CHAT tab** — NL commands, VLM, AI agent, 16 presets, voice
@@ -268,7 +287,7 @@ Browser voice/text
 - Note: Samsung UUID `fcf1` is common in dense apartments — many neighbour devices may appear
 
 **Arc turns (hard floor):**
-- `direction_map: left: [0, -1], right: [1, 0]` — one wheel rolls, other stops
+- `direction_map: left: [1, 0], right: [0, -1]` — one wheel rolls, other stops (corrected 2026-05-26)
 - Avoids pivot-turn floor friction (both wheels scrubbing = stalls on smooth floor)
 
 **Ultrasonic safety + follow avoidance:**
@@ -325,16 +344,19 @@ ssh ambassad0r@192.168.250.254 "journalctl -u rover2-api -f"
 
 Verify:
 ```bash
-ssh ambassad0r@192.168.250.254 "curl -s http://localhost:8082/api/status | python3 -m json.tool"
+ssh ambassad0r@192.168.250.254 "curl -sk https://localhost:8082/api/status | python3 -m json.tool"
 # Expect: tracking_available true, tracking_hailo_ready true (only after DETECT/FOLLOW first enabled),
 #         ble_available true, ble_seen true, ble_follow_enabled true
+# Note: -k flag needed for curl with self-signed cert
 ```
 
 ---
 
 ## Web UI
 
-**http://192.168.250.254:8082/** (WiFi) or **http://192.168.70.11:8082/** (eth)
+**https://192.168.250.254:8082/** (WiFi) or **https://192.168.70.11:8082/** (eth)
+
+> **HTTPS only** — rover2-api runs with a self-signed TLS cert. Use `https://`. First visit: accept the cert warning (Advanced → Proceed). The UI auto-selects `wss://` for WebSocket when served over HTTPS.
 
 **Hard-refresh after deploy:** `Ctrl+Shift+R`
 
@@ -383,8 +405,8 @@ drive:
   direction_map:          # arc turns — one wheel, avoids hard-floor friction
     forward: [1, -1]
     back: [-1, 1]
-    left: [0, -1]
-    right: [1, 0]
+    left: [1, 0]          # left motor only — fixed 2026-05-26 (was inverted)
+    right: [0, -1]        # right motor only — fixed 2026-05-26 (was inverted)
 
 websocket:
   heartbeat_timeout_s: 10.0   # 10s tolerates WiFi jitter (was 4s)
@@ -437,6 +459,13 @@ ble_tracker:
 8. **Pi TCP/443 blocked at gateway** — pip fails for external packages. deploy_pi.sh sideloads wheels.
 9. **BLE MAC randomisation** — Android 10+ randomises BLE MAC every ~15 min. Always match by UUID.
 10. **Browser cache** — Hard-refresh (`Ctrl+Shift+R`) after every deploy.
+11. **piper-phonemize has no cp313 wheel** — Python piper-tts API unusable on Pi's Python 3.13. Solution: use `piper` binary at `/opt/rover2/piper/piper` (statically linked, installed by `deploy_pi.sh`). voice_engine.py calls it as a subprocess.
+12. **voices/ excluded from rsync** — `deploy_pi.sh` uses `--exclude 'voices/'` to protect downloaded models from `--delete`. Voice model lives at `/opt/rover2/voices/` on Pi only.
+13. **STT memory cost** — `openai-whisper` depends on `torch` (~800 MB RSS when loaded). Once transcribe() is called, rover2-api RSS spikes from ~80 MB to ~912 MB. The memory watchdog correctly fires critical alerts. Whisper is lazy-loaded (only on first transcribe call). Restart rover2-api to recover memory. Long-term fix: switch to `faster-whisper` (ctranslate2, ~150 MB RSS) — needs ctranslate2/av aarch64 wheels sideloaded. STT endpoint (`/api/voice/transcribe`) now returns valid JSON always — never 500.
+14. **Whisper import path** — `openai-whisper` is in `/home/ambassad0r/.local/lib/python3.13/site-packages/` (installed with `pip install --user`). `tqdm` and `torch` are in `/usr/lib/python3/dist-packages/` (apt/system pip). `voice_engine._load_whisper()` adds both paths to `sys.path` before `import whisper`.
+15. **Face PWA on A32** — server now runs HTTPS, so getUserMedia works without `chrome://flags`. Accept the self-signed cert warning once on first visit to `https://192.168.250.254:8082/`.
+16. **HTTPS self-signed cert** — Browsers warn on first visit. Accept once (Advanced → Proceed). Curl on Pi needs `-k` flag. Cert files: `/opt/rover2/rover.key` + `rover.crt` (owned root:ambassad0r, mode 640). Not in repo — regenerate with `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout rover.key -out rover.crt -days 3650 -nodes -subj "/CN=rover"` if lost.
+17. **Left/right direction was inverted** — Fixed 2026-05-26 by swapping direction_map in config.yaml: `left: [1,0]`, `right: [0,-1]`. Root cause: PORT1B is wired to the physical right motor, so firmware's "left motor" is actually the right wheel. D-pad, follow, BLE turns, and obstacle avoidance all fixed by this single config change.
 11. **MegaPi on AA batteries** — Brand new AAs may not provide enough current for arc turns at speed 210. If motors stall, use MegaPi mains or reduce turn_speed.
 
 ---
@@ -450,7 +479,7 @@ ble_tracker:
 | T0 — Preflight | **PASS** |
 | T1.1 — Hailo available | **PASS** |
 | T1.2 — Person detect | **PASS** |
-| T1.3–T1.7 — Follow behaviour | Partially tested; rover correctly turns/advances/holds |
+| T1.3–T1.7 — Follow behaviour | Re-test required — left/right direction was inverted until 2026-05-26 fix |
 | T2 — Drive / arm / safety | Not formally signed off |
 | T3 — BLE fallback | BLE auto-activates confirmed; UI toggle confirmed |
 | T4 — Sign-off | Pending |
@@ -500,7 +529,9 @@ body_tracker:
 Read HANDOFF.md in full before making changes.
 
 Continue ROVER2 development. Pi at 192.168.250.254 (WiFi) or 192.168.70.11 (eth).
-Current status: follow works on mains; battery blocked by USB cable (5A cable ordered).
+API is HTTPS — use https:// and curl -k. WebSocket is wss://.
+Current status: follow works on mains; left/right direction corrected 2026-05-26.
+Battery test blocked by USB cable (5A cable ordered).
 Boot partition is read-only — if you need to update /boot/firmware files, remount rw first.
 
 Immediate priority: complete T1–T3 formal tests on mains, log in TEST_RESULTS.md.

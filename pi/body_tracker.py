@@ -108,6 +108,18 @@ class BodyTracker:
         self._ble_search_speed = int(ble_cfg.get("search_speed", _BLE_SEARCH_SPEED))
         self._ble_fwd_speed = int(ble_cfg.get("fwd_speed", _BLE_FWD_SPEED))
 
+        # External detection callback (e.g. guard mode) — non-blocking, set to None to deregister
+        self._detection_cb: Callable[[float, tuple], None] | None = None
+        self._detection_cb_lock = threading.Lock()
+
+    def set_detection_callback(
+        self, cb: Callable[[float, tuple], None] | None
+    ) -> None:
+        """Register a non-blocking callback(confidence, bbox) called on each detection.
+        Only one callback at a time. Pass None to deregister. Thread-safe."""
+        with self._detection_cb_lock:
+            self._detection_cb = cb
+
     def apply_tuning(self, patch: dict[str, Any]) -> dict[str, Any]:
         """Apply body_tracker + ble_tracker tuning fields at runtime."""
         applied: dict[str, Any] = {}
@@ -534,6 +546,17 @@ class BodyTracker:
             else:
                 logger.info("Detect score: no person boxes")
         self._update_person_presence(best is not None)
+
+        # Fire external detection callback (e.g. guard mode) — must be non-blocking
+        if best is not None:
+            with self._detection_cb_lock:
+                cb = self._detection_cb
+            if cb is not None:
+                try:
+                    _y0b, x0b, _y1b, x1b, score_b = best
+                    cb(score_b, (_y0b, x0b, _y1b, x1b))
+                except Exception:
+                    pass
 
         if detect_only:
             return

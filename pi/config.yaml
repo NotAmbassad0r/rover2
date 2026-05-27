@@ -16,8 +16,8 @@ drive:
   direction_map:
     forward: [1, -1]
     back: [-1, 1]
-    left: [0, -1]
-    right: [1, 0]
+    left: [1, 0]
+    right: [0, -1]
 
 gripper:
   port: PORT4B
@@ -74,14 +74,15 @@ agent:
   enabled: true
   # backend: hailo = LLM on AI HAT+ (hailo-ollama) | tools_only = Pi bridge/tools only (no CPU LLM)
   #         cpu = legacy Pi CPU ollama.service (high load — avoid on robot)
-  backend: tools_only   # Pi bridge only while FOLLOW uses HAT. For HAT LLM: set backend: hailo, FOLLOW off, run setup_ai_on_hailo.sh
-  ollama_base: http://127.0.0.1:11434   # used when backend=cpu only
-  hailo_ollama_base: http://127.0.0.1:8000   # hailo-ollama on HAT (port 8000, not 11434)
-  model: llama3.2:1b                    # CPU ollama only
-  hailo_model: qwen2:1.5b               # model on AI HAT+ (hailo-ollama)
-  rover_base: http://127.0.0.1:8082     # rover2-api self-call for tool execution
+  backend: hailo
+  ollama_base: http://127.0.0.1:11434        # CPU ollama — fallback only
+  hailo_ollama_base: http://127.0.0.1:8000   # hailo-ollama on AI HAT+ (port 8000)
+  model: llama3.2:1b                         # CPU ollama model (fallback)
+  hailo_model: qwen2.5-instruct:1.5b         # NPU model — 6.7 t/s on Hailo-10H
+  rover_base: http://127.0.0.1:8082          # rover2-api self-call for tool execution
   ollama_timeout_s: 180
-  warmup_on_start: false                # no LLM preload on Pi CPU (energy / thermals)
+  warmup_on_start: true                      # ping hailo-ollama at startup
+  fallback_to_cpu: true                      # fall back to localhost:11434 if hailo-ollama unavailable
 
 metrics:
   interval_s: 5
@@ -99,6 +100,48 @@ camera_idle:
   sleep_after_idle_s: 90     # seconds of stable ultrasonic before sleeping
   distance_variance_cm: 8    # cm range threshold for "stable" (max-min in window)
   window_size: 10            # number of readings in sliding window
+
+audio_routing:
+  flip6_ip: "192.168.250.1"      # Galaxy Z Flip6 hotspot gateway IP
+  a32_ip: "192.168.250.2"        # Samsung Galaxy A32 IP on hotspot subnet
+  udp_audio_port: 8085           # UDP port for raw PCM audio frames
+  default_mode: "ROVER_A32"      # ROVER_A32 or BUDS
+  tts_voice_en: "en_GB-cori-high"    # preferred English TTS voice (Piper)
+
+tts:
+  length_scale: 1.05        # slightly slower than default (1.0); cori-high sounds natural here
+  sox_enabled: false        # optional: pipe WAV through sox for EQ/normalise (adds ~0.3s latency)
+  sox_effects: "norm -3 rate 22050"   # sox effect chain applied when sox_enabled=true
+
+hailo_ollama:
+  host: "http://localhost:8000"
+  model: "qwen2.5-instruct:1.5b"
+  enabled: true
+  fallback_to_cpu: true        # fall back to localhost:11434 if hailo-ollama unavailable
+  num_predict: 120             # enough for 2-4 spoken sentences
+  temperature: 0.65            # lower = closer to few-shot examples; 0.85 too noisy for 1.5B
+
+guard:
+  enabled: false                      # master switch — off by default, zero impact when disabled
+  rssi_present_threshold: -70         # dBm — above = owner present, stay DISARMED
+  rssi_leaving_debounce_s: 10.0       # seconds below threshold before arming
+  rssi_return_threshold: -65          # dBm — above = owner returned, disarm
+  intruder_confidence: 0.55           # YOLO min confidence to trigger alert (higher than follow)
+  alert_hold_s: 30                    # seconds to hold ALERT before returning to ARMED
+  speak_on_state_change: true         # ROVER announces arm/disarm/intruder via TTS
+  ha_base_url: ""                     # e.g. "http://192.168.225.10:8123" — empty = skip webhooks
+  ha_token: ""                        # Long-lived HA access token — never logged or exposed
+  webhook_intruder_id: "rover_intruder"
+  webhook_armed_id: "rover_armed"
+  webhook_disarmed_id: "rover_disarmed"
+
+memory_watchdog:
+  target_mb: 300
+  warn_mb: 280
+  critical_mb: 400
+  emergency_mb: 450
+  warn_cooldown_s: 1800    # alert at most every 30 min at warn level
+  critical_cooldown_s: 300 # alert every 5 min at critical level
 
 firmware:
   hex_path: /tmp/rover2_firmware.hex

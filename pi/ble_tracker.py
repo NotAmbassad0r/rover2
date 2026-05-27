@@ -64,6 +64,18 @@ class BLETracker:
             return False
         return True
 
+    def get_latest_rssi(self, uuid: str) -> int | None:
+        """Return most recent RSSI for a given UUID within last 15 s, or None.
+        Reads from existing scan results — does not change scan rate."""
+        if self._target_uuid and uuid.lower() in self._target_uuid.lower():
+            with self._lock:
+                if self._last_seen == 0.0:
+                    return None
+                if time.monotonic() - self._last_seen > 15.0:
+                    return None
+                return int(self._rssi_smooth) if self._rssi_smooth is not None else None
+        return None
+
     def get_state(self) -> dict:
         return {
             "available": self.available,
