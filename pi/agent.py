@@ -387,6 +387,10 @@ _SPOKEN_MODEL = "llama3.2:1b"
 _SPOKEN_TIMEOUT_S = 90.0  # allow for model load on first call; keep-alive prevents repeat waits
 _KEEPALIVE_INTERVAL_S = 240  # 4 minutes — keeps model loaded between spoken requests
 
+# Conversation routing — 3b for complex queries
+_CPU_3B_MODEL   = "llama3.2:3b"
+_CPU_3B_TIMEOUT_S = 90.0  # 3b is larger; 90s sufficient with loaded model
+
 # hailo-ollama supports /api/chat when message content has no newlines.
 # /api/generate with any prompt fails to anchor the ROVER persona in qwen2.5-instruct:1.5b
 # because the instruction-tuned model ignores raw-prompt few-shot when not in ChatML format.
@@ -900,6 +904,172 @@ class RoverAgent:
             logger.warning("Agent: cpu spoken turn error: %s", exc)
         return ""
 
+    # ── Spoken conversation (wake word flow) ───────────────────────────────
+
+    def route_spoken_query(self, message: str) -> str:
+        """Route to 'hailo' (fast) or 'cpu' (complex). No LLM needed."""
+        msg = message.strip()
+        words = msg.split()
+        # Short queries → hailo
+        if len(words) <= 5:
+            return "hailo"
+        # Complex keywords → cpu
+        if re.search(
+            r"\bexplain\b|\bdescribe\b|\belaborate\b|what is\b|what are\b|"
+            r"how does\b|how do\b|tell me about\b|difference between\b|"
+            r"\bcompare\b|\bcontrast\b|\bwhy does\b|\bwhy did\b|"
+            r"\bwho is\b|\bwho are\b|\bwhen did\b",
+            msg, re.IGNORECASE,
+        ):
+            return "cpu"
+        # Long queries → cpu
+        if len(words) > 8:
+            return "cpu"
+        return "hailo"
+
+    async def run_converse_turn(
+        self,
+        user_text: str,
+        lang: str = "en",
+        history: list[dict] | None = None,
+    ) -> dict:
+        """ROVER conversation turn with smart routing.
+
+        Returns {"reply": str, "routed_to": "hailo" | "cpu"}.
+        Simple/short queries → hailo-ollama (qwen2.5-instruct:1.5b).
+        Complex/long queries → CPU Ollama (llama3.2:3b).
+        Falls back to the other backend if primary fails.
+        """
+        route = self.route_spoken_query(user_text)
+        history = (history or [])[-12:]  # cap at 6 pairs server-side
+        logger.info(
+            "Agent: converse route=%s text=%r lang=%s history=%d turns",
+            route, user_text[:40], lang, len(history),
+        )
+        if route == "hailo":
+            reply = await self._converse_hailo(user_text, lang, history)
+            if reply:
+                self._start_keepalive()
+                return {"reply": reply, "routed_to": "hailo"}
+            reply = await self._converse_cpu(user_text, lang, history)
+            return {"reply": reply, "routed_to": "cpu"}
+        else:
+            reply = await self._converse_cpu(user_text, lang, history)
+            if reply:
+                self._start_keepalive()
+                return {"reply": reply, "routed_to": "cpu"}
+            reply = await self._converse_hailo(user_text, lang, history)
+            return {"reply": reply, "routed_to": "hailo"}
+
+    async def _converse_hailo(
+        self, user_text: str, lang: str, history: list[dict]
+    ) -> str:
+        """Call hailo-ollama with ROVER persona and conversation history."""
+        hailo_cfg = self._full_config.get("hailo_ollama", {})
+        if not hailo_cfg.get("enabled", False):
+            return ""
+        h_base    = hailo_cfg.get("host", "http://localhost:8000")
+        h_model   = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
+        h_predict = int(hailo_cfg.get("num_predict", 120))
+        h_temp    = float(hailo_cfg.get("temperature", 0.65))
+        import re as _re
+
+        def _flatten(s: str) -> str:
+            return _re.sub(r"\s+", " ", s).strip()
+
+        messages = (
+            [{"role": "system", "content": _ROVER_HAILO_SYSTEM}]
+            + _ROVER_HAILO_FEW_SHOT
+            + [{"role": h["role"], "content": _flatten(str(h.get("content", "")))} for h in history]
+            + [{"role": "user", "content": _flatten(user_text)}]
+        )
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                r = await c.post(
+                    f"{h_base}/api/chat",
+                    json={
+                        "model":    h_model,
+                        "messages": messages,
+                        "stream":   False,
+                        "options":  {"num_predict": h_predict, "temperature": h_temp, "top_p": 0.92},
+                    },
+                )
+                if r.status_code == 200:
+                    reply = r.json().get("message", {}).get("content", "").strip()
+                    logger.info("Agent: _converse_hailo OK (%d chars)", len(reply))
+                    self._spoken_base  = h_base
+                    self._spoken_model = h_model
+                    return reply
+                logger.warning("Agent: _converse_hailo HTTP %d — %s", r.status_code, r.text[:120])
+        except Exception as exc:
+            logger.warning("Agent: _converse_hailo error: %s", exc)
+        return ""
+
+    async def _converse_cpu(
+        self, user_text: str, lang: str, history: list[dict]
+    ) -> str:
+        """Call CPU Ollama (llama3.2:3b) with ROVER persona and history."""
+        from voice_engine import ROVER_SYSTEM_PROMPT  # lazy import
+
+        if not await self._ensure_cpu_ollama():
+            logger.warning("Agent: CPU ollama not reachable — skipping 3b path")
+            return ""
+
+        messages: list[dict] = [{"role": "system", "content": ROVER_SYSTEM_PROMPT.strip()}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": user_text})
+
+        try:
+            async with httpx.AsyncClient(timeout=_CPU_3B_TIMEOUT_S) as c:
+                r = await c.post(
+                    f"{_SPOKEN_CPU_BASE}/api/chat",
+                    json={
+                        "model":    _CPU_3B_MODEL,
+                        "messages": messages,
+                        "stream":   False,
+                        "options":  {"num_predict": 150, "temperature": 0.75, "top_p": 0.92},
+                    },
+                )
+                if r.status_code == 200:
+                    reply = r.json().get("message", {}).get("content", "").strip()
+                    logger.info("Agent: _converse_cpu OK (%d chars) via %s", len(reply), _CPU_3B_MODEL)
+                    self._spoken_base  = _SPOKEN_CPU_BASE
+                    self._spoken_model = _CPU_3B_MODEL
+                    return reply
+                logger.warning("Agent: _converse_cpu HTTP %d — %s", r.status_code, r.text[:120])
+        except Exception as exc:
+            logger.warning("Agent: _converse_cpu error: %s", exc)
+        return ""
+
+    async def _ensure_cpu_ollama(self) -> bool:
+        """Check CPU Ollama reachability; try to start if not running."""
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as c:
+                if (await c.get(f"{_SPOKEN_CPU_BASE}/api/tags")).status_code == 200:
+                    return True
+        except Exception:
+            pass
+        # Not running — attempt to start via systemctl
+        logger.info("Agent: CPU ollama not running — attempting systemctl start")
+        try:
+            import subprocess as _sub
+            _sub.run(["sudo", "systemctl", "start", "ollama"],
+                     timeout=5, capture_output=True)
+        except Exception as exc:
+            logger.debug("Agent: ollama start attempt: %s", exc)
+        # Wait up to 15s
+        for _ in range(5):
+            await asyncio.sleep(3.0)
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as c:
+                    if (await c.get(f"{_SPOKEN_CPU_BASE}/api/tags")).status_code == 200:
+                        logger.info("Agent: CPU ollama started successfully")
+                        return True
+            except Exception:
+                pass
+        logger.warning("Agent: CPU ollama not reachable after start attempt")
+        return False
+
     def _start_keepalive(self) -> None:
         if self._keepalive_task is not None and not self._keepalive_task.done():
             return
@@ -910,21 +1080,35 @@ class RoverAgent:
             logger.debug("Agent: keepalive task start failed: %s", exc)
 
     async def _keepalive_loop(self) -> None:
-        """Ping the active spoken backend every 4 min to prevent model unloading."""
+        """Ping the active spoken backend every 4 min to prevent model unloading.
+        Also pings CPU llama3.2:3b to keep it warm for complex queries."""
         while True:
             await asyncio.sleep(_KEEPALIVE_INTERVAL_S)
+            # Ping active spoken backend (hailo or cpu)
             try:
                 async with httpx.AsyncClient(timeout=15.0) as c:
-                    # hailo-ollama requires a prompt in /api/generate (no prompt-less keep_alive)
                     await c.post(
                         f"{self._spoken_base}/api/generate",
                         json={"model": self._spoken_model, "prompt": "hi",
                               "stream": False, "options": {"num_predict": 1},
                               "keep_alive": "10m"},
                     )
-                logger.debug("Agent: keep-alive ping → %s", self._spoken_base)
+                logger.debug("Agent: keep-alive ping → %s (%s)", self._spoken_base, self._spoken_model)
             except Exception:
                 pass
+            # Also ping CPU ollama llama3.2:3b — keeps it warm for complex queries
+            if self._spoken_base != _SPOKEN_CPU_BASE or self._spoken_model != _CPU_3B_MODEL:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as c:
+                        await c.post(
+                            f"{_SPOKEN_CPU_BASE}/api/generate",
+                            json={"model": _CPU_3B_MODEL, "prompt": "hi",
+                                  "stream": False, "options": {"num_predict": 1},
+                                  "keep_alive": "10m"},
+                        )
+                    logger.debug("Agent: keep-alive cpu-3b ping → %s", _SPOKEN_CPU_BASE)
+                except Exception:
+                    pass  # CPU ollama may be stopped — skip silently
 
     async def run_turn(self, messages: list[dict]) -> AgentTurn:
         # Fast path: pattern-matched queries answer directly without Ollama.

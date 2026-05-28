@@ -101,3 +101,13 @@ REST: `POST /api/tracking` — body `{enabled, detect_only, ble_follow_enabled}`
 ## BLE fallback
 
 Galaxy Z Flip 6 (UUID `0000fcf1-…`) auto-activates as beacon when camera loses person for 2+ seconds. Toggle via BLE button in UI or `POST /api/tracking {"ble_follow_enabled": false}`.
+
+For **office demo** (no BLE needed): set `ble_tracker.enabled: false` in `pi/config.yaml` → deploy.
+
+## Voice assistant (fully local — no cloud)
+
+- **STT**: faster-whisper tiny (int8, ctranslate2) on Pi — `/api/voice/transcribe` + `/api/voice/wake`
+- **Wake word**: A32 VAD (AnalyserNode RMS) → 2.5 s chunk → `/api/voice/wake` → "rover" detected
+- **TTS**: Web Speech API on A32 for responses; Piper for proactive events (PERSON_FOUND etc)
+- **`webkitSpeechRecognition` is NOT used** — it requires Google servers (breaks offline demo)
+- Key constants in `face/index.html`: `WAKE_RMS_THRESHOLD`, `CONV_RMS_THRESHOLD`, `WAKE_CHUNK_S`

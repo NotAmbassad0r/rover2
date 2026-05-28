@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-27 (TTS cori-high, follow mode selector CAMERA/FUSED/BLE, guard mode, A32 fixes)
+Last updated: 2026-05-28 (local wake-word STT via faster-whisper, BLE disable option)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -124,6 +124,14 @@ Browser (index.html)  https://192.168.70.11:8082/
     → HTTPS REST /api/*                  drive, diagnostics, scripts, WiFi, AI agent, metrics
     → Camera preview                     http://<pi>:8081/stream  (rover-camera.service)
 
+ROVER Face PWA (face/index.html) — Samsung Galaxy A32
+    VAD wake mode:     AnalyserNode RMS poll (80 ms) → energy detected →
+                       MediaRecorder 2.5 s chunk → POST /api/voice/wake → faster-whisper
+                       → wake=true → _startConversation()
+    Conversation mode: MediaRecorder + RMS silence gate → POST /api/voice/transcribe →
+                       faster-whisper → POST /api/voice/converse → hailo-ollama/llama3.2:3b
+                       → Web Speech API TTS reply
+
     ── Python services (pi/) ──────────────────────────────────────────────────
     pi/main.py          Entrypoint: wires all components, starts uvicorn
     pi/server.py        FastAPI: 42+ REST endpoints + WebSocket hub
@@ -140,7 +148,7 @@ Browser (index.html)  https://192.168.70.11:8082/
     pi/chat_router.py   Regex NL command router (zero-LLM fast path, 14 commands)
     pi/agent.py         RoverAgent: Ollama tool-use agentic loop (20 tools, fast-path)
     pi/vlm_engine.py    VLMEngine: Hailo Qwen2-VL-2B-Instruct scene description
-    pi/voice_engine.py  Piper TTS (binary subprocess) + Whisper STT stub + ROVER personality
+    pi/voice_engine.py  Piper TTS (binary subprocess) + faster-whisper STT + ROVER personality
     pi/audio_router.py  UDP audio router (asyncio, zero-CPU idle) + /ws/audio WebSocket bridge
 
     ── ROVER Face PWA ────────────────────────────────────────────────────────────
@@ -195,7 +203,8 @@ Browser (index.html)  https://192.168.70.11:8082/
 - Boot partition read-only (`/etc/fstab`: `ro,defaults`) — cmdline.txt protected from corruption
 - `hailo-ollama.service` permanently disabled
 - **ROVER Face PWA** — `/face/` served by rover2-api; voxel face canvas, 8 states, WebSocket telemetry
-- **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice (upgraded 2026-05-27); `POST /api/voice/speak` streams WAV; length_scale 1.05; text preprocessed via `_preprocess_for_tts()` (abbrevs, temperatures, markdown stripped); optional sox post-processing (sox_enabled: false by default)
+- **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice; `POST /api/voice/speak` streams WAV; length_scale 1.05; for proactive server events only. Agent replies spoken via **Web Speech API** on A32 (`speechSynthesis`, British voice, rate 0.88)
+- **STT** — faster-whisper tiny (int8, CPU, ctranslate2, ~150 MB RSS on first call). `/api/voice/transcribe` (full turn), `/api/voice/wake` (2.5 s chunk, returns `{wake: bool, transcript: str}`). No cloud, fully offline
 - **Proactive speech** — voice_engine.py fires BOOT_COMPLETE, PERSON_FOUND/LOST, OBSTACLE, THERMAL events (debounced 30s, ROVER_A32 mode only)
 - **Audio routing** — `POST /api/audio/route {mode: ROVER_A32|BUDS}`; `GET /api/status` includes `audio_mode`
 - **`/ws/audio`** WebSocket — binary PCM frames from TTS → browser Web Audio API playback
@@ -216,9 +225,16 @@ Browser (index.html)  https://192.168.70.11:8082/
 
 ```
 Browser voice/text
-    → /api/chat          chat_router.py  → direct NL commands (0 ms LLM)
-    → /api/agent/chat    agent.py        → fast-path (<1 s) or Ollama (10–40 s)
-    → /api/vision/describe  vlm_engine.py → Hailo VLM snapshot caption
+    → /api/chat             chat_router.py  → direct NL commands (0 ms LLM)
+    → /api/agent/chat       agent.py        → fast-path (<1 s) or Ollama (10–40 s)
+    → /api/vision/describe  vlm_engine.py   → Hailo VLM snapshot caption
+
+A32 voice pipeline (fully local — no cloud)
+    Wake word:   AnalyserNode RMS → MediaRecorder 2.5 s → POST /api/voice/wake
+                 → faster-whisper → "rover" detected → conversation start
+    Conversation: MediaRecorder + VAD silence gate → POST /api/voice/transcribe
+                 → POST /api/voice/converse → hailo-ollama (fast) or llama3.2:3b (complex)
+                 → Web Speech API TTS (on-device, British voice)
 ```
 
 ### chat_router.py — zero-LLM NL commands
@@ -426,6 +442,8 @@ body_tracker:
   ble_follow_enabled: true     # set false to disable BLE fallback
 
 ble_tracker:
+  enabled: true        # set false for office demo (saves CPU + heat — no BLE needed)
+                       # set true for home use (guard mode arm/disarm via beacon)
   beacon_uuid: "0000fcf1-0000-1000-8000-00805f9b34fb"   # Samsung Z Flip 6
   device_name: "-Lars's Z flip 6"
   device_mac: "F0:05:1B:0A:E0:4C"
@@ -466,6 +484,7 @@ ble_tracker:
 11. **piper-phonemize has no cp313 wheel** — Python piper-tts API unusable on Pi's Python 3.13. Solution: use `piper` binary at `/opt/rover2/piper/piper` (statically linked, installed by `deploy_pi.sh`). voice_engine.py calls it as a subprocess.
 12. **voices/ excluded from rsync** — `deploy_pi.sh` uses `--exclude 'voices/'` to protect downloaded models from `--delete`. Voice model lives at `/opt/rover2/voices/` on Pi only.
 13. **STT memory cost** — `openai-whisper` depends on `torch` (~800 MB RSS when loaded). Once transcribe() is called, rover2-api RSS spikes from ~80 MB to ~912 MB. The memory watchdog correctly fires critical alerts. Whisper is lazy-loaded (only on first transcribe call). Restart rover2-api to recover memory. Long-term fix: switch to `faster-whisper` (ctranslate2, ~150 MB RSS) — needs ctranslate2/av aarch64 wheels sideloaded. STT endpoint (`/api/voice/transcribe`) now returns valid JSON always — never 500.
+    **faster-whisper is the STT backend** — `openai-whisper`/`torch` are NOT used. faster-whisper tiny (int8, CPU, ~150 MB RSS) transcribes audio via `/api/voice/transcribe` and `/api/voice/wake`. `webkitSpeechRecognition` was removed (requires Google servers — breaks offline demo). Wake word and conversation audio is now captured on A32 via `MediaRecorder` + `AnalyserNode` RMS VAD and POSTed to the Pi.
 14. **Whisper import path** — `openai-whisper` is in `/home/ambassad0r/.local/lib/python3.13/site-packages/` (installed with `pip install --user`). `tqdm` and `torch` are in `/usr/lib/python3/dist-packages/` (apt/system pip). `voice_engine._load_whisper()` adds both paths to `sys.path` before `import whisper`.
 15. **Face PWA on A32** — server now runs HTTPS, so getUserMedia works without `chrome://flags`. Accept the self-signed cert warning once on first visit to `https://192.168.250.254:8082/`.
 16. **HTTPS self-signed cert** — Browsers warn on first visit. Accept once (Advanced → Proceed). Curl on Pi needs `-k` flag. Cert files: `/opt/rover2/rover.key` + `rover.crt` (owned root:ambassad0r, mode 640). Not in repo — regenerate with `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout rover.key -out rover.crt -days 3650 -nodes -subj "/CN=rover"` if lost.
@@ -511,10 +530,17 @@ ble_tracker:
 - Complete T3 (BLE beacon seen, handoff, reacquire)
 - Log all results in TEST_RESULTS.md
 
+**Voice assistant (now fully local — no cloud):**
+- Wake word: say "rover" → A32 VAD detects energy → 2.5 s chunk → faster-whisper on Pi → conversation starts
+- Conversation: MediaRecorder + RMS silence gate → transcribe → hailo-ollama or llama3.2:3b → Web Speech TTS
+- To test offline: enable airplane mode on A32, visit `https://192.168.250.254:8082/face/`, say "rover"
+- MIC button manually starts/ends conversation (no wake word needed)
+- For office demo with no BLE: set `ble_tracker.enabled: false` in config.yaml → deploy
+
 **Software options:**
 - "ME only" follow: BLE + camera must agree before following (prevents false positives in dense BLE environments)
 - Activity timeline: log follow events to SQLite; show in TOOLS
-- Camera/BLE/fused mode selector (previous version had this; user requested it)
+- Tune `WAKE_RMS_THRESHOLD` (0.015) in face/index.html if false wakes or misses in noisy environments
 
 **Tuning knobs:**
 ```yaml

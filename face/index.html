@@ -53,6 +53,10 @@ canvas{display:block;image-rendering:pixelated}
   <div id="dbg-panel" onclick="dbgToggle()">
     <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
     <div class="dbg-row"><span class="dbg-key">VAD</span><span id="dbg-vad">idle</span></div>
+    <div class="dbg-row"><span class="dbg-key">TTS</span><span id="dbg-tts">—</span></div>
+    <div class="dbg-row"><span class="dbg-key">VOICE</span><span id="dbg-voice">—</span></div>
+    <div class="dbg-row"><span class="dbg-key">SESSION</span><span id="dbg-session">inactive</span></div>
+    <div class="dbg-row"><span class="dbg-key">ROUTED</span><span id="dbg-routed">—</span></div>
     <div class="dbg-row"><span class="dbg-key">LAST</span><span id="dbg-last">—</span></div>
     <div class="dbg-row"><span class="dbg-key">WSS</span><span id="dbg-wss">disconnected</span></div>
     <div class="dbg-row"><span class="dbg-key">SSL</span><span id="dbg-ssl">?</span></div>
@@ -77,6 +81,7 @@ canvas{display:block;image-rendering:pixelated}
 'use strict';
 
 // ── Config ──────────────────────────────────────────────────────────────────
+const USE_WEB_SPEECH = true;  // false = use Pi Piper TTS (legacy)
 const PI_HOST   = '192.168.250.254';
 const PI_PORT   = 8082;
 const API_BASE  = `https://${PI_HOST}:${PI_PORT}`;
@@ -419,6 +424,15 @@ function _applyTelemetry(d) {
     newState = STATE.IDLE;
   }
 
+  // Voice conversation active — show SPEAK (talking) or SEARCH (listening)
+  if (d.conversation_active) {
+    if (Date.now() < _speakUntil) {
+      newState = STATE.SPEAK;   // ROVER is talking — animated mouth
+    } else if (newState !== STATE.BLOCK && newState !== STATE.ALERT) {
+      newState = STATE.SEARCH;  // ROVER is listening — scanning pupils
+    }
+  }
+
   // Don't interrupt speaking
   if (Date.now() < _speakUntil && newState !== STATE.BLOCK) {
     newState = STATE.SPEAK;
@@ -524,15 +538,21 @@ _connectAudioWS();
 
 // ── Debug overlay — remove before final demo ─────────────────────────────────
 // DEBUG OVERLAY — remove before final demo
-const _dbg = { mic: 'pending', vad: 'idle', last: '—', wss: 'disconnected' };
+const _dbg = { mic: 'pending', vad: 'idle', last: '—', wss: 'disconnected',
+               tts: USE_WEB_SPEECH ? 'web' : 'piper', voice: '—',
+               session: 'inactive', routed: '—' };
 
 function _dbgUpdate() {
-  document.getElementById('dbg-mic').textContent  = _dbg.mic;
-  document.getElementById('dbg-vad').textContent  = _dbg.vad;
+  document.getElementById('dbg-mic').textContent     = _dbg.mic;
+  document.getElementById('dbg-vad').textContent     = _dbg.vad;
+  document.getElementById('dbg-tts').textContent     = _dbg.tts;
+  document.getElementById('dbg-voice').textContent   = _dbg.voice;
+  document.getElementById('dbg-session').textContent = _dbg.session;
+  document.getElementById('dbg-routed').textContent  = _dbg.routed;
   const last = _dbg.last;
-  document.getElementById('dbg-last').textContent = last.length > 40 ? last.slice(0, 40) : last;
-  document.getElementById('dbg-wss').textContent  = _dbg.wss;
-  document.getElementById('dbg-ssl').textContent  = window.location.protocol;
+  document.getElementById('dbg-last').textContent    = last.length > 40 ? last.slice(0, 40) : last;
+  document.getElementById('dbg-wss').textContent     = _dbg.wss;
+  document.getElementById('dbg-ssl').textContent     = window.location.protocol;
 }
 
 function dbgToggle() {
@@ -542,19 +562,32 @@ function dbgToggle() {
 
 _dbgUpdate();
 
-// ── Voice recording ──────────────────────────────────────────────────────────
+// ── Voice state ───────────────────────────────────────────────────────────────
+let _speaking        = false;   // true while TTS utterance is active
+let _conversation    = false;   // true while in a conversation session
+let _convTurnCount   = 0;
+
+// Legacy MediaRecorder path (USE_WEB_SPEECH = false)
 let _mediaRecorder = null;
 let _audioChunks   = [];
 let _recording     = false;
 let _voicePending  = false;
 
 function toggleVoice() {
-  if (_recording) {
-    stopRecording();
+  if (!USE_WEB_SPEECH) {
+    // Legacy path — MediaRecorder + faster-whisper
+    if (_recording) stopRecording(); else startRecording();
+    return;
+  }
+  // Web Speech path — manual conversation trigger / abort
+  if (_conversation) {
+    _convEndRequest = true;   // signal the loop to end gracefully
   } else {
-    startRecording();
+    _startConversation();
   }
 }
+
+let _convEndRequest = false;  // set true to abort active conversation loop
 
 // Detect best supported audio format for this browser/device
 function _bestMimeType() {
@@ -611,6 +644,425 @@ function stopRecording() {
 const _TIMEOUT_TRANSCRIBE_MS = 35000;
 const _TIMEOUT_AGENT_MS      = 65000;
 const _TIMEOUT_SPEAK_MS      = 35000;
+
+// ── Web Speech TTS ───────────────────────────────────────────────────────────
+// NOTE: Web Speech API handles agent voice responses (user-initiated).
+// Piper handles proactive server-side events (PERSON_FOUND, THERMAL etc).
+// This split offloads the majority of TTS work to the A32.
+
+// Load voices — Android Chrome loads them async
+let _voices_loaded = false;
+function _ensureVoices() {
+  if (!window.speechSynthesis) return Promise.resolve();
+  return new Promise(resolve => {
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) { _voices_loaded = true; resolve(); return; }
+    window.speechSynthesis.onvoiceschanged = () => {
+      _voices_loaded = true;
+      resolve();
+    };
+    // Fallback timeout — proceed even if onvoiceschanged doesn't fire
+    setTimeout(resolve, 2000);
+  });
+}
+
+function _ttsSpeak(text) {
+  if (!window.speechSynthesis) {
+    console.warn('Web Speech API not available');
+    return;
+  }
+
+  // Cancel any ongoing speech
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+
+  // Find best British English voice
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = [
+    'Google UK English Female',
+    'Google UK English Male',
+    'en-GB',
+  ];
+  let selectedVoice = null;
+  for (const pref of preferred) {
+    selectedVoice = voices.find(v =>
+      v.name.includes(pref) || v.lang === pref
+    );
+    if (selectedVoice) break;
+  }
+  if (selectedVoice) utterance.voice = selectedVoice;
+
+  utterance.lang    = 'en-GB';
+  utterance.rate    = 0.88;    // slightly slower — deliberate, clipped delivery
+  utterance.pitch   = 0.85;   // slightly lower pitch — more authoritative
+  utterance.volume  = 1.0;
+
+  // Update debug overlay with chosen voice name (first speak only)
+  _dbg.voice = selectedVoice ? selectedVoice.name : 'default';
+  _dbgUpdate();
+
+  // Sync with face speaking animation
+  utterance.onstart = () => {
+    _speakUntil = Date.now() + 60000;  // hold SPEAK state; cleared in onend
+    setState(STATE.SPEAK);
+    _dbg.vad = 'speaking';
+    _dbgUpdate();
+  };
+  utterance.onend = () => {
+    _speakUntil = 0;
+    setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+    _dbg.vad = 'idle';
+    _dbgUpdate();
+  };
+  utterance.onerror = (e) => {
+    console.warn('TTS error:', e.error);
+    _speakUntil = 0;
+    _dbg.vad = 'idle';
+    _dbgUpdate();
+  };
+
+  window.speechSynthesis.speak(utterance);
+}
+
+// Async TTS — resolves when speech finishes (used in conversation loop)
+function _ttsSpeakAsync(text) {
+  return new Promise((resolve) => {
+    if (!window.speechSynthesis) { resolve(); return; }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = ['Google UK English Female', 'Google UK English Male', 'en-GB'];
+    for (const pref of preferred) {
+      const v = voices.find(v => v.name.includes(pref) || v.lang === pref);
+      if (v) { utterance.voice = v; break; }
+    }
+    utterance.lang   = 'en-GB';
+    utterance.rate   = 0.88;
+    utterance.pitch  = 0.85;
+    utterance.volume = 1.0;
+    utterance.onstart = () => {
+      _speaking = true;
+      _speakUntil = Date.now() + 60000;
+      setState(STATE.SPEAK);
+      _dbg.vad = 'speaking'; _dbgUpdate();
+    };
+    utterance.onend = () => {
+      _speaking = false;
+      _speakUntil = 0;
+      setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+      _dbg.vad = 'idle'; _dbgUpdate();
+      resolve();
+    };
+    utterance.onerror = () => {
+      _speaking = false;
+      _speakUntil = 0;
+      _dbg.vad = 'idle'; _dbgUpdate();
+      resolve();
+    };
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+// ── VAD / wake word pipeline (fully local — no cloud STT) ────────────────────
+// Wake mode: AnalyserNode RMS polling → 2.5 s chunk → /api/voice/wake (faster-whisper)
+// Conversation mode: MediaRecorder → silence-gated chunks → /api/voice/transcribe
+
+const WAKE_RMS_THRESHOLD = 0.015;  // energy floor to trigger wake recording
+const CONV_RMS_THRESHOLD = 0.020;  // energy floor for conversation speech detection
+const WAKE_CHUNK_S       = 2.5;    // seconds of audio per wake check
+const CONV_MAX_S         = 12;     // max seconds per conversation turn
+const CONV_SILENCE_MS    = 600;    // ms of silence (after speech starts) to end turn
+const CONV_TIMEOUT_MS    = 10000;  // 10 s total conversation silence → end session
+
+let _micStream = null;   // shared MediaStream (acquired once, reused for all recording)
+let _analyser  = null;   // AnalyserNode connected to mic — used for RMS polling
+let _vadActive = false;  // true while wake VAD poll loop is running
+
+function _rmsLevel() {
+  if (!_analyser) return 0;
+  const buf = new Float32Array(_analyser.fftSize);
+  _analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  return Math.sqrt(sum / buf.length);
+}
+
+async function _startVoicePipeline() {
+  try {
+    _micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, sampleRate: 16000,
+               echoCancellation: true, noiseSuppression: true }
+    });
+    _dbg.mic = 'granted'; _dbgUpdate();
+    const ac     = _getAudioCtx();
+    const source = ac.createMediaStreamSource(_micStream);
+    _analyser = ac.createAnalyser();
+    _analyser.fftSize = 256;
+    source.connect(_analyser);
+    _startWakeVad();
+  } catch (e) {
+    _dbg.mic = e.name === 'NotAllowedError' ? 'denied' : 'error:' + e.name;
+    _dbg.vad = 'mic unavailable'; _dbgUpdate();
+  }
+}
+
+function _startWakeVad() {
+  if (_conversation || _vadActive) return;
+  _vadActive = true;
+  _dbg.vad = 'listening for "rover"'; _dbgUpdate();
+
+  const poll = async () => {
+    while (_vadActive && !_conversation) {
+      await new Promise(r => setTimeout(r, 80));
+      if (_rmsLevel() >= WAKE_RMS_THRESHOLD) {
+        _vadActive = false;
+        _dbg.vad = 'audio — checking wake…'; _dbgUpdate();
+        const isWake = await _checkWakeWord();
+        if (isWake && !_conversation) {
+          await _startConversation();
+        } else {
+          await new Promise(r => setTimeout(r, 400));  // brief cooldown before re-arm
+          _startWakeVad();
+        }
+        return;
+      }
+    }
+    _vadActive = false;
+  };
+  poll();
+}
+
+async function _recordWakeChunk() {
+  return new Promise((resolve) => {
+    if (!_micStream) { resolve(null); return; }
+    const mimeType = _bestMimeType();
+    const opts = mimeType ? { mimeType } : {};
+    let rec;
+    try { rec = new MediaRecorder(_micStream, opts); }
+    catch (_) { resolve(null); return; }
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    rec.onstop = () => {
+      if (!chunks.length) { resolve(null); return; }
+      resolve(new Blob(chunks, { type: rec.mimeType || mimeType || 'audio/webm' }));
+    };
+    rec.start(200);
+    setTimeout(() => {
+      try { if (rec.state === 'recording') rec.stop(); } catch (_) {}
+    }, WAKE_CHUNK_S * 1000);
+  });
+}
+
+async function _checkWakeWord() {
+  const blob = await _recordWakeChunk();
+  if (!blob) return false;
+  try {
+    const ext = (blob.type || '').includes('mp4') ? 'mp4'
+              : (blob.type || '').includes('ogg') ? 'ogg' : 'webm';
+    const fd = new FormData();
+    fd.append('audio', blob, 'wake.' + ext);
+    fd.append('lang', 'en');
+    const resp = await fetch(API_BASE + '/api/voice/wake', { method: 'POST', body: fd });
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    _dbg.last = 'wake: ' + (data.transcript || '—').slice(0, 18); _dbgUpdate();
+    return data.wake === true;
+  } catch (e) {
+    console.warn('Wake check error:', e);
+    return false;
+  }
+}
+
+async function _recordConvTurn() {
+  return new Promise((resolve) => {
+    if (!_micStream) { resolve(null); return; }
+    const mimeType = _bestMimeType();
+    const opts = mimeType ? { mimeType } : {};
+    let rec;
+    try { rec = new MediaRecorder(_micStream, opts); }
+    catch (_) { resolve(null); return; }
+    const chunks = [];
+    let speechStarted = false;
+    let silenceStart  = null;
+    let done          = false;
+
+    const stopRec = () => {
+      if (done) return;
+      done = true;
+      clearInterval(vadInterval);
+      clearTimeout(hardMax);
+      try { if (rec.state === 'recording') rec.stop(); } catch (_) {}
+    };
+
+    const vadInterval = setInterval(() => {
+      const rms = _rmsLevel();
+      if (rms >= CONV_RMS_THRESHOLD) {
+        speechStarted = true;
+        silenceStart  = null;
+      } else if (speechStarted) {
+        if (silenceStart === null) silenceStart = Date.now();
+        else if (Date.now() - silenceStart >= CONV_SILENCE_MS) stopRec();
+      }
+    }, 80);
+
+    const hardMax = setTimeout(stopRec, CONV_MAX_S * 1000);
+
+    rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    rec.onstop = () => {
+      if (!speechStarted || !chunks.length) { resolve(null); return; }
+      resolve(new Blob(chunks, { type: rec.mimeType || mimeType || 'audio/webm' }));
+    };
+    rec.start(200);
+  });
+}
+
+async function _startConversation() {
+  if (_conversation) return;
+  _conversation   = true;
+  _convEndRequest = false;
+  _convTurnCount  = 0;
+  const sessionId = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(16));
+  const history   = [];
+
+  const btnMic = document.getElementById('btn-mic');
+  btnMic.textContent = '■ END';
+  btnMic.classList.add('recording');
+  _dbg.session = 'active (0 turns)'; _dbg.vad = 'starting…'; _dbgUpdate();
+
+  // Pause FOLLOW
+  try {
+    await fetch(API_BASE + '/api/tracking', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({enabled: false}),
+    });
+  } catch (_) {}
+
+  await _ensureVoices();
+  await _ttsSpeakAsync('Yes, sir.');
+  await _convLoop(sessionId, history);
+}
+
+async function _convLoop(sessionId, history) {
+  let convTimeoutHandle = null;
+
+  const _end = async (phrase) => {
+    _conversation   = false;
+    _convEndRequest = false;
+    if (convTimeoutHandle) clearTimeout(convTimeoutHandle);
+    _dbg.session = 'inactive'; _dbg.vad = 'ending…'; _dbgUpdate();
+    try { window.speechSynthesis.cancel(); } catch (_) {}
+    if (phrase) await _ttsSpeakAsync(phrase);
+    try {
+      await fetch(API_BASE + '/api/voice/converse/end', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({session_id: sessionId}),
+      });
+    } catch (_) {}
+    const btnMic = document.getElementById('btn-mic');
+    btnMic.textContent = 'MIC';
+    btnMic.classList.remove('recording');
+    _dbg.session = 'inactive'; _dbg.vad = 'idle'; _dbgUpdate();
+    _startWakeVad();  // resume listening for wake word
+  };
+
+  const loop = async () => {
+    if (_convEndRequest) { await _end('Very well, sir.'); return; }
+
+    _dbg.vad = 'listening…'; _dbgUpdate();
+    _showBubble('user', '…');
+
+    // (Re-)arm the conversation timeout — 10 s total silence ends session
+    if (convTimeoutHandle) clearTimeout(convTimeoutHandle);
+    convTimeoutHandle = setTimeout(() => {
+      if (_conversation) _end('Very well, sir.');
+    }, CONV_TIMEOUT_MS);
+
+    const blob = await _recordConvTurn();
+
+    if (_convEndRequest) { await _end('Very well, sir.'); return; }
+
+    if (!blob) {
+      // No speech detected — keep waiting (timeout handles prolonged silence)
+      loop();
+      return;
+    }
+
+    clearTimeout(convTimeoutHandle);
+    _dbg.vad = 'transcribing…'; _dbgUpdate();
+
+    // POST audio to faster-whisper on Pi — fully local, no cloud
+    const ext = (blob.type || '').includes('mp4') ? 'mp4'
+              : (blob.type || '').includes('ogg') ? 'ogg' : 'webm';
+    const fd  = new FormData();
+    fd.append('audio', blob, 'conv.' + ext);
+    fd.append('lang', 'en');
+
+    let transcript = '';
+    try {
+      const resp = await fetch(API_BASE + '/api/voice/transcribe', { method: 'POST', body: fd });
+      if (resp.ok) {
+        const data = await resp.json();
+        transcript = (data.transcript || '').trim();
+      }
+    } catch (e) {
+      _dbg.last = 'transcribe err: ' + (e.message || '').slice(0, 20); _dbgUpdate();
+    }
+
+    if (!transcript) {
+      _dbg.last = 'empty transcript'; _dbgUpdate();
+      loop();
+      return;
+    }
+
+    if (_convEndRequest) { await _end('Very well, sir.'); return; }
+
+    _convTurnCount++;
+    _dbg.session = `active (${_convTurnCount} turn${_convTurnCount > 1 ? 's' : ''})`;
+    _dbg.vad = 'thinking…'; _dbg.last = transcript.slice(0, 30); _dbgUpdate();
+    _showBubble('user', transcript);
+
+    history.push({role: 'user', content: transcript});
+    if (history.length > 12) history.splice(0, 2);  // max 6 pairs
+
+    let reply = '', routedTo = 'hailo';
+    try {
+      const resp = await fetch(API_BASE + '/api/voice/converse', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          message:    transcript,
+          history:    history.slice(0, -1),  // exclude current turn
+          spoken:     true,
+          lang:       'en',
+          session_id: sessionId,
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        reply    = (data.reply || '').trim();
+        routedTo = data.routed_to || 'hailo';
+      }
+    } catch (err) {
+      _dbg.last = 'converse err: ' + (err.message || '').slice(0, 20); _dbgUpdate();
+    }
+
+    _dbg.routed = routedTo; _dbgUpdate();
+
+    if (reply) {
+      history.push({role: 'assistant', content: reply});
+      if (history.length > 12) history.splice(0, 2);
+      _showBubble('rover', reply);
+      await _ttsSpeakAsync(reply);
+    }
+
+    if (_convEndRequest) { await _end('Very well, sir.'); return; }
+
+    loop();  // next turn (recursive async — tail-call-like)
+  };
+
+  loop();
+}
 
 function _fetchWithTimeout(url, opts, timeoutMs) {
   const ctrl = new AbortController();
@@ -699,36 +1151,42 @@ async function _sendVoice(blob, mimeType) {
     if (!reply) { _voicePending = false; return; }
     _showBubble('rover', reply);
 
-    // 3. TTS — speak reply, audio comes back as WAV stream
+    // 3. TTS — Web Speech API (primary) or Pi Piper TTS (legacy fallback)
     _dbg.last = 'speaking…'; _dbgUpdate();
-    let r3;
-    try {
-      r3 = await _fetchWithTimeout(
-        API_BASE + '/api/voice/speak',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: reply.slice(0, 500), lang: 'en' }),
-        },
-        _TIMEOUT_SPEAK_MS
-      );
-    } catch (e) {
-      _dbg.last = 'speak failed: ' + e.message.slice(0, 30); _dbgUpdate();
-      _voicePending = false; return;
-    }
-    if (r3.ok) {
-      const wav = await r3.arrayBuffer();
-      const ac  = _getAudioCtx();
+    if (USE_WEB_SPEECH) {
+      await _ensureVoices();
+      _ttsSpeak(reply);
+    } else {
+      // Legacy path — Pi Piper TTS via /api/voice/speak
+      let r3;
       try {
-        const decoded = await ac.decodeAudioData(wav);
-        const src = ac.createBufferSource();
-        src.buffer = decoded;
-        src.connect(ac.destination);
-        src.start();
-        _speakUntil = Date.now() + Math.ceil(decoded.duration * 1000) + 200;
-        setState(STATE.SPEAK);
-        src.onended = () => setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
-      } catch (_) {}
+        r3 = await _fetchWithTimeout(
+          API_BASE + '/api/voice/speak',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: reply.slice(0, 500), lang: 'en' }),
+          },
+          _TIMEOUT_SPEAK_MS
+        );
+      } catch (e) {
+        _dbg.last = 'speak failed: ' + e.message.slice(0, 30); _dbgUpdate();
+        _voicePending = false; return;
+      }
+      if (r3.ok) {
+        const wav = await r3.arrayBuffer();
+        const ac  = _getAudioCtx();
+        try {
+          const decoded = await ac.decodeAudioData(wav);
+          const src = ac.createBufferSource();
+          src.buffer = decoded;
+          src.connect(ac.destination);
+          src.start();
+          _speakUntil = Date.now() + Math.ceil(decoded.duration * 1000) + 200;
+          setState(STATE.SPEAK);
+          src.onended = () => setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+        } catch (_) {}
+      }
     }
   } catch (e) {
     _dbg.last = 'err: ' + e.message.slice(0, 38); _dbgUpdate();
@@ -775,6 +1233,24 @@ if ('serviceWorker' in navigator) {
 
 // Unlock audio context on first touch (mobile browser requirement)
 document.addEventListener('touchstart', () => _getAudioCtx(), { once: true });
+
+// ── Voice pipeline init ──────────────────────────────────────────────────────
+// TTS: Web Speech API (local, on-device) for agent responses
+// STT: MediaRecorder → faster-whisper on Pi (fully local, no cloud)
+if (USE_WEB_SPEECH && window.speechSynthesis) {
+  _ensureVoices();
+  window.addEventListener('load', () => {
+    // Silent utterance — pre-warms TTS engine on Android Chrome (3 s avoids boot contention)
+    setTimeout(() => {
+      const warmup = new SpeechSynthesisUtterance(' ');
+      warmup.volume = 0;
+      warmup.onend = () => console.log('TTS engine warmed up');
+      window.speechSynthesis.speak(warmup);
+    }, 3000);
+    // Start VAD + local wake-word pipeline (no Google — uses faster-whisper on Pi)
+    setTimeout(() => _startVoicePipeline(), 3500);
+  });
+}
 </script>
 </body>
 </html>

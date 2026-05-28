@@ -19,6 +19,7 @@ class BLETracker:
 
     def __init__(self, config: dict | None = None) -> None:
         cfg = (config or {}).get("ble_tracker", {})
+        self._enabled: bool = bool(cfg.get("enabled", True))
         self._target_name: str = str(cfg.get("device_name", ""))
         mac = str(cfg.get("device_mac", "")).strip().upper()
         self._target_mac: str | None = mac or None
@@ -88,6 +89,9 @@ class BLETracker:
         }
 
     def start(self) -> None:
+        if not self._enabled:
+            logger.info("BLETracker: disabled in config — skipping BLE scan")
+            return
         if not self.available:
             self._last_error = "bleak not installed"
             logger.warning("BLETracker: %s", self._last_error)

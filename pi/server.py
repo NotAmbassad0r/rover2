@@ -245,6 +245,11 @@ def create_app(
     _prev_thermal_level: str = "cool"
     _prev_camera_sleeping: bool = False
 
+    # Voice conversation state — managed by /api/voice/converse + /api/voice/converse/end
+    _conversation_active: bool = False
+    _tracking_was_enabled: bool = False
+    _conversation_timeout_task: asyncio.Task | None = None
+
     async def _hailo_recovery_task() -> None:
         if body_tracker is None:
             return
@@ -540,6 +545,7 @@ def create_app(
                     "alerts": all_alerts,
                     "ws_client_count": hub.client_count,
                     "audio_mode": audio_router.get_mode() if audio_router else None,
+                    "conversation_active": _conversation_active,
                 })
                 # ───────────────────────────────────────────────────────────
 
@@ -874,6 +880,34 @@ def create_app(
         except Exception as exc:
             result = {"transcript": "", "error": str(exc)}
         return JSONResponse(result)
+
+    @app.post("/api/voice/wake")
+    async def voice_wake(
+        audio: UploadFile = File(...),
+        lang: str = Form("en"),
+    ) -> JSONResponse:
+        """Wake-word check — transcribe 2.5 s audio chunk, return {wake, transcript}.
+
+        Called by A32 VAD pipeline; returns {wake: true} when 'rover' is heard.
+        Uses faster-whisper tiny (int8, CPU) — no cloud, fully local.
+        """
+        if not _VOICE:
+            return JSONResponse({"wake": False, "transcript": "", "error": "voice_engine not available"})
+        try:
+            audio_bytes = await audio.read()
+            loop = asyncio.get_event_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, _voice_engine.transcribe, audio_bytes, lang),
+                timeout=8.0,
+            )
+        except asyncio.TimeoutError:
+            result = {"transcript": "", "error": "timeout"}
+        except Exception as exc:
+            result = {"transcript": "", "error": str(exc)}
+        transcript = result.get("transcript", "").lower().strip()
+        wake = "rover" in transcript
+        logger.info("voice/wake: transcript=%r wake=%s", transcript, wake)
+        return JSONResponse({"wake": wake, "transcript": transcript})
 
     @app.post("/api/voice/speak")
     async def voice_speak(request: Request) -> StreamingResponse:
@@ -1268,6 +1302,7 @@ def create_app(
                 )
             except asyncio.TimeoutError:
                 reply = ""
+            logger.info("Agent: spoken turn OK (%d chars) via hailo — TTS on A32", len(reply))
             return JSONResponse({"reply": reply, "tool_log": [], "action_proposal": None})
 
         messages = body.get("messages", [])
@@ -1286,6 +1321,91 @@ def create_app(
             "tool_log":        turn.tool_log,
             "action_proposal": turn.action_proposal,
         })
+
+    @app.post("/api/voice/converse")
+    async def voice_converse(request: Request) -> JSONResponse:
+        """Voice conversation turn for wake-word assistant.
+
+        Body: {message, history, spoken, lang, session_id}
+        Response: {reply, routed_to, session_id}
+        """
+        nonlocal _conversation_active, _tracking_was_enabled, _conversation_timeout_task
+        if rover_agent is None:
+            raise HTTPException(status_code=503, detail="Agent not configured")
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+
+        message    = str(body.get("message", "")).strip()
+        history    = body.get("history", [])
+        lang       = str(body.get("lang", "en"))
+        session_id = str(body.get("session_id", ""))
+        if not message:
+            raise HTTPException(status_code=400, detail="message required")
+
+        # Pause FOLLOW on first call in this conversation
+        if not _conversation_active:
+            _conversation_active = True
+            if body_tracker is not None and body_tracker.enabled:
+                _tracking_was_enabled = True
+                body_tracker.set_enabled(False)
+                logger.info("voice: FOLLOW paused for conversation session=%s", session_id[:8])
+            else:
+                _tracking_was_enabled = False
+
+        # Server-side 60s auto-end (cancel previous if any)
+        if _conversation_timeout_task is not None and not _conversation_timeout_task.done():
+            _conversation_timeout_task.cancel()
+
+        async def _auto_end() -> None:
+            nonlocal _conversation_active, _tracking_was_enabled
+            await asyncio.sleep(60.0)
+            if _conversation_active:
+                _conversation_active = False
+                if _tracking_was_enabled and body_tracker is not None:
+                    body_tracker.set_enabled(True)
+                    _tracking_was_enabled = False
+                    logger.info("voice: FOLLOW restored after 60s timeout session=%s", session_id[:8])
+
+        _conversation_timeout_task = asyncio.ensure_future(_auto_end())
+
+        try:
+            result = await asyncio.wait_for(
+                rover_agent.run_converse_turn(message, lang, history),
+                timeout=95.0,
+            )
+        except asyncio.TimeoutError:
+            result = {"reply": "", "routed_to": "hailo"}
+
+        reply     = result.get("reply", "")
+        routed_to = result.get("routed_to", "hailo")
+        logger.info(
+            "Agent: spoken turn OK (%d chars) via %s — TTS on A32",
+            len(reply), routed_to,
+        )
+        return JSONResponse({"reply": reply, "routed_to": routed_to, "session_id": session_id})
+
+    @app.post("/api/voice/converse/end")
+    async def voice_converse_end(request: Request) -> JSONResponse:
+        """Signal end of voice conversation — restores FOLLOW if it was paused."""
+        nonlocal _conversation_active, _tracking_was_enabled, _conversation_timeout_task
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        session_id = str(body.get("session_id", ""))
+
+        if _conversation_timeout_task is not None and not _conversation_timeout_task.done():
+            _conversation_timeout_task.cancel()
+
+        _conversation_active = False
+        if _tracking_was_enabled and body_tracker is not None:
+            body_tracker.set_enabled(True)
+            _tracking_was_enabled = False
+            logger.info("voice: FOLLOW restored after conversation end session=%s", session_id[:8])
+
+        return JSONResponse({"status": "ok", "session_id": session_id})
 
     @app.post("/api/agent/confirm")
     async def agent_confirm(request: Request) -> JSONResponse:

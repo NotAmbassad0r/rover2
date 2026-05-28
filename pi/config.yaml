@@ -61,7 +61,8 @@ body_tracker:
   avoid_default: left   # when wall blocks FWD and person is centred in frame
 
 ble_tracker:
-  enabled: true
+  enabled: true        # set false for office demo (no BLE, saves CPU + heat)
+                       # set true for home use (guard mode arm/disarm via beacon)
   device_name: "-Lars's Z flip 6"
   device_mac: "F0:05:1B:0A:E0:4C"
   beacon_uuid: "0000fcf1-0000-1000-8000-00805f9b34fb"

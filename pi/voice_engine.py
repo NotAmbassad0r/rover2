@@ -408,6 +408,9 @@ def _wav_to_pcm16k(wav_bytes: bytes, from_rate: int = 0) -> bytes:
 
 
 # ── Proactive speech ─────────────────────────────────────────────────────────
+# NOTE: Web Speech API handles agent voice responses (user-initiated).
+# Piper handles proactive server-side events (PERSON_FOUND, THERMAL etc).
+# This split offloads the majority of TTS work to the A32.
 
 async def _do_speak_event(text: str, audio_router: AudioRouter) -> None:
     """Generate TTS in executor and push PCM frames to audio_router queue."""
