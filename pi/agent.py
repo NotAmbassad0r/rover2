@@ -289,6 +289,71 @@ _READ_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "wave_arm",
+            "description": "Wave the robot arm as a greeting gesture. Use when greeted or when owner says hello, hi, or wave.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_full_diagnostics",
+            "description": "Full system snapshot: robot status + CPU/temp/RAM/disk/network + top processes. "
+                           "Use for 'how are you', 'system check', 'run diagnostics', 'full check'.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_hailo_status",
+            "description": "Hailo AI chip and body tracker status: platform available, HEF loaded, "
+                           "body_tracker ready, VLM engine status, current temperature.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "speak_diagnostics_summary",
+            "description": "Fetch live system status and services, return compact spoken summary. "
+                           "Use for 'how are you', 'status check', 'all good?', 'are you okay?'.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_fix",
+            "description": "Fetch current diagnostics and propose or apply fixes. "
+                           "Safe fixes (rover-camera restart) applied automatically. "
+                           "Risky fixes (rover2-api restart, reboot, config changes) returned as proposals. "
+                           "Use for 'fix it', 'what is wrong', 'any problems'.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "control_follow_mode",
+            "description": "Enable, disable, or change the person-follow mode. "
+                           "enable=start camera YOLO follow. disable=stop all follow. "
+                           "detect=detect-only no movement. fused=BLE+camera fused follow.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["enable", "disable", "camera", "fused", "detect"],
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 # Dangerous — require explicit user confirmation via the Confirm button.
@@ -357,6 +422,15 @@ _DANGEROUS_TOOLS: list[dict] = [
 _ALL_TOOLS     = _READ_TOOLS + _DANGEROUS_TOOLS
 _DANGEROUS_NAMES = {t["function"]["name"] for t in _DANGEROUS_TOOLS}
 
+# Minimal tool set for spoken agent — avoids large context that slows llama3.2:1b.
+# Only the tools relevant to voice interaction (status, control, camera, diagnostics).
+_SPOKEN_TOOL_NAMES = {
+    "wave_arm", "get_full_diagnostics", "get_hailo_status",
+    "speak_diagnostics_summary", "suggest_fix", "control_follow_mode",
+    "describe_camera", "get_status",
+}
+_SPOKEN_TOOLS = [t for t in _READ_TOOLS if t["function"]["name"] in _SPOKEN_TOOL_NAMES]
+
 _TOOL_NAMES = ", ".join(t["function"]["name"] for t in _ALL_TOOLS)
 
 _SYSTEM_PROMPT = f"""You are ROVER2's onboard engineer: monitor hardware and software, change any allowed parameter, answer related questions.
@@ -384,7 +458,7 @@ _DEFAULT_OLLAMA_TIMEOUT_S = 180
 
 _SPOKEN_CPU_BASE = "http://127.0.0.1:11434"
 _SPOKEN_MODEL = "llama3.2:1b"
-_SPOKEN_TIMEOUT_S = 90.0  # allow for model load on first call; keep-alive prevents repeat waits
+_SPOKEN_TIMEOUT_S = 45.0   # 14s per round with minimal tool set; keep-alive prevents cold-start waits
 _KEEPALIVE_INTERVAL_S = 240  # 4 minutes — keeps model loaded between spoken requests
 
 # Conversation routing — 3b for complex queries
@@ -413,6 +487,163 @@ _TOOLS_ONLY_REPLY = (
     "Pi is in bridge mode (A32 ↔ MegaPi): no CPU LLM. "
     "Use quick actions (TEMPS, CHECK LOGS, DIAG ASK AI) or enable hailo-ollama on the AI HAT+ "
     "(./scripts/setup_ai_on_hailo.sh). Vision/follow already run on the HAT."
+)
+
+# Fast-path spoken command patterns: (regex, tool_name, args_dict)
+# Matched before any LLM call — direct tool execution + hailo voice response.
+_SPOKEN_FAST_PATTERNS: list[tuple[str, str, dict]] = [
+    (r"\bhell[oa]\b|\bhi\b|\bhey\b|\bwave\b",
+     "wave_arm", {}),
+    (r"how are you|are you okay|are you well|how.{0,10} doing|system (check|status)|all good",
+     "speak_diagnostics_summary", {}),
+    (r"follow me|come here|start follow|track me|start tracking|begin follow",
+     "control_follow_mode", {"action": "enable"}),
+    (r"fused follow|ble.{0,10}follow|bluetooth.{0,10}follow",
+     "control_follow_mode", {"action": "fused"}),
+    (r"detect only|just detect|watch (but|don|without moving)",
+     "control_follow_mode", {"action": "detect"}),
+    (r"stop follow|stop (coming|tracking)|stay( here)?|don.{0,3}t follow|cease follow",
+     "control_follow_mode", {"action": "disable"}),
+    (r"what do you see|describe.*see|look.*ahead|what.s in front|camera view|what.{0,10}ahead",
+     "describe_camera", {}),
+    (r"run diagnostics|full check|health check|run a check|full scan|detailed (check|status)",
+     "get_full_diagnostics", {}),
+    (r"fix it|what.{0,8}wrong|any problem|suggest fix|anything wrong|what.s broken|is anything",
+     "suggest_fix", {}),
+    (r"\bhailo\b|ai chip|neural processor|inference chip",
+     "get_hailo_status", {}),
+    (r"current status|status report|how.{0,10}system",
+     "speak_diagnostics_summary", {}),
+]
+
+
+def _fmt_tool_result_for_voice(tool_name: str, result: Any) -> str:
+    """Convert a tool result to a descriptive context sentence for hailo.
+
+    Returns a plain English sentence that hailo can include in its response.
+    Returns "" for action tools (which use canned responses instead).
+    """
+    if not isinstance(result, dict):
+        return ""
+    if result.get("error"):
+        return ""
+    if tool_name == "speak_diagnostics_summary":
+        parts: list[str] = []
+        t = result.get("temp_c")
+        if t is not None:
+            parts.append(f"temperature {t:.0f} degrees")
+        lvl = result.get("temp_level", "cool")
+        if lvl == "hot":
+            parts.append("running warm")
+        elif lvl == "critical":
+            parts.append("overheating")
+        if result.get("throttled"):
+            parts.append("CPU is throttled")
+        if result.get("tracking_enabled"):
+            parts.append("follow mode is active")
+        if result.get("person_detected"):
+            parts.append("person in frame")
+        failed = result.get("failed_services", [])
+        if failed:
+            parts.append(f"{', '.join(failed)} {'have' if len(failed)>1 else 'has'} failed")
+        summary = ", ".join(parts) if parts else "all systems nominal"
+        return f"System status: {summary}."
+    if tool_name == "get_full_diagnostics":
+        diag = result.get("diagnostics", {})
+        ext  = diag.get("extended", {})
+        parts = []
+        cpu = ext.get("cpu_percent")
+        if cpu is not None:
+            parts.append(f"CPU at {cpu:.0f} percent")
+        for tdata in (ext.get("temperatures") or {}).values():
+            if isinstance(tdata, dict):
+                cur = tdata.get("current")
+                if cur is not None:
+                    parts.append(f"temperature {cur:.0f} degrees")
+                    break
+        ram = ext.get("ram_used_mb")
+        if ram is not None:
+            parts.append(f"RAM {ram:.0f} megabytes used")
+        summary = ", ".join(parts) if parts else "systems nominal"
+        return f"Diagnostic: {summary}."
+    if tool_name == "suggest_fix":
+        applied  = result.get("fixes_applied", [])
+        proposals = result.get("proposals", [])
+        if applied:
+            return f"Fixed automatically: {'; '.join(applied)}."
+        if proposals:
+            return f"Issues found: {'; '.join(proposals[:2])}."
+        return "No issues found. All systems nominal."
+    if tool_name == "get_hailo_status":
+        hailo = result.get("hailo", {})
+        parts = []
+        avail = hailo.get("hailo_available", False)
+        parts.append("Hailo chip available" if avail else "Hailo chip not detected")
+        if hailo.get("body_tracker_ready"):
+            parts.append("body tracker ready")
+        t = result.get("temp_c")
+        if t is not None:
+            parts.append(f"temperature {t:.0f} degrees")
+        return "Hailo status: " + ", ".join(parts) + "."
+    if tool_name == "describe_camera":
+        desc = result.get("description", result.get("text", ""))
+        return str(desc)[:200] if desc else "Camera not available or nothing visible."
+    # wave_arm and control_follow_mode use canned responses — return nothing here
+    return ""
+
+
+# Canned responses for pure action tools (instant, no LLM needed).
+_ACTION_CANNED: dict[str, list[str]] = {
+    "wave_arm": [
+        "Good to see you too, sir.",
+        "Hello there, sir.",
+        "Pleased to meet you again, sir.",
+        "Salutations, sir.",
+    ],
+    "control_follow_mode:enable": [
+        "Right behind you, sir. Try not to take too many corners.",
+        "Following. I'll do my best to keep up.",
+        "On your tail, sir.",
+    ],
+    "control_follow_mode:disable": [
+        "Stopped. I'll hold position here, sir.",
+        "Very well. Standing by.",
+        "Follow mode off. I'll stay right here, sir.",
+    ],
+    "control_follow_mode:fused": [
+        "Fused follow engaged, sir. BLE and camera combined.",
+        "BLE and camera active. Harder to lose me now, sir.",
+    ],
+    "control_follow_mode:detect": [
+        "Watching without moving, sir.",
+        "Detect-only mode. I'll observe from here.",
+    ],
+    "control_follow_mode:camera": [
+        "Camera follow active, sir.",
+        "Eyes on you. Camera follow engaged, sir.",
+    ],
+}
+
+# Spoken agent system prompt — used by run_spoken_turn() / _run_spoken_agent().
+# All voice queries route through the full tool-use loop with llama3.2:1b.
+_SPOKEN_AGENT_SYSTEM = (
+    "You are ROVER, the on-board AI of an autonomous robot. "
+    "Character: dry British wit, calm competence. Call owner 'sir'. "
+    "Never say 'certainly', 'absolutely', 'I cannot', or 'I am unable to'. "
+    "RESPONSE FORMAT: 2-4 spoken sentences. No markdown. No bullet lists. No preamble. "
+    "DATA: Always call a tool for live data — never invent temperatures, CPU%, or service states. "
+    "INTERPRET tool results in natural speech: "
+    "'temperature is 64 degrees' not 'temp_cpu=64C'; "
+    "'CPU at 12 percent' not 'cpu_percent: 12'. "
+    "Lead with the most important fact first. "
+    "COMMANDS: "
+    "hello/hi/wave → wave_arm. "
+    "how are you/system check → speak_diagnostics_summary. "
+    "follow me/come here → control_follow_mode(action=enable). "
+    "stop following/stay → control_follow_mode(action=disable). "
+    "what do you see/look → describe_camera. "
+    "run diagnostics/full check → get_full_diagnostics. "
+    "fix it/what is wrong → suggest_fix."
 )
 
 # ── Fast-path formatters ──────────────────────────────────────────────────────
@@ -789,120 +1020,247 @@ class RoverAgent:
         except Exception as exc:
             logger.warning("Agent: Ollama warmup failed (will retry on first chat): %s", exc)
 
-    async def run_spoken_turn(self, user_text: str, lang: str = "en") -> str:
-        """ROVER personality spoken response — bypasses fast-path and all tool use.
+    async def warmup_spoken_model(self, delay_s: float = 60.0) -> None:
+        """Preload llama3.2:1b into RAM after a startup delay.
 
-        Tries hailo-ollama first (if enabled in config), falls back to CPU ollama.
+        Called once at boot so the first voice turn is fast.
+        Fires keepalive loop to keep the model warm indefinitely.
+        """
+        await asyncio.sleep(delay_s)
+        if not await self._ensure_cpu_ollama():
+            logger.warning("Agent: spoken model warmup skipped — CPU ollama unavailable")
+            return
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as c:
+                r = await c.post(
+                    f"{_SPOKEN_CPU_BASE}/api/generate",
+                    json={
+                        "model":      _SPOKEN_MODEL,
+                        "prompt":     "hi",
+                        "stream":     False,
+                        "keep_alive": "10m",
+                        "options":    {"num_predict": 1},
+                    },
+                )
+                if r.status_code == 200:
+                    logger.info("Agent: spoken model warmup OK (%s loaded)", _SPOKEN_MODEL)
+                    self._spoken_base  = _SPOKEN_CPU_BASE
+                    self._spoken_model = _SPOKEN_MODEL
+                    self._start_keepalive()
+                else:
+                    logger.warning("Agent: spoken model warmup HTTP %d", r.status_code)
+        except Exception as exc:
+            logger.warning("Agent: spoken model warmup failed: %s", exc)
+
+    async def run_spoken_turn(
+        self, user_text: str, lang: str = "en", history: list | None = None
+    ) -> tuple[str, str]:
+        """Agentic voice turn — routes all queries through the full tool-use loop.
+
+        Returns (reply, "agent").  history is capped to last 12 messages (6 pairs).
         """
         logger.info("Agent: run_spoken_turn called, user_text=%r, lang=%s", user_text[:50], lang)
-        from voice_engine import ROVER_SYSTEM_PROMPT  # lazy import — avoids circular dep
+        diag_context = await self._fetch_spoken_context()
+        messages = list((history or [])[-12:])
+        user_content = user_text
+        if diag_context:
+            user_content = f"[Live system state: {diag_context}] User said: {user_text}"
+        messages.append({"role": "user", "content": user_content})
+        turn = await self._run_spoken_agent(messages, lang)
+        return turn.reply, "agent"
 
-        hailo_cfg = self._full_config.get("hailo_ollama", {})
-        use_hailo = hailo_cfg.get("enabled", False)
-        fallback_to_cpu = hailo_cfg.get("fallback_to_cpu", True)
-
-        lang_note = (
-            f"Respond in this language: {lang}. If lang is 'cs', respond in Czech. "
-            if lang and lang not in ("en", "auto")
-            else ""
-        )
-
-        if use_hailo:
-            h_base  = hailo_cfg.get("host", "http://localhost:8000")
-            h_model = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
-            h_predict = int(hailo_cfg.get("num_predict", 120))
-            h_temp    = float(hailo_cfg.get("temperature", 0.85))
-            # hailo-ollama supports /api/chat when content has no newlines.
-            # /api/generate cannot anchor ROVER persona in instruction-tuned qwen2.5-instruct:1.5b.
-            # Flatten user_text to strip any accidental newlines from Whisper output.
-            import re as _re
-            def _flatten(s: str) -> str:
-                return _re.sub(r"\s+", " ", s).strip()
-
-            # Quick reachability check before sending — retry once after 5s if down
-            async def _hailo_reachable() -> bool:
-                try:
-                    async with httpx.AsyncClient(timeout=3.0) as _c:
-                        return (await _c.get(f"{h_base}/api/tags")).status_code == 200
-                except Exception:
-                    return False
-
-            if not await _hailo_reachable():
-                logger.info("Agent: hailo-ollama not ready — waiting 5s then retrying")
-                await asyncio.sleep(5.0)
-                if not await _hailo_reachable():
-                    logger.warning("Agent: hailo-ollama unavailable — falling back to CPU")
-                    if not fallback_to_cpu:
-                        return ""
-                    # skip hailo attempt, go straight to CPU path below
-                else:
-                    use_hailo = True  # reachable after retry — proceed
-
-            if use_hailo:
-                try:
-                    async with httpx.AsyncClient(timeout=60.0) as c:
-                        # /api/chat with flat (no-newline) content — hailo-ollama supports it.
-                        # System + 3 few-shot prior turns anchor the ROVER persona reliably.
-                        h_messages = (
-                            [{"role": "system", "content": _ROVER_HAILO_SYSTEM}]
-                            + _ROVER_HAILO_FEW_SHOT
-                            + [{"role": "user", "content": _flatten(user_text)}]
-                        )
-                        r = await c.post(
-                            f"{h_base}/api/chat",
-                            json={
-                                "model":    h_model,
-                                "messages": h_messages,
-                                "stream":   False,
-                                "options":  {"num_predict": h_predict, "temperature": h_temp,
-                                             "top_p": 0.92},
-                            },
-                        )
-                        if r.status_code == 200:
-                            reply = r.json().get("message", {}).get("content", "").strip()
-                            logger.info("Agent: spoken turn OK (%d chars) via hailo", len(reply))
-                            self._spoken_base  = h_base
-                            self._spoken_model = h_model
-                            self._start_keepalive()
-                            return reply
-                        logger.warning("Agent: hailo spoken turn HTTP %d — %s", r.status_code, r.text[:120])
-                except Exception as exc:
-                    logger.warning("Agent: hailo spoken turn error: %s", exc)
-                if not fallback_to_cpu:
-                    return ""
-
-        # CPU ollama fallback (or primary when hailo disabled)
-        user_msg = (
-            f"{user_text}\n\n"
-            f"(Respond in 2-4 spoken sentences. No formatting. "
-            f"{lang_note}Respond in the same language the user spoke in: {lang}.)"
-        )
-        messages = [
-            {"role": "system", "content": ROVER_SYSTEM_PROMPT.strip()},
-            {"role": "user",   "content": user_msg},
-        ]
+    async def _fetch_spoken_context(self) -> str:
+        """Fetch lightweight live context for spoken turns (3 s timeout, never blocks)."""
         try:
-            async with httpx.AsyncClient(timeout=_SPOKEN_TIMEOUT_S) as c:
+            async with httpx.AsyncClient(timeout=3.0, verify=False) as client:
+                status_r, services_r = await asyncio.gather(
+                    client.get(f"{self._rover_base}/api/status"),
+                    client.get(f"{self._rover_base}/api/services"),
+                    return_exceptions=True,
+                )
+            parts: list[str] = []
+            if not isinstance(status_r, Exception) and status_r.status_code == 200:
+                d = status_r.json()
+                if d.get("person_detected"):
+                    parts.append("person_detected=yes")
+                if d.get("tracking_enabled"):
+                    parts.append("FOLLOW=on")
+            if not isinstance(services_r, Exception) and services_r.status_code == 200:
+                d = services_r.json()
+                th = d.get("thermal", {})
+                if th.get("temp_c") is not None:
+                    parts.append(f"temp={th['temp_c']:.1f}C")
+                svcs = d.get("services", {})
+                failed = [
+                    k.replace(".service", "")
+                    for k, v in svcs.items()
+                    if isinstance(v, dict) and not v.get("active", True)
+                ]
+                if failed:
+                    parts.append(f"FAILED={','.join(failed)}")
+            return " ".join(parts)
+        except Exception:
+            return ""
+
+    def _match_spoken_command(self, text: str) -> tuple[str, dict] | None:
+        """Match text against spoken fast-path patterns. Returns (tool_name, args) or None."""
+        msg = text.strip().lower()
+        for pattern, tool_name, args in _SPOKEN_FAST_PATTERNS:
+            if re.search(pattern, msg, re.IGNORECASE):
+                return tool_name, args
+        return None
+
+    async def _hailo_spoken_with_context(
+        self, user_text: str, tool_name: str, tool_result: Any, lang: str
+    ) -> str:
+        """Call hailo-ollama with tool result injected as context for fast voice response (~3s)."""
+        hailo_cfg = self._full_config.get("hailo_ollama", {})
+        if not hailo_cfg.get("enabled", False):
+            return ""
+        h_base    = hailo_cfg.get("host", "http://localhost:8000")
+        h_model   = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
+        h_predict = int(hailo_cfg.get("num_predict", 120))
+        h_temp    = float(hailo_cfg.get("temperature", 0.65))
+
+        context = _fmt_tool_result_for_voice(tool_name, tool_result)
+        # Build a sentence that gives hailo clear context to respond naturally.
+        user_msg = f"{user_text} [{context}]" if context else user_text
+
+        import re as _re
+        def _flatten(s: str) -> str:
+            return _re.sub(r"\s+", " ", s).strip()
+
+        sys_note = _ROVER_HAILO_SYSTEM
+        if lang and lang not in ("en", "auto"):
+            sys_note += f" Respond in this language: {lang}."
+
+        messages = (
+            [{"role": "system", "content": sys_note}]
+            + _ROVER_HAILO_FEW_SHOT
+            + [{"role": "user", "content": _flatten(user_msg)}]
+        )
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as c:
                 r = await c.post(
-                    f"{_SPOKEN_CPU_BASE}/api/chat",
+                    f"{h_base}/api/chat",
                     json={
-                        "model":    _SPOKEN_MODEL,
+                        "model":   h_model,
                         "messages": messages,
-                        "stream":   False,
-                        "options":  {"num_predict": 120, "temperature": 0.85, "top_p": 0.92},
+                        "stream":  False,
+                        "options": {"num_predict": h_predict, "temperature": h_temp, "top_p": 0.92},
                     },
                 )
                 if r.status_code == 200:
                     reply = r.json().get("message", {}).get("content", "").strip()
-                    logger.info("Agent: spoken turn OK (%d chars) via cpu", len(reply))
+                    logger.info("Agent: hailo_with_context OK (%d chars)", len(reply))
+                    self._spoken_base  = h_base
+                    self._spoken_model = h_model
+                    self._start_keepalive()
+                    return reply
+                logger.warning("Agent: hailo_with_context HTTP %d", r.status_code)
+        except Exception as exc:
+            logger.warning("Agent: hailo_with_context error: %s", exc)
+        return ""
+
+    async def _cpu_spoken_no_tools(
+        self, user_text: str, tool_result: Any, lang: str
+    ) -> str:
+        """CPU llama3.2:1b WITHOUT tools for fast conversational fallback (~10s)."""
+        context = ""
+        if tool_result and isinstance(tool_result, dict) and not tool_result.get("error"):
+            context = json.dumps(tool_result, default=str)[:300]
+
+        user_msg = f"[Result: {context}] {user_text}" if context else user_text
+        lang_note = f" Respond in this language: {lang}." if lang not in ("en", "auto") else ""
+        spoken_sys = _ROVER_HAILO_SYSTEM + lang_note
+
+        messages = (
+            [{"role": "system", "content": spoken_sys}]
+            + _ROVER_HAILO_FEW_SHOT
+            + [{"role": "user", "content": user_msg}]
+        )
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as c:
+                r = await c.post(
+                    f"{_SPOKEN_CPU_BASE}/api/chat",
+                    json={
+                        "model":   _SPOKEN_MODEL,
+                        "messages": messages,
+                        "stream":  False,
+                        "options": {"num_predict": 80, "temperature": 0.75, "top_p": 0.92},
+                    },
+                )
+                if r.status_code == 200:
+                    reply = r.json().get("message", {}).get("content", "").strip()
+                    logger.info("Agent: cpu_no_tools OK (%d chars)", len(reply))
                     self._spoken_base  = _SPOKEN_CPU_BASE
                     self._spoken_model = _SPOKEN_MODEL
                     self._start_keepalive()
                     return reply
-                logger.warning("Agent: cpu spoken turn HTTP %d — %s", r.status_code, r.text[:120])
         except Exception as exc:
-            logger.warning("Agent: cpu spoken turn error: %s", exc)
+            logger.warning("Agent: cpu_no_tools error: %s", exc)
         return ""
+
+    async def _run_spoken_agent(self, messages: list[dict], lang: str = "en") -> AgentTurn:
+        """Spoken agent — fast-path: pattern match → tool + hailo (~4s).
+
+        Routing:
+        1. Regex pattern match → direct tool call + hailo voice response (~4s)
+        2. No match → hailo-ollama for conversational reply (~3s)
+        3. Hailo unavailable → CPU llama3.2:1b without tools (~10s)
+        """
+        # Extract the latest user message (strip injected live-context prefix)
+        raw = next(
+            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
+        )
+        if "] User said: " in raw:
+            user_text = raw.split("] User said: ", 1)[-1].strip()
+        else:
+            user_text = raw.strip()
+
+        # ── Fast-path: known spoken command ─────────────────────────────────
+        match = self._match_spoken_command(user_text)
+        if match:
+            tool_name, tool_args = match
+            t0 = time.monotonic()
+            result = await self._run_tool(tool_name, tool_args)
+            ms = int((time.monotonic() - t0) * 1000)
+            tool_log = [{"name": tool_name, "args": tool_args, "result": result, "duration_ms": ms}]
+            logger.info("Agent: spoken fast-path %s → %d ms", tool_name, ms)
+
+            # Pure action tools: return canned response instantly (no LLM)
+            action_key = tool_name
+            if tool_name == "control_follow_mode":
+                action_key = f"control_follow_mode:{tool_args.get('action', 'disable')}"
+            if action_key in _ACTION_CANNED:
+                import random as _rng
+                canned = _rng.choice(_ACTION_CANNED[action_key])
+                return AgentTurn(canned, tool_log, None)
+
+            # Data tools: try hailo for voice response with result context
+            reply = await self._hailo_spoken_with_context(user_text, tool_name, result, lang)
+            if reply:
+                return AgentTurn(reply, tool_log, None)
+
+            # Hailo unavailable — fall back to CPU without tools
+            if await self._ensure_cpu_ollama():
+                reply = await self._cpu_spoken_no_tools(user_text, result, lang)
+            return AgentTurn(reply or "Done, sir.", tool_log, None)
+
+        # ── No pattern match: conversational query → hailo direct ───────────
+        reply = await self._converse_hailo(user_text, lang, [])
+        if reply:
+            return AgentTurn(reply, [], None)
+
+        # ── Hailo unavailable: CPU fallback without tools ────────────────────
+        if await self._ensure_cpu_ollama():
+            reply = await self._cpu_spoken_no_tools(user_text, None, lang)
+            if reply:
+                return AgentTurn(reply, [], None)
+
+        return AgentTurn(
+            "I'm having some difficulty with my language model at the moment, sir.", [], None
+        )
 
     # ── Spoken conversation (wake word flow) ───────────────────────────────
 
@@ -1400,17 +1758,112 @@ class RoverAgent:
                                         {"action": action, "service": args.get("service", "")})
             if name == "reboot_pi":
                 return await self._post("/api/maintenance/restart-pi", {})
+            # ── New spoken-agent tools ──────────────────────────────────────
+            if name == "wave_arm":
+                return await self._post("/api/arm/wave", {})
+            if name == "get_full_diagnostics":
+                status, diag, procs = await asyncio.gather(
+                    self._get("/api/status"),
+                    self._get("/api/diagnostics/full"),
+                    self._get("/api/diagnostics/processes"),
+                )
+                return {"status": status, "diagnostics": diag, "processes": procs}
+            if name == "get_hailo_status":
+                status, hailo = await asyncio.gather(
+                    self._get("/api/status"),
+                    self._get("/api/diagnostics/hailo"),
+                )
+                services = await self._get("/api/services")
+                return {
+                    "hailo": hailo,
+                    "person_detected": status.get("person_detected"),
+                    "tracking_enabled": status.get("tracking_enabled"),
+                    "temp_c": services.get("thermal", {}).get("temp_c"),
+                }
+            if name == "speak_diagnostics_summary":
+                status, services = await asyncio.gather(
+                    self._get("/api/status"),
+                    self._get("/api/services"),
+                )
+                th = services.get("thermal", {})
+                svcs = services.get("services", {})
+                failed = [
+                    k.replace(".service", "")
+                    for k, v in svcs.items()
+                    if isinstance(v, dict) and not v.get("active", True)
+                ]
+                return {
+                    "temp_c": th.get("temp_c"),
+                    "temp_level": th.get("level", "cool"),
+                    "throttled": th.get("throttle_current", False),
+                    "person_detected": status.get("person_detected", False),
+                    "tracking_enabled": status.get("tracking_enabled", False),
+                    "follow_mode": status.get("follow_mode", "off"),
+                    "ble_seen": status.get("ble_seen", False),
+                    "failed_services": failed,
+                    "serial_ok": status.get("serial_ok", False),
+                }
+            if name == "suggest_fix":
+                diag = await self._get("/api/diagnostics/full")
+                services = await self._get("/api/services")
+                ext = diag.get("extended", {})
+                th = services.get("services", {})
+                svcs_detail = services.get("services", {})
+                fixes_applied: list[str] = []
+                proposals: list[str] = []
+                # Safe auto-fix: restart rover-camera if failed/inactive
+                cam = svcs_detail.get("rover-camera.service", {})
+                if isinstance(cam, dict) and not cam.get("active", True):
+                    try:
+                        await self._post("/api/maintenance/service",
+                                         {"action": "start", "service": "rover-camera"})
+                        fixes_applied.append("rover-camera restarted")
+                    except Exception as e:
+                        proposals.append(f"rover-camera restart failed: {e}")
+                # Risky proposals only (no auto-apply)
+                cpu = ext.get("cpu_percent", 0)
+                if isinstance(cpu, (int, float)) and cpu > 85:
+                    proposals.append(f"CPU at {cpu:.0f}% — consider stopping non-essential services")
+                ram = ext.get("ram_used_mb", 0)
+                if isinstance(ram, (int, float)) and ram > 380:
+                    proposals.append(f"RAM at {ram:.0f} MB — consider restarting rover2-api")
+                temps = ext.get("temperatures", {})
+                for sensor, t in (temps.items() if isinstance(temps, dict) else []):
+                    cur = t.get("current") if isinstance(t, dict) else None
+                    if cur is not None and cur > 80:
+                        proposals.append(f"{sensor} temperature {cur:.0f} C — reduce load")
+                return {
+                    "fixes_applied": fixes_applied,
+                    "proposals": proposals,
+                    "status": "ok" if not proposals else "action_needed",
+                }
+            if name == "control_follow_mode":
+                action = args.get("action", "disable")
+                if action in ("enable", "camera"):
+                    return await self._post("/api/tracking",
+                                            {"enabled": True, "ble_follow_enabled": False})
+                if action == "fused":
+                    return await self._post("/api/tracking",
+                                            {"enabled": True, "ble_follow_enabled": True})
+                if action == "detect":
+                    return await self._post("/api/tracking",
+                                            {"detect_only": True, "enabled": False})
+                # disable
+                return await self._post("/api/tracking",
+                                        {"enabled": False, "detect_only": False,
+                                         "ble_follow_enabled": False})
         except Exception as exc:
             return {"error": str(exc)}
         return {"error": f"unknown tool: {name}"}
 
     async def _get(self, path: str) -> Any:
-        async with httpx.AsyncClient(timeout=20) as c:
+        # verify=False: rover_base is loopback or LAN with self-signed cert — safe.
+        async with httpx.AsyncClient(timeout=20, verify=False) as c:
             r = await c.get(f"{self._rover_base}{path}")
             return r.json()
 
     async def _post(self, path: str, body: dict) -> Any:
-        async with httpx.AsyncClient(timeout=20) as c:
+        async with httpx.AsyncClient(timeout=20, verify=False) as c:
             r = await c.post(f"{self._rover_base}{path}", json=body)
             return r.json()
 

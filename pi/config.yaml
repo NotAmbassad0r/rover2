@@ -80,7 +80,7 @@ agent:
   hailo_ollama_base: http://127.0.0.1:8000   # hailo-ollama on AI HAT+ (port 8000)
   model: llama3.2:1b                         # CPU ollama model (fallback)
   hailo_model: qwen2.5-instruct:1.5b         # NPU model — 6.7 t/s on Hailo-10H
-  rover_base: http://127.0.0.1:8082          # rover2-api self-call for tool execution
+  rover_base: https://127.0.0.1:8082         # rover2-api self-call for tool execution (HTTPS, self-signed)
   ollama_timeout_s: 180
   warmup_on_start: true                      # ping hailo-ollama at startup
   fallback_to_cpu: true                      # fall back to localhost:11434 if hailo-ollama unavailable

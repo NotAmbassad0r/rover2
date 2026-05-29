@@ -599,6 +599,8 @@ def create_app(
         asyncio.create_task(_metrics_loop())
         if rover_agent is not None:
             asyncio.create_task(rover_agent.warmup())
+            # Preload llama3.2:1b for spoken turns after 60 s (lets hailo settle first)
+            asyncio.create_task(rover_agent.warmup_spoken_model(delay_s=60.0))
         asyncio.create_task(_warmup_hailo(max_attempts=5, delay_s=10.0))
         if cam_idle is not None:
             _ultra_poll_s = float(config.get("ultrasonic", {}).get("poll_interval_s", 0.5))
@@ -1281,7 +1283,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Invalid JSON") from exc
 
-        # Spoken voice path — bypass all fast-path and tool-use, use ROVER personality
+        # Spoken voice path — agentic tool-use loop with ROVER personality
         if body.get("spoken"):
             # Accept simple {message: "..."} or legacy {messages: [{role, content}]}
             user_text = ""
@@ -1296,13 +1298,14 @@ def create_app(
                 return JSONResponse({"reply": "", "tool_log": [], "action_proposal": None})
             lang = str(body.get("lang", "en"))
             try:
-                reply = await asyncio.wait_for(
+                reply_tuple = await asyncio.wait_for(
                     rover_agent.run_spoken_turn(user_text, lang),
                     timeout=95.0,
                 )
             except asyncio.TimeoutError:
-                reply = ""
-            logger.info("Agent: spoken turn OK (%d chars) via hailo — TTS on A32", len(reply))
+                reply_tuple = ("", "agent")
+            reply = reply_tuple[0] if isinstance(reply_tuple, tuple) else reply_tuple
+            logger.info("Agent: spoken turn OK (%d chars) via agent — TTS on A32", len(reply))
             return JSONResponse({"reply": reply, "tool_log": [], "action_proposal": None})
 
         messages = body.get("messages", [])
@@ -1371,15 +1374,15 @@ def create_app(
         _conversation_timeout_task = asyncio.ensure_future(_auto_end())
 
         try:
-            result = await asyncio.wait_for(
-                rover_agent.run_converse_turn(message, lang, history),
+            reply_tuple = await asyncio.wait_for(
+                rover_agent.run_spoken_turn(message, lang, history),
                 timeout=95.0,
             )
         except asyncio.TimeoutError:
-            result = {"reply": "", "routed_to": "hailo"}
+            reply_tuple = ("", "agent")
 
-        reply     = result.get("reply", "")
-        routed_to = result.get("routed_to", "hailo")
+        reply     = reply_tuple[0] if isinstance(reply_tuple, tuple) else reply_tuple
+        routed_to = reply_tuple[1] if isinstance(reply_tuple, tuple) else "agent"
         logger.info(
             "Agent: spoken turn OK (%d chars) via %s — TTS on A32",
             len(reply), routed_to,
@@ -1857,6 +1860,28 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return JSONResponse({"status": "ok", "mode": "speed", "direction": direction, "pwm": pwm})
+
+    @app.post("/api/arm/wave")
+    async def arm_wave() -> JSONResponse:
+        """Wave arm greeting: up → down → up → down, total ≤2 s."""
+        try:
+            # up 600 ms
+            megapi.arm(action="up")
+            await asyncio.sleep(0.6)
+            # down 400 ms
+            megapi.arm(action="down")
+            await asyncio.sleep(0.4)
+            # up 400 ms
+            megapi.arm(action="up")
+            await asyncio.sleep(0.4)
+            # down 400 ms
+            megapi.arm(action="down")
+            await asyncio.sleep(0.4)
+            # stop
+            megapi.arm(0)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return JSONResponse({"status": "ok", "action": "wave_arm"})
 
     @app.get("/api/ultrasonic")
     async def ultrasonic() -> JSONResponse:
