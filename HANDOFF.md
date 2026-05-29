@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-28 (local wake-word STT via faster-whisper, BLE disable option)
+Last updated: 2026-05-29 (agentic voice assistant — tool use, diagnostics, natural commands)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -129,7 +129,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
                        MediaRecorder 2.5 s chunk → POST /api/voice/wake → faster-whisper
                        → wake=true → _startConversation()
     Conversation mode: MediaRecorder + RMS silence gate → POST /api/voice/transcribe →
-                       faster-whisper → POST /api/voice/converse → hailo-ollama/llama3.2:3b
+                       faster-whisper → POST /api/voice/converse → run_spoken_turn() agentic
                        → Web Speech API TTS reply
 
     ── Python services (pi/) ──────────────────────────────────────────────────
@@ -146,7 +146,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
     pi/metrics_store.py SQLite time-series metrics DB (~5 s sample interval)
     pi/log_buffer.py    In-process log ring for /api/logs
     pi/chat_router.py   Regex NL command router (zero-LLM fast path, 14 commands)
-    pi/agent.py         RoverAgent: Ollama tool-use agentic loop (20 tools, fast-path)
+    pi/agent.py         RoverAgent: Ollama tool-use agentic loop (26 tools, fast-path, spoken agent)
     pi/vlm_engine.py    VLMEngine: Hailo Qwen2-VL-2B-Instruct scene description
     pi/voice_engine.py  Piper TTS (binary subprocess) + faster-whisper STT + ROVER personality
     pi/audio_router.py  UDP audio router (asyncio, zero-CPU idle) + /ws/audio WebSocket bridge
@@ -214,7 +214,8 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Web DIAG tab** — full system diagnostics with charts
 - **Web CHAT tab** — NL commands, VLM, AI agent, 16 presets, voice
 - **Web METRICS tab** — Chart.js graphs (CPU%, Temp, RAM%)
-- **AI Agent** — Ollama llama3.2:1b + 20 tools; 9 fast-path patterns
+- **AI Agent** — Ollama llama3.2:1b + 26 tools; 9 fast-path patterns (web UI); voice uses separate spoken fast-path
+- **Agentic voice assistant** — `run_spoken_turn()` routes voice through tool-use loop; 11 regex patterns for natural commands; instant canned responses for actions; hailo for data queries; `POST /api/arm/wave` endpoint
 - **VLM scene description** — Hailo Qwen2-VL snapshot caption
 
 ---
@@ -233,7 +234,10 @@ A32 voice pipeline (fully local — no cloud)
     Wake word:   AnalyserNode RMS → MediaRecorder 2.5 s → POST /api/voice/wake
                  → faster-whisper → "rover" detected → conversation start
     Conversation: MediaRecorder + VAD silence gate → POST /api/voice/transcribe
-                 → POST /api/voice/converse → hailo-ollama (fast) or llama3.2:3b (complex)
+                 → POST /api/voice/converse → run_spoken_turn() agentic loop:
+                   1. regex pattern → direct tool call + canned/hailo reply (~0.1–4 s)
+                   2. hailo-ollama conversational fallback (~3 s)
+                   3. CPU llama3.2:1b without tools (~10 s)
                  → Web Speech API TTS (on-device, British voice)
 ```
 
@@ -530,11 +534,13 @@ ble_tracker:
 - Complete T3 (BLE beacon seen, handoff, reacquire)
 - Log all results in TEST_RESULTS.md
 
-**Voice assistant (now fully local — no cloud):**
-- Wake word: say "rover" → A32 VAD detects energy → 2.5 s chunk → faster-whisper on Pi → conversation starts
-- Conversation: MediaRecorder + RMS silence gate → transcribe → hailo-ollama or llama3.2:3b → Web Speech TTS
+**Voice assistant (fully local, agentic — 2026-05-29):**
+- Say "rover" → A32 VAD → faster-whisper → `run_spoken_turn()` → hailo/tool/canned reply → Web Speech TTS
+- **Natural commands:** hello (wave arm), how are you (live diagnostics), follow me, stop following, what do you see, run diagnostics, fix it
+- **Timing:** action commands ~0.1s, data queries ~4s, conversational ~3-4s
+- `POST /api/arm/wave` — wave sequence (up/down/up/down, 1.8s total)
+- `rover_base` in config.yaml is now HTTPS (`https://127.0.0.1:8082`) — tool calls work correctly
 - To test offline: enable airplane mode on A32, visit `https://192.168.250.254:8082/face/`, say "rover"
-- MIC button manually starts/ends conversation (no wake word needed)
 - For office demo with no BLE: set `ble_tracker.enabled: false` in config.yaml → deploy
 
 **Software options:**
