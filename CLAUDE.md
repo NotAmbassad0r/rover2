@@ -21,7 +21,9 @@
 |------|---------|
 | `pi/` | Service code (deployed to `/opt/rover2/`) |
 | `pi/config.yaml` | All runtime tuning — edit here, deploy via `deploy_pi.sh` |
-| `pi/web/static/index.html` | Single-page control UI |
+| `pi/web/static/index.html` | Single-page control UI (CONTROL/TOOLS/DIAG/CHAT/METRICS tabs) |
+| `face/index.html` | Samsung Galaxy A32 face PWA — voxel face, voice pipeline, debug overlay |
+| `face/sw.js` | Face PWA service worker — bump `CACHE` version on every face deploy |
 | `systemd/` | Service unit files |
 | `scripts/` | Deploy / setup helpers |
 | `docs/` | Test plans, results, roadmap |
@@ -111,3 +113,12 @@ For **office demo** (no BLE needed): set `ble_tracker.enabled: false` in `pi/con
 - **TTS**: Web Speech API on A32 for responses; Piper for proactive events (PERSON_FOUND etc)
 - **`webkitSpeechRecognition` is NOT used** — it requires Google servers (breaks offline demo)
 - Key constants in `face/index.html`: `WAKE_RMS_THRESHOLD`, `CONV_RMS_THRESHOLD`, `WAKE_CHUNK_S`
+- **Agent**: `run_spoken_turn()` — 3-tier: regex fast-path (0.1 s) → hailo-ollama (3 s) → CPU fallback
+- **hailo-ollama**: enabled on port 8000 (qwen2.5-instruct:1.5b); shares Hailo chip via `group_id=rover2`
+
+## Face PWA (face/index.html)
+
+- Canvas status text — bottom-centre, iris colour, LISTENING.../THINKING.../SPEAKING/FOLLOWING/etc.
+- Debug overlay — top-left, z-index 9999, rows: MIC/LEVEL/VAD/SESSION/LAST/ROUTED/WSS
+- **After any face change**: bump `CACHE` version in `face/sw.js`, then `./deploy_pi.sh`
+- **On A32 after deploy**: unregister SW (DevTools → Application → Service Workers → Unregister) then reload

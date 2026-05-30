@@ -38,29 +38,29 @@ canvas{display:block;image-rendering:pixelated}
 #btn-audio-route{font-size:11px;padding:8px 14px}
 #alert-bar{width:100%;padding:4px 16px;font-size:11px;color:#d29922;
   text-align:center;min-height:18px;letter-spacing:.05em}
-/* DEBUG OVERLAY — remove before final demo */
-#dbg-panel{width:100%;background:rgba(0,0,0,.80);padding:5px 14px 6px;cursor:pointer;
-  font-size:10px;line-height:1.75;border-top:1px solid #21262d}
-.dbg-row{display:flex;gap:8px}
+/* DEBUG OVERLAY */
+#dbg-panel{position:fixed;top:0;left:0;z-index:9999;
+  background:rgba(0,0,0,.75);padding:4px 8px 5px;cursor:pointer;
+  font-size:9px;line-height:1.75;color:#fff;
+  font-family:'Courier New',Courier,monospace}
+.dbg-row{display:flex;gap:6px}
 .dbg-key{color:#8b949e;min-width:34px;flex-shrink:0}
 </style>
 </head>
 <body>
 <canvas id="face"></canvas>
 
+<div id="dbg-panel" onclick="dbgToggle()">
+  <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
+  <div class="dbg-row"><span class="dbg-key">LEVEL</span><span id="dbg-level">0.000</span></div>
+  <div class="dbg-row"><span class="dbg-key">VAD</span><span id="dbg-vad">idle</span></div>
+  <div class="dbg-row"><span class="dbg-key">SESSION</span><span id="dbg-session">inactive</span></div>
+  <div class="dbg-row"><span class="dbg-key">LAST</span><span id="dbg-last">—</span></div>
+  <div class="dbg-row"><span class="dbg-key">ROUTED</span><span id="dbg-routed">—</span></div>
+  <div class="dbg-row"><span class="dbg-key">WSS</span><span id="dbg-wss">disconnected</span></div>
+</div>
+
 <div id="ui">
-  <!-- DEBUG OVERLAY — remove before final demo -->
-  <div id="dbg-panel" onclick="dbgToggle()">
-    <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
-    <div class="dbg-row"><span class="dbg-key">VAD</span><span id="dbg-vad">idle</span></div>
-    <div class="dbg-row"><span class="dbg-key">TTS</span><span id="dbg-tts">—</span></div>
-    <div class="dbg-row"><span class="dbg-key">VOICE</span><span id="dbg-voice">—</span></div>
-    <div class="dbg-row"><span class="dbg-key">SESSION</span><span id="dbg-session">inactive</span></div>
-    <div class="dbg-row"><span class="dbg-key">ROUTED</span><span id="dbg-routed">—</span></div>
-    <div class="dbg-row"><span class="dbg-key">LAST</span><span id="dbg-last">—</span></div>
-    <div class="dbg-row"><span class="dbg-key">WSS</span><span id="dbg-wss">disconnected</span></div>
-    <div class="dbg-row"><span class="dbg-key">SSL</span><span id="dbg-ssl">?</span></div>
-  </div>
   <div id="alert-bar"></div>
   <div id="status-bar">
     <span><span class="dot" id="dot-ws"></span>WS</span>
@@ -105,7 +105,7 @@ window.addEventListener('resize', resizeCanvas);
 const STATE = {IDLE:'idle',DETECT:'detect',FOLLOW:'follow',SEARCH:'search',
                BLOCK:'block',SPEAK:'speak',ALERT:'alert',OFFLINE:'offline'};
 
-let faceState   = STATE.OFFLINE;
+let faceState   = STATE.IDLE;   // start IDLE; only go OFFLINE on WS disconnect
 let prevState   = STATE.OFFLINE;
 let _stateAt    = 0;
 let _personDir  = 0;   // -1=left, 0=center, 1=right — drives pupil
@@ -304,6 +304,18 @@ function _drawFace(now) {
     _drawBlock(cx - 1, noseY, 1, 1, C.eye_bg);
     _drawBlock(cx + 1, noseY, 1, 1, C.eye_bg);
   }
+
+  // ── Status text (bottom-centre) ──
+  if (_statusText) {
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = irisColor;
+    ctx.font = '11px monospace';
+    ctx.letterSpacing = '3px';
+    ctx.textAlign = 'center';
+    ctx.fillText(_statusText, W / 2, H - 30);
+    ctx.restore();
+  }
 }
 
 // ── Animation loop ──────────────────────────────────────────────────────────
@@ -439,6 +451,7 @@ function _applyTelemetry(d) {
   }
 
   setState(newState);
+  _updateStatusText();
 
   // Mode label
   const labels = {idle:'IDLE',detect:'DETECT',follow:'FOLLOW',search:'SEARCHING',
@@ -464,10 +477,11 @@ function _applyTelemetry(d) {
 function _connectWS() {
   if (_ws && _ws.readyState <= 1) return;
   _ws = new WebSocket(WS_URL);
-  _ws.onopen  = () => { _updateDots(true); clearTimeout(_wsReconnectTimer); _dbg.wss = 'connected'; _dbgUpdate(); };
+  _ws.onopen  = () => { _updateDots(true); clearTimeout(_wsReconnectTimer); setState(STATE.IDLE); _updateStatusText(); _dbg.wss = 'connected'; _dbgUpdate(); };
   _ws.onclose = () => {
     _updateDots(false);
     setState(STATE.OFFLINE);
+    _updateStatusText();
     _dbg.wss = 'disconnected'; _dbgUpdate();
     _wsReconnectTimer = setTimeout(_connectWS, 3000);
   };
@@ -519,6 +533,8 @@ function _playPcmFrame(arrayBuffer) {
     // Mark as speaking
     _speakUntil = Date.now() + Math.ceil(audioBuf.duration * 1000) + 200;
     setState(STATE.SPEAK);
+    _voiceState = 'speaking'; _updateStatusText();
+    src.onended = () => { _voiceState = 'idle'; _updateStatusText(); };
   } catch (e) {
     console.warn('PCM playback error', e);
   }
@@ -545,14 +561,11 @@ const _dbg = { mic: 'pending', vad: 'idle', last: '—', wss: 'disconnected',
 function _dbgUpdate() {
   document.getElementById('dbg-mic').textContent     = _dbg.mic;
   document.getElementById('dbg-vad').textContent     = _dbg.vad;
-  document.getElementById('dbg-tts').textContent     = _dbg.tts;
-  document.getElementById('dbg-voice').textContent   = _dbg.voice;
   document.getElementById('dbg-session').textContent = _dbg.session;
   document.getElementById('dbg-routed').textContent  = _dbg.routed;
   const last = _dbg.last;
   document.getElementById('dbg-last').textContent    = last.length > 40 ? last.slice(0, 40) : last;
   document.getElementById('dbg-wss').textContent     = _dbg.wss;
-  document.getElementById('dbg-ssl').textContent     = window.location.protocol;
 }
 
 function dbgToggle() {
@@ -562,10 +575,37 @@ function dbgToggle() {
 
 _dbgUpdate();
 
+// Live RMS level in debug overlay — 150 ms interval
+setInterval(() => {
+  document.getElementById('dbg-level').textContent = _rmsLevel().toFixed(3);
+}, 150);
+
 // ── Voice state ───────────────────────────────────────────────────────────────
 let _speaking        = false;   // true while TTS utterance is active
 let _conversation    = false;   // true while in a conversation session
 let _convTurnCount   = 0;
+let _convLoopActive  = false;   // prevents concurrent _convLoop invocations
+
+// ── Canvas status text ────────────────────────────────────────────────────────
+let _statusText = '';   // rendered on canvas bottom-centre; '' = hidden
+let _voiceState = 'idle';  // 'idle' | 'listening' | 'thinking' | 'speaking'
+
+function _updateStatusText() {
+  // Voice states take priority over robot states
+  if (_voiceState === 'listening') { _statusText = 'LISTENING...'; return; }
+  if (_voiceState === 'thinking')  { _statusText = 'THINKING...';  return; }
+  if (_voiceState === 'speaking')  { _statusText = 'SPEAKING';     return; }
+  // Robot / face states
+  switch (faceState) {
+    case STATE.FOLLOW:   _statusText = 'FOLLOWING';         break;
+    case STATE.SEARCH:   _statusText = 'SEARCHING';         break;
+    case STATE.BLOCK:    _statusText = 'OBSTACLE DETECTED'; break;
+    case STATE.ALERT:    _statusText = 'ALERT';             break;
+    case STATE.DETECT:   _statusText = 'MOVING';            break;
+    case STATE.OFFLINE:  _statusText = 'OFFLINE';           break;
+    default:             _statusText = '';                  break;  // IDLE = clean face
+  }
+}
 
 // Legacy MediaRecorder path (USE_WEB_SPEECH = false)
 let _mediaRecorder = null;
@@ -613,6 +653,7 @@ async function startRecording() {
     const opts = mimeType ? { mimeType } : {};
     _mediaRecorder = new MediaRecorder(stream, opts);
     const actualMime = _mediaRecorder.mimeType || mimeType;
+    document.getElementById('dbg-mime').textContent = actualMime || 'default';
     _audioChunks = [];
     _mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) _audioChunks.push(e.data); };
     _mediaRecorder.onstop = async () => {
@@ -706,18 +747,21 @@ function _ttsSpeak(text) {
   utterance.onstart = () => {
     _speakUntil = Date.now() + 60000;  // hold SPEAK state; cleared in onend
     setState(STATE.SPEAK);
+    _voiceState = 'speaking'; _updateStatusText();
     _dbg.vad = 'speaking';
     _dbgUpdate();
   };
   utterance.onend = () => {
     _speakUntil = 0;
     setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+    _voiceState = 'idle'; _updateStatusText();
     _dbg.vad = 'idle';
     _dbgUpdate();
   };
   utterance.onerror = (e) => {
     console.warn('TTS error:', e.error);
     _speakUntil = 0;
+    _voiceState = 'idle'; _updateStatusText();
     _dbg.vad = 'idle';
     _dbgUpdate();
   };
@@ -745,18 +789,21 @@ function _ttsSpeakAsync(text) {
       _speaking = true;
       _speakUntil = Date.now() + 60000;
       setState(STATE.SPEAK);
+      _voiceState = 'speaking'; _updateStatusText();
       _dbg.vad = 'speaking'; _dbgUpdate();
     };
     utterance.onend = () => {
       _speaking = false;
       _speakUntil = 0;
       setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+      _voiceState = 'idle'; _updateStatusText();
       _dbg.vad = 'idle'; _dbgUpdate();
       resolve();
     };
     utterance.onerror = () => {
       _speaking = false;
       _speakUntil = 0;
+      _voiceState = 'idle'; _updateStatusText();
       _dbg.vad = 'idle'; _dbgUpdate();
       resolve();
     };
@@ -810,6 +857,7 @@ async function _startVoicePipeline() {
 function _startWakeVad() {
   if (_conversation || _vadActive) return;
   _vadActive = true;
+  _voiceState = 'listening'; _updateStatusText();
   _dbg.vad = 'listening for "rover"'; _dbgUpdate();
 
   const poll = async () => {
@@ -817,6 +865,7 @@ function _startWakeVad() {
       await new Promise(r => setTimeout(r, 80));
       if (_rmsLevel() >= WAKE_RMS_THRESHOLD) {
         _vadActive = false;
+        _voiceState = 'thinking'; _updateStatusText();
         _dbg.vad = 'audio — checking wake…'; _dbgUpdate();
         const isWake = await _checkWakeWord();
         if (isWake && !_conversation) {
@@ -841,6 +890,7 @@ async function _recordWakeChunk() {
     let rec;
     try { rec = new MediaRecorder(_micStream, opts); }
     catch (_) { resolve(null); return; }
+    document.getElementById('dbg-mime').textContent = rec.mimeType || mimeType || 'default';
     const chunks = [];
     rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
     rec.onstop = () => {
@@ -882,6 +932,7 @@ async function _recordConvTurn() {
     let rec;
     try { rec = new MediaRecorder(_micStream, opts); }
     catch (_) { resolve(null); return; }
+    document.getElementById('dbg-mime').textContent = rec.mimeType || mimeType || 'default';
     const chunks = [];
     let speechStarted = false;
     let silenceStart  = null;
@@ -944,9 +995,15 @@ async function _startConversation() {
 }
 
 async function _convLoop(sessionId, history) {
+  if (_convLoopActive) {
+    console.warn('_convLoop: already active, ignoring duplicate call');
+    return;
+  }
+  _convLoopActive = true;
   let convTimeoutHandle = null;
 
   const _end = async (phrase) => {
+    _convLoopActive = false;  // release guard before any async work
     _conversation   = false;
     _convEndRequest = false;
     if (convTimeoutHandle) clearTimeout(convTimeoutHandle);
@@ -962,13 +1019,16 @@ async function _convLoop(sessionId, history) {
     const btnMic = document.getElementById('btn-mic');
     btnMic.textContent = 'MIC';
     btnMic.classList.remove('recording');
+    _voiceState = 'idle'; _updateStatusText();
     _dbg.session = 'inactive'; _dbg.vad = 'idle'; _dbgUpdate();
     _startWakeVad();  // resume listening for wake word
   };
 
   const loop = async () => {
+    if (!_conversation) return;  // abort if _end() was called externally (e.g. from timeout)
     if (_convEndRequest) { await _end('Very well, sir.'); return; }
 
+    _voiceState = 'listening'; _updateStatusText();
     _dbg.vad = 'listening…'; _dbgUpdate();
     _showBubble('user', '…');
 
@@ -989,6 +1049,7 @@ async function _convLoop(sessionId, history) {
     }
 
     clearTimeout(convTimeoutHandle);
+    _voiceState = 'thinking'; _updateStatusText();
     _dbg.vad = 'transcribing…'; _dbgUpdate();
 
     // POST audio to faster-whisper on Pi — fully local, no cloud
@@ -1019,6 +1080,7 @@ async function _convLoop(sessionId, history) {
 
     _convTurnCount++;
     _dbg.session = `active (${_convTurnCount} turn${_convTurnCount > 1 ? 's' : ''})`;
+    _voiceState = 'thinking'; _updateStatusText();
     _dbg.vad = 'thinking…'; _dbg.last = transcript.slice(0, 30); _dbgUpdate();
     _showBubble('user', transcript);
 

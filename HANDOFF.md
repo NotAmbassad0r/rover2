@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-29 (agentic voice assistant — tool use, diagnostics, natural commands)
+Last updated: 2026-05-30 (Face PWA — canvas status text, debug overlay, face/conv bug fixes)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -178,7 +178,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 | `rover-camera.service` | **8081** | MJPEG (v1 stack; shared) |
 | `ollama.service` | **11434** | Local LLM — llama3.2:1b for agent tool-use |
 | `rover-api` (v1) | 8080 | Stop when testing ROVER2 serial |
-| `hailo-ollama` | — | **Permanently disabled** — conflicts with Hailo chip ownership |
+| `hailo-ollama` | **8000** | Voice agent fast-path (qwen2.5-instruct:1.5b on AI HAT+); enabled by `deploy_pi.sh` |
 | `rover2-restore-wifi.service` | — | Boot: re-apply WiFi from `/boot/firmware/network-config` |
 | `rover2-virtual-usb-dongle.service` | — | Optional ~12% CPU keep-alive for Viking bank |
 
@@ -203,6 +203,10 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - Boot partition read-only (`/etc/fstab`: `ro,defaults`) — cmdline.txt protected from corruption
 - `hailo-ollama.service` permanently disabled
 - **ROVER Face PWA** — `/face/` served by rover2-api; voxel face canvas, 8 states, WebSocket telemetry
+- **Face canvas status text** — bottom-centre label rendered in iris colour at 70% opacity; 11 px monospace, 3 px letter-spacing, uppercase. Voice states take priority over robot states: LISTENING… / THINKING… / SPEAKING → FOLLOWING / SEARCHING / OBSTACLE DETECTED / ALERT / MOVING / OFFLINE. IDLE = no text (clean face). Updated on every telemetry tick, VAD transition, and TTS start/end
+- **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache now on `rover-face-v3`
+- **Face initial state** — `faceState` initialises as `STATE.IDLE` (not OFFLINE); face shows normally on page load. `_ws.onopen` snaps to IDLE immediately; `_ws.onclose` transitions to OFFLINE and shows "OFFLINE" in status text
+- **Voice conversation concurrency fix** — `_convLoopActive` guard at outer `_convLoop` prevents duplicate invocations; `if (!_conversation) return` at start of inner `loop()` stops runaway iterations when the 10-second silence timeout fires `_end()` mid-fetch
 - **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice; `POST /api/voice/speak` streams WAV; length_scale 1.05; for proactive server events only. Agent replies spoken via **Web Speech API** on A32 (`speechSynthesis`, British voice, rate 0.88)
 - **STT** — faster-whisper tiny (int8, CPU, ctranslate2, ~150 MB RSS on first call). `/api/voice/transcribe` (full turn), `/api/voice/wake` (2.5 s chunk, returns `{wake: bool, transcript: str}`). No cloud, fully offline
 - **Proactive speech** — voice_engine.py fires BOOT_COMPLETE, PERSON_FOUND/LOST, OBSTACLE, THERMAL events (debounced 30s, ROVER_A32 mode only)
@@ -481,7 +485,7 @@ ble_tracker:
 4. **BLE false positives** — Samsung UUID `fcf1` is common. In a dense apartment many devices advertise it. Disable BLE (UI button) if false positives cause unwanted motion during camera testing.
 5. **Hailo first-enable delay** — Hailo loads on first DETECT/FOLLOW enable with 30s post-boot warmup. First enable after boot may take a few seconds before inference starts.
 6. **llama3.2:1b for agent** — gemma2:2b does NOT support tool-use in Ollama. Do not switch.
-7. **hailo-ollama permanently disabled** — conflicts with Hailo chip. Do not re-enable.
+7. **hailo-ollama** — now **enabled** by `deploy_pi.sh` for the voice agent fast-path (qwen2.5-instruct:1.5b, port 8000). The earlier "permanently disabled" note is obsolete — the chip-sharing conflict was resolved via `group_id=rover2` + ROUND_ROBIN scheduler shared with body_tracker and VLM.
 8. **Pi TCP/443 blocked at gateway** — pip fails for external packages. deploy_pi.sh sideloads wheels.
 9. **BLE MAC randomisation** — Android 10+ randomises BLE MAC every ~15 min. Always match by UUID.
 10. **Browser cache** — Hard-refresh (`Ctrl+Shift+R`) after every deploy.
@@ -534,14 +538,18 @@ ble_tracker:
 - Complete T3 (BLE beacon seen, handoff, reacquire)
 - Log all results in TEST_RESULTS.md
 
-**Voice assistant (fully local, agentic — 2026-05-29):**
+**Voice assistant (fully local, agentic — 2026-05-29):** ✓ done
 - Say "rover" → A32 VAD → faster-whisper → `run_spoken_turn()` → hailo/tool/canned reply → Web Speech TTS
 - **Natural commands:** hello (wave arm), how are you (live diagnostics), follow me, stop following, what do you see, run diagnostics, fix it
 - **Timing:** action commands ~0.1s, data queries ~4s, conversational ~3-4s
-- `POST /api/arm/wave` — wave sequence (up/down/up/down, 1.8s total)
-- `rover_base` in config.yaml is now HTTPS (`https://127.0.0.1:8082`) — tool calls work correctly
 - To test offline: enable airplane mode on A32, visit `https://192.168.250.254:8082/face/`, say "rover"
 - For office demo with no BLE: set `ble_tracker.enabled: false` in config.yaml → deploy
+
+**Face PWA (2026-05-30):** ✓ done
+- Canvas status text (bottom-centre, iris colour) and debug overlay (top-left, 7 rows) both deployed
+- Face no longer shows dark/offline on page load — starts IDLE
+- Voice conversation no longer fires duplicate LLM requests
+- Service worker on `rover-face-v3`; clear browser cache / unregister SW if overlay looks wrong
 
 **Software options:**
 - "ME only" follow: BLE + camera must agree before following (prevents false positives in dense BLE environments)
