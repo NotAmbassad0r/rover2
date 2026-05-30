@@ -245,7 +245,10 @@ class BodyTracker:
         logger.info("BodyTracker: tracking %s", "ENABLED" if enabled else "DISABLED")
         if not enabled:
             self._reset_tracking_state()
-            self._drive(0, 0, force=True)
+            try:
+                self._drive(0, 0, force=True)
+            except RuntimeError as exc:
+                logger.warning("BodyTracker: stop_motors skipped — serial not connected: %s", exc)
 
     def set_follow_mode(self, mode: str) -> None:
         """Set follow mode: 'fused' | 'camera' | 'ble'.

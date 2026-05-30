@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-30 (Face PWA — canvas status text, debug overlay, face/conv bug fixes)
+Last updated: 2026-05-30 (Voice pipeline verified end-to-end; wake chime; AudioSourceManager; MegaPi disconnect tolerance)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -204,7 +204,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - `hailo-ollama.service` permanently disabled
 - **ROVER Face PWA** — `/face/` served by rover2-api; voxel face canvas, 8 states, WebSocket telemetry
 - **Face canvas status text** — bottom-centre label rendered in iris colour at 70% opacity; 11 px monospace, 3 px letter-spacing, uppercase. Voice states take priority over robot states: LISTENING… / THINKING… / SPEAKING → FOLLOWING / SEARCHING / OBSTACLE DETECTED / ALERT / MOVING / OFFLINE. IDLE = no text (clean face). Updated on every telemetry tick, VAD transition, and TTS start/end
-- **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache now on `rover-face-v3`
+- **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache now on `rover-face-v6`
 - **Face initial state** — `faceState` initialises as `STATE.IDLE` (not OFFLINE); face shows normally on page load. `_ws.onopen` snaps to IDLE immediately; `_ws.onclose` transitions to OFFLINE and shows "OFFLINE" in status text
 - **Voice conversation concurrency fix** — `_convLoopActive` guard at outer `_convLoop` prevents duplicate invocations; `if (!_conversation) return` at start of inner `loop()` stops runaway iterations when the 10-second silence timeout fires `_end()` mid-fetch
 - **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice; `POST /api/voice/speak` streams WAV; length_scale 1.05; for proactive server events only. Agent replies spoken via **Web Speech API** on A32 (`speechSynthesis`, British voice, rate 0.88)
@@ -221,6 +221,11 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **AI Agent** — Ollama llama3.2:1b + 26 tools; 9 fast-path patterns (web UI); voice uses separate spoken fast-path
 - **Agentic voice assistant** — `run_spoken_turn()` routes voice through tool-use loop; 11 regex patterns for natural commands; instant canned responses for actions; hailo for data queries; `POST /api/arm/wave` endpoint
 - **VLM scene description** — Hailo Qwen2-VL snapshot caption
+- **Wake word detection** — faster-whisper tiny, `vad_filter=False` on both wake and conversation paths (A32 RMS VAD is the sole gate). Wake word "rover" matched with German-accent fuzzy variants: rower, rofer, roffer, rofar, over, rove, robo, robot, mover, dover, lover. `beam_size=3`, `language="en"` forced on wake path
+- **Wake chime** — two-tone ascending chime (880 Hz → 1320 Hz, 70 ms apart, 80 ms each, 5 ms attack / 30 ms release) plays on A32 via Web Audio API on wake confirmation, before conversation starts
+- **Full voice pipeline verified** — wake → chime → "Yes, sir." → conversation → TTS reply → social closing ends session → returns to wake listening. Fast-path commands ~0.1 s, hailo-ollama path ~3–4 s
+- **AudioSourceManager** — built-in mic fallback when MINIMIC1 not plugged in; `devicechange` event re-enumerates sources on hot-swap. MIC row in debug overlay shows active track label. No polling
+- **MegaPi disconnect tolerance** — `body_tracker.set_enabled()` and `POST /api/tracking` no longer raise 500 when MegaPi serial is not connected; `RuntimeError` caught in `try/except`, `WARNING` logged, tracking state updates correctly
 
 ---
 
@@ -498,6 +503,7 @@ ble_tracker:
 16. **HTTPS self-signed cert** — Browsers warn on first visit. Accept once (Advanced → Proceed). Curl on Pi needs `-k` flag. Cert files: `/opt/rover2/rover.key` + `rover.crt` (owned root:ambassad0r, mode 640). Not in repo — regenerate with `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout rover.key -out rover.crt -days 3650 -nodes -subj "/CN=rover"` if lost.
 17. **Left/right direction was inverted** — Fixed 2026-05-26 by swapping direction_map in config.yaml: `left: [1,0]`, `right: [0,-1]`. Root cause: PORT1B is wired to the physical right motor, so firmware's "left motor" is actually the right wheel. D-pad, follow, BLE turns, and obstacle avoidance all fixed by this single config change.
 18. **MegaPi on AA batteries** — Brand new AAs may not provide enough current for arc turns at speed 210. If motors stall, use MegaPi mains or reduce turn_speed.
+19. **MINIMIC1 speaker muting** — Veles-X MINIMIC1 TRRS lavalier mic plugged into A32 causes Android to mute the main speaker (routes to non-existent earpiece). `setSinkId('speaker')` and silent-buffer AudioContext workarounds are ineffective on Android Chrome. Hardware fix (insulating tape / nail polish on the Ring 2 / microphone contact of the TRRS plug to make Android see it as a 3-pole jack) not yet applied. **Workaround: use built-in mic (unplug MINIMIC1).**
 
 ---
 
@@ -538,23 +544,26 @@ ble_tracker:
 - Complete T3 (BLE beacon seen, handoff, reacquire)
 - Log all results in TEST_RESULTS.md
 
-**Voice assistant (fully local, agentic — 2026-05-29):** ✓ done
-- Say "rover" → A32 VAD → faster-whisper → `run_spoken_turn()` → hailo/tool/canned reply → Web Speech TTS
+**Voice pipeline (fully local, agentic — 2026-05-29/30):** ✓ done and verified end-to-end
+- Say "rover" → A32 RMS VAD → 2.5 s MediaRecorder chunk → `POST /api/voice/wake` → faster-whisper (vad_filter=False) → fuzzy match → wake chime → "Yes, sir." → conversation loop → `run_spoken_turn()` → hailo/tool/canned reply → Web Speech TTS → social closing → back to wake listening
 - **Natural commands:** hello (wave arm), how are you (live diagnostics), follow me, stop following, what do you see, run diagnostics, fix it
-- **Timing:** action commands ~0.1s, data queries ~4s, conversational ~3-4s
+- **Timing:** action commands ~0.1 s, hailo-ollama path ~3–4 s
 - To test offline: enable airplane mode on A32, visit `https://192.168.250.254:8082/face/`, say "rover"
 - For office demo with no BLE: set `ble_tracker.enabled: false` in config.yaml → deploy
+- **Tip:** use built-in A32 mic (MINIMIC1 mutes speaker — see known issue #19)
 
 **Face PWA (2026-05-30):** ✓ done
 - Canvas status text (bottom-centre, iris colour) and debug overlay (top-left, 7 rows) both deployed
 - Face no longer shows dark/offline on page load — starts IDLE
 - Voice conversation no longer fires duplicate LLM requests
-- Service worker on `rover-face-v3`; clear browser cache / unregister SW if overlay looks wrong
+- AudioSourceManager: built-in mic fallback, devicechange hot-swap, MIC row shows active track label
+- Service worker on `rover-face-v6`; unregister SW on A32 (DevTools → Application → Service Workers → Unregister) then reload after any deploy
 
 **Software options:**
 - "ME only" follow: BLE + camera must agree before following (prevents false positives in dense BLE environments)
 - Activity timeline: log follow events to SQLite; show in TOOLS
 - Tune `WAKE_RMS_THRESHOLD` (0.015) in face/index.html if false wakes or misses in noisy environments
+- **MINIMIC1 hardware fix** — insulate Ring 2 contact on TRRS plug (tape/nail polish) so Android sees it as a 3-pole jack and keeps speaker active. Low risk; no software change needed
 
 **Tuning knobs:**
 ```yaml

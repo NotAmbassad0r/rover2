@@ -221,8 +221,8 @@ def transcribe(audio_bytes: bytes, lang: str = "en") -> dict:
         segments, info = model.transcribe(  # type: ignore[union-attr]
             tmp_path,
             beam_size=1,
-            vad_filter=True,
-            language="en",
+            vad_filter=False,  # A32 RMS VAD already gates; whisper's filter strips low-gain MINIMIC1 input
+            language=lang if lang not in ("auto", "") else "en",
             initial_prompt="The following is a spoken command to ROVER, an AI robot assistant.",
         )
         # segments is a lazy generator — consume before temp file is deleted
@@ -234,6 +234,80 @@ def transcribe(audio_bytes: bytes, lang: str = "en") -> dict:
         }
     except Exception as exc:
         logger.warning("voice_engine: transcribe error: %s", exc)
+        return {"transcript": "", "error": str(exc)}
+    finally:
+        if tmp_path:
+            try:
+                _os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+_WAKE_DEBUG_PATH = "/tmp/wake_debug_last.wav"
+
+
+def transcribe_wake(audio_bytes: bytes, lang: str = "en") -> dict:
+    """Transcribe a 2.5 s wake-word chunk with higher accuracy settings.
+
+    Differences from transcribe():
+    - beam_size=3 (vs 1) — better accuracy on single short words
+    - initial_prompt="Rover." — nudges whisper toward the expected word
+    - Saves a decoded 16 kHz WAV copy to /tmp/wake_debug_last.wav each call
+    - Logs raw transcript + logprob + no_speech_prob at INFO level
+
+    Never raises — always returns dict with 'transcript' key.
+    """
+    import os as _os
+    tmp_path: str = ""
+    try:
+        _ensure_ffmpeg()
+        model = _load_whisper()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(audio_bytes)
+            tmp_path = f.name
+
+        # Save a decoded 16 kHz WAV for post-hoc debugging (overwrite each call)
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", tmp_path,
+                 "-ar", "16000", "-ac", "1", "-f", "wav", _WAKE_DEBUG_PATH],
+                capture_output=True, timeout=5,
+            )
+        except Exception as _dbg_exc:
+            logger.debug("voice_engine: wake debug WAV save failed: %s", _dbg_exc)
+
+        # beam_size=3 and forced "en" give much better single-word accuracy
+        segments, info = model.transcribe(  # type: ignore[union-attr]
+            tmp_path,
+            beam_size=3,
+            vad_filter=False,  # A32 RMS VAD already gates; whisper's filter strips low-gain MINIMIC1 input
+            language="en",
+            initial_prompt="Rover.",
+        )
+        segment_list = list(segments)  # consume lazy generator before temp file deleted
+        text = " ".join(s.text.strip() for s in segment_list).strip()
+
+        # Log raw transcript + acoustic confidence for diagnostics
+        if segment_list:
+            avg_logprob = sum(s.avg_logprob for s in segment_list) / len(segment_list)
+            no_speech = segment_list[0].no_speech_prob
+            logger.info(
+                "voice/wake: transcript=%r avg_logprob=%.2f no_speech_prob=%.2f lang_prob=%.2f",
+                text, avg_logprob, no_speech, info.language_probability,
+            )
+        else:
+            logger.info(
+                "voice/wake: transcript=%r (no segments) lang_prob=%.2f",
+                text, info.language_probability,
+            )
+
+        return {
+            "transcript": text,
+            "language": info.language,
+            "duration_s": round(info.duration, 2),
+        }
+    except Exception as exc:
+        logger.warning("voice_engine: transcribe_wake error: %s", exc)
         return {"transcript": "", "error": str(exc)}
     finally:
         if tmp_path:

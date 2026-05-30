@@ -505,13 +505,31 @@ _connectWS();
 // ── WebSocket audio (receive PCM frames from Pi proactive speech) ─────────
 let _wsAudio = null;
 let _audioCtx = null;
-let _nextPlayTime = 0;
+let _nextPlayTime  = 0;
+let _speakerForced = false;  // true after silent-buffer trick has run once
 
 function _getAudioCtx() {
   if (!_audioCtx) {
-    _audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: 16000,
+      latencyHint: 'interactive',  // lower latency + keeps speaker focus on Android
+    });
   }
   if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  // Play a 1-sample silent buffer on first call — forces Android to open the speaker
+  // audio path before MINIMIC1 TRRS routing can redirect TTS output to the headset.
+  // setSinkId is unreliable on Android Chrome; the silent-buffer approach is the
+  // reliable way to lock the destination to the main speaker.
+  if (!_speakerForced) {
+    _speakerForced = true;
+    try {
+      const silentBuf = _audioCtx.createBuffer(1, 1, 16000);
+      const silentSrc = _audioCtx.createBufferSource();
+      silentSrc.buffer = silentBuf;
+      silentSrc.connect(_audioCtx.destination);
+      silentSrc.start();
+    } catch (_) {}
+  }
   return _audioCtx;
 }
 
@@ -653,7 +671,6 @@ async function startRecording() {
     const opts = mimeType ? { mimeType } : {};
     _mediaRecorder = new MediaRecorder(stream, opts);
     const actualMime = _mediaRecorder.mimeType || mimeType;
-    document.getElementById('dbg-mime').textContent = actualMime || 'default';
     _audioChunks = [];
     _mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) _audioChunks.push(e.data); };
     _mediaRecorder.onstop = async () => {
@@ -707,66 +724,58 @@ function _ensureVoices() {
   });
 }
 
-function _ttsSpeak(text) {
-  if (!window.speechSynthesis) {
-    console.warn('Web Speech API not available');
-    return;
+// Build a SpeechSynthesisUtterance with British English voice + standard params.
+// Always create a fresh object — Android Chrome sometimes silently drops reused ones.
+function _makeTtsUtterance(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = ['Google UK English Female', 'Google UK English Male', 'en-GB'];
+  for (const pref of preferred) {
+    const v = voices.find(vv => vv.name.includes(pref) || vv.lang === pref);
+    if (v) { u.voice = v; break; }
   }
+  u.lang   = 'en-GB';
+  u.rate   = 0.88;   // slightly slower — deliberate, clipped delivery
+  u.pitch  = 0.85;   // slightly lower — more authoritative
+  u.volume = 1.0;
+  return u;
+}
 
-  // Cancel any ongoing speech
+function _ttsSpeak(text) {
+  if (!window.speechSynthesis) { console.warn('Web Speech API not available'); return; }
   window.speechSynthesis.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(text);
+  let started = false;
 
-  // Find best British English voice
-  const voices = window.speechSynthesis.getVoices();
-  const preferred = [
-    'Google UK English Female',
-    'Google UK English Male',
-    'en-GB',
-  ];
-  let selectedVoice = null;
-  for (const pref of preferred) {
-    selectedVoice = voices.find(v =>
-      v.name.includes(pref) || v.lang === pref
-    );
-    if (selectedVoice) break;
+  function _speak() {
+    const u = _makeTtsUtterance(text);
+    u.onstart = () => {
+      started = true;
+      _speakUntil = Date.now() + 60000;
+      setState(STATE.SPEAK);
+      _voiceState = 'speaking'; _updateStatusText();
+      _dbg.vad = 'speaking'; _dbgUpdate();
+    };
+    u.onend = () => {
+      _speakUntil = 0;
+      setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+      _voiceState = 'idle'; _updateStatusText();
+      _dbg.vad = 'idle'; _dbgUpdate();
+    };
+    u.onerror = (e) => {
+      if (e.error === 'interrupted') return;  // cancelled for retry — ignore
+      console.warn('TTS error:', e.error);
+      _speakUntil = 0;
+      _voiceState = 'idle'; _updateStatusText();
+      _dbg.vad = 'idle'; _dbgUpdate();
+    };
+    window.speechSynthesis.speak(u);
   }
-  if (selectedVoice) utterance.voice = selectedVoice;
 
-  utterance.lang    = 'en-GB';
-  utterance.rate    = 0.88;    // slightly slower — deliberate, clipped delivery
-  utterance.pitch   = 0.85;   // slightly lower pitch — more authoritative
-  utterance.volume  = 1.0;
-
-  // Update debug overlay with chosen voice name (first speak only)
-  _dbg.voice = selectedVoice ? selectedVoice.name : 'default';
-  _dbgUpdate();
-
-  // Sync with face speaking animation
-  utterance.onstart = () => {
-    _speakUntil = Date.now() + 60000;  // hold SPEAK state; cleared in onend
-    setState(STATE.SPEAK);
-    _voiceState = 'speaking'; _updateStatusText();
-    _dbg.vad = 'speaking';
-    _dbgUpdate();
-  };
-  utterance.onend = () => {
-    _speakUntil = 0;
-    setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
-    _voiceState = 'idle'; _updateStatusText();
-    _dbg.vad = 'idle';
-    _dbgUpdate();
-  };
-  utterance.onerror = (e) => {
-    console.warn('TTS error:', e.error);
-    _speakUntil = 0;
-    _voiceState = 'idle'; _updateStatusText();
-    _dbg.vad = 'idle';
-    _dbgUpdate();
-  };
-
-  window.speechSynthesis.speak(utterance);
+  _speak();
+  // If onstart hasn't fired in 300 ms, Android probably dropped the call
+  // (MINIMIC1 TRRS audio routing conflict) — cancel and retry once.
+  setTimeout(() => { if (!started) { window.speechSynthesis.cancel(); _speak(); } }, 300);
 }
 
 // Async TTS — resolves when speech finishes (used in conversation loop)
@@ -774,40 +783,43 @@ function _ttsSpeakAsync(text) {
   return new Promise((resolve) => {
     if (!window.speechSynthesis) { resolve(); return; }
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = ['Google UK English Female', 'Google UK English Male', 'en-GB'];
-    for (const pref of preferred) {
-      const v = voices.find(v => v.name.includes(pref) || v.lang === pref);
-      if (v) { utterance.voice = v; break; }
+
+    let started  = false;
+    let resolved = false;
+    const done = () => { if (!resolved) { resolved = true; resolve(); } };
+
+    function _speak() {
+      const u = _makeTtsUtterance(text);
+      u.onstart = () => {
+        started = true;
+        _speaking = true;
+        _speakUntil = Date.now() + 60000;
+        setState(STATE.SPEAK);
+        _voiceState = 'speaking'; _updateStatusText();
+        _dbg.vad = 'speaking'; _dbgUpdate();
+      };
+      u.onend = () => {
+        _speaking = false;
+        _speakUntil = 0;
+        setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
+        _voiceState = 'idle'; _updateStatusText();
+        _dbg.vad = 'idle'; _dbgUpdate();
+        done();
+      };
+      u.onerror = (e) => {
+        if (e.error === 'interrupted') return;  // cancelled for retry — do not resolve yet
+        _speaking = false;
+        _speakUntil = 0;
+        _voiceState = 'idle'; _updateStatusText();
+        _dbg.vad = 'idle'; _dbgUpdate();
+        done();
+      };
+      window.speechSynthesis.speak(u);
     }
-    utterance.lang   = 'en-GB';
-    utterance.rate   = 0.88;
-    utterance.pitch  = 0.85;
-    utterance.volume = 1.0;
-    utterance.onstart = () => {
-      _speaking = true;
-      _speakUntil = Date.now() + 60000;
-      setState(STATE.SPEAK);
-      _voiceState = 'speaking'; _updateStatusText();
-      _dbg.vad = 'speaking'; _dbgUpdate();
-    };
-    utterance.onend = () => {
-      _speaking = false;
-      _speakUntil = 0;
-      setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
-      _voiceState = 'idle'; _updateStatusText();
-      _dbg.vad = 'idle'; _dbgUpdate();
-      resolve();
-    };
-    utterance.onerror = () => {
-      _speaking = false;
-      _speakUntil = 0;
-      _voiceState = 'idle'; _updateStatusText();
-      _dbg.vad = 'idle'; _dbgUpdate();
-      resolve();
-    };
-    window.speechSynthesis.speak(utterance);
+
+    _speak();
+    // If onstart hasn't fired in 300 ms, Android dropped the call — cancel and retry once.
+    setTimeout(() => { if (!started && !resolved) { window.speechSynthesis.cancel(); _speak(); } }, 300);
   });
 }
 
@@ -835,13 +847,29 @@ function _rmsLevel() {
   return Math.sqrt(sum / buf.length);
 }
 
+// Returns a short human-readable label for the active mic track (for MIC row in overlay).
+function _micDisplayLabel(stream) {
+  const tracks = stream ? stream.getAudioTracks() : [];
+  if (!tracks.length) return 'granted';
+  const label = tracks[0].label || '';
+  const short  = label.length > 22 ? label.slice(0, 20) + '…' : label;
+  return short || 'built-in';
+}
+
 async function _startVoicePipeline() {
+  // Stop any existing stream before requesting a new one (supports MINIMIC1 hot-swap).
+  if (_micStream) {
+    _micStream.getAudioTracks().forEach(t => t.stop());
+    _micStream = null;
+    _analyser  = null;
+  }
   try {
+    // No deviceId — let Android pick the wired mic automatically when MINIMIC1 is plugged in.
+    // echoCancellation: false — MINIMIC1 is hardware-isolated; AEC hurts quality and blocks speaker.
     _micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, sampleRate: 16000,
-               echoCancellation: true, noiseSuppression: true }
+      audio: { noiseSuppression: true, echoCancellation: false, autoGainControl: true }
     });
-    _dbg.mic = 'granted'; _dbgUpdate();
+    _dbg.mic = _micDisplayLabel(_micStream); _dbgUpdate();
     const ac     = _getAudioCtx();
     const source = ac.createMediaStreamSource(_micStream);
     _analyser = ac.createAnalyser();
@@ -852,6 +880,39 @@ async function _startVoicePipeline() {
     _dbg.mic = e.name === 'NotAllowedError' ? 'denied' : 'error:' + e.name;
     _dbg.vad = 'mic unavailable'; _dbgUpdate();
   }
+}
+
+// Two-tone ascending chime played on confirmed wake word.
+// Uses Web Audio API — no audio file needed, no new AudioContext if one exists.
+// Tone 1: 880 Hz / 80 ms, Tone 2: 1320 Hz / 80 ms starting 70 ms after Tone 1.
+// Gain envelope: 5 ms attack, 30 ms release on each tone to avoid clicks.
+function _playWakeChime() {
+  return new Promise(resolve => {
+    try {
+      const ac  = _getAudioCtx();
+      const now = ac.currentTime;
+      const playTone = (freq, offsetS, gainVal) => {
+        const osc  = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(ac.destination);
+        const t0  = now + offsetS;
+        const dur = 0.080;
+        gain.gain.setValueAtTime(0, t0);
+        gain.gain.linearRampToValueAtTime(gainVal, t0 + 0.005);  // 5 ms attack
+        gain.gain.setValueAtTime(gainVal, t0 + dur - 0.030);
+        gain.gain.linearRampToValueAtTime(0, t0 + dur);          // 30 ms release
+        osc.start(t0);
+        osc.stop(t0 + dur);
+      };
+      playTone(880,  0,     0.3);  // Tone 1: 880 Hz at t=0
+      playTone(1320, 0.070, 0.3);  // Tone 2: 1320 Hz at t=70 ms
+    } catch (_) {}
+    // Resolve after both tones finish (70 ms + 80 ms = 150 ms + margin)
+    setTimeout(resolve, 180);
+  });
 }
 
 function _startWakeVad() {
@@ -869,6 +930,7 @@ function _startWakeVad() {
         _dbg.vad = 'audio — checking wake…'; _dbgUpdate();
         const isWake = await _checkWakeWord();
         if (isWake && !_conversation) {
+          await _playWakeChime();
           await _startConversation();
         } else {
           await new Promise(r => setTimeout(r, 400));  // brief cooldown before re-arm
@@ -884,55 +946,77 @@ function _startWakeVad() {
 
 async function _recordWakeChunk() {
   return new Promise((resolve) => {
-    if (!_micStream) { resolve(null); return; }
+    if (!_micStream) {
+      console.error('_recordWakeChunk: _micStream is null — mic not initialised');
+      resolve(null); return;
+    }
     const mimeType = _bestMimeType();
     const opts = mimeType ? { mimeType } : {};
     let rec;
     try { rec = new MediaRecorder(_micStream, opts); }
-    catch (_) { resolve(null); return; }
-    document.getElementById('dbg-mime').textContent = rec.mimeType || mimeType || 'default';
+    catch (err) {
+      console.error('_recordWakeChunk: MediaRecorder construction failed:', err);
+      resolve(null); return;
+    }
     const chunks = [];
     rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
     rec.onstop = () => {
-      if (!chunks.length) { resolve(null); return; }
+      if (!chunks.length) {
+        console.error('_recordWakeChunk: onstop fired but chunks array is empty — no audio captured');
+        resolve(null); return;
+      }
       resolve(new Blob(chunks, { type: rec.mimeType || mimeType || 'audio/webm' }));
     };
     rec.start(200);
     setTimeout(() => {
-      try { if (rec.state === 'recording') rec.stop(); } catch (_) {}
+      try { if (rec.state === 'recording') rec.stop(); }
+      catch (err) { console.error('_recordWakeChunk: rec.stop() threw:', err); }
     }, WAKE_CHUNK_S * 1000);
   });
 }
 
 async function _checkWakeWord() {
   const blob = await _recordWakeChunk();
-  if (!blob) return false;
+  if (!blob) {
+    console.error('_checkWakeWord: _recordWakeChunk returned null — skipping POST');
+    _dbg.vad = 'wake: no audio'; _dbgUpdate();
+    return false;
+  }
   try {
     const ext = (blob.type || '').includes('mp4') ? 'mp4'
               : (blob.type || '').includes('ogg') ? 'ogg' : 'webm';
     const fd = new FormData();
     fd.append('audio', blob, 'wake.' + ext);
     fd.append('lang', 'en');
+    console.log('_checkWakeWord: POSTing', blob.size, 'bytes to /api/voice/wake');
     const resp = await fetch(API_BASE + '/api/voice/wake', { method: 'POST', body: fd });
-    if (!resp.ok) return false;
+    if (!resp.ok) {
+      console.error('_checkWakeWord: /api/voice/wake returned HTTP', resp.status);
+      return false;
+    }
     const data = await resp.json();
     _dbg.last = 'wake: ' + (data.transcript || '—').slice(0, 18); _dbgUpdate();
     return data.wake === true;
   } catch (e) {
-    console.warn('Wake check error:', e);
+    console.error('_checkWakeWord: fetch /api/voice/wake failed:', e);
     return false;
   }
 }
 
 async function _recordConvTurn() {
   return new Promise((resolve) => {
-    if (!_micStream) { resolve(null); return; }
+    if (!_micStream) {
+      console.error('_recordConvTurn: _micStream is null — mic not initialised');
+      resolve(null); return;
+    }
     const mimeType = _bestMimeType();
     const opts = mimeType ? { mimeType } : {};
     let rec;
     try { rec = new MediaRecorder(_micStream, opts); }
-    catch (_) { resolve(null); return; }
-    document.getElementById('dbg-mime').textContent = rec.mimeType || mimeType || 'default';
+    catch (err) {
+      console.error('_recordConvTurn: MediaRecorder construction failed:', err);
+      resolve(null); return;
+    }
     const chunks = [];
     let speechStarted = false;
     let silenceStart  = null;
@@ -1295,6 +1379,19 @@ if ('serviceWorker' in navigator) {
 
 // Unlock audio context on first touch (mobile browser requirement)
 document.addEventListener('touchstart', () => _getAudioCtx(), { once: true });
+
+// ── Mic hot-swap — MINIMIC1 TRRS (event-driven, no polling) ─────────────────
+// When MINIMIC1 is plugged / unplugged Android fires devicechange.
+// Re-init the pipeline so getUserMedia picks the new default audio source.
+// Guard: skip if mid-conversation (don't interrupt the agent).
+if (navigator.mediaDevices) {
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    if (!_micStream || _conversation) return;
+    console.log('AudioSourceManager: devicechange — re-enumerating mic');
+    _vadActive = false;  // stop current VAD loop; _startVoicePipeline restarts it
+    await _startVoicePipeline();
+  });
+}
 
 // ── Voice pipeline init ──────────────────────────────────────────────────────
 // TTS: Web Speech API (local, on-device) for agent responses

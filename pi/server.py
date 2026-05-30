@@ -75,6 +75,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 _START = time.monotonic()
+
+# Fuzzy wake-word set — faster-whisper mishearings of Czech/German-accented "rover"
+_WAKE_WORDS: frozenset[str] = frozenset({
+    # Core matches
+    "rover", "robo", "robot", "over", "rove", "mover", "dover", "lover",
+    # German-accent mishearings: 'v' → 'w', 'v' → 'f', vowel-shift
+    "rower", "rofer", "roffer", "rofar",
+})
 _STATIC = Path(__file__).parent / "web" / "static"
 _FACE  = Path(__file__).parent / "face"
 
@@ -865,7 +873,7 @@ def create_app(
     @app.post("/api/voice/transcribe")
     async def voice_transcribe(
         audio: UploadFile = File(...),
-        lang: str = Form("auto"),
+        lang: str = Form("en"),
     ) -> JSONResponse:
         """Multipart: field 'audio' (wav/webm) + optional 'lang'. Always returns JSON."""
         if not _VOICE:
@@ -899,16 +907,21 @@ def create_app(
             audio_bytes = await audio.read()
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
-                loop.run_in_executor(None, _voice_engine.transcribe, audio_bytes, lang),
-                timeout=8.0,
+                loop.run_in_executor(None, _voice_engine.transcribe_wake, audio_bytes, lang),
+                timeout=10.0,  # beam_size=3 needs ~1-2s extra vs beam_size=1
             )
         except asyncio.TimeoutError:
             result = {"transcript": "", "error": "timeout"}
         except Exception as exc:
             result = {"transcript": "", "error": str(exc)}
         transcript = result.get("transcript", "").lower().strip()
-        wake = "rover" in transcript
-        logger.info("voice/wake: transcript=%r wake=%s", transcript, wake)
+        # Fuzzy match — accept common whisper mishearings of Czech-accented "rover"
+        matched = next((w for w in _WAKE_WORDS if w in transcript), None)
+        wake = matched is not None
+        if wake:
+            logger.info("voice/wake: TRIGGERED matched=%r transcript=%r", matched, transcript)
+        else:
+            logger.info("voice/wake: no match transcript=%r", transcript)
         return JSONResponse({"wake": wake, "transcript": transcript})
 
     @app.post("/api/voice/speak")
