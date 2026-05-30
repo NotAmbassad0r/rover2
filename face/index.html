@@ -12,7 +12,7 @@
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#e6edf3;
   font-family:'Courier New',Courier,monospace;user-select:none}
-canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:1}
+canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2}
 #ui{position:fixed;bottom:0;left:0;right:0;z-index:10;display:flex;flex-direction:column;
   align-items:center;gap:0;padding-bottom:env(safe-area-inset-bottom,16px);
   background:linear-gradient(transparent,rgba(0,0,0,.92) 30%)}
@@ -46,7 +46,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 .dbg-row{display:flex;gap:6px}
 .dbg-key{color:#8b949e;min-width:34px;flex-shrink:0}
 /* ── Swipe pager ─────────────────────────────────────────────────────────── */
-#swipe-viewport{position:fixed;top:0;left:0;width:100vw;height:100vh;overflow:hidden;z-index:2}
+#swipe-viewport{position:fixed;top:0;left:0;width:100vw;height:100vh;overflow:hidden;z-index:0}
 #page-strip{display:flex;width:300vw;height:100vh;transition:transform 200ms ease;will-change:transform;transform:translateX(-33.333%)}
 #page-face,#page-ctrl,#page-help{width:100vw;height:100vh;flex-shrink:0;position:relative;overflow:hidden}
 /* Control panel page */
@@ -248,6 +248,10 @@ const ctx    = canvas.getContext('2d');
 
 let W, H, SCALE;
 let _blocks = [];   // pre-computed block grid — rebuilt in _buildFace() on resize
+let _pRngSeed = 0;
+let _faceCX = 0, _faceCY = 0, _faceRX = 0, _faceRY = 0;
+const BLOCK_SZ = 8;        // pixels per tile — must be before resizeCanvas() / _buildFace()
+const BG_COLOR = '#000008';
 function resizeCanvas() {
   // canvas is position:fixed;width:100vw;height:100vh — lives outside page-strip so
   // it is never inside a transformed flex container. offsetWidth/Height = viewport dims.
@@ -288,14 +292,9 @@ function setState(s) {
 // Loop: setInterval(100 ms) = 10 fps — setInterval is more energy-efficient
 // than a 60 fps requestAnimationFrame for a slow, non-interpolated animation.
 
-const BLOCK_SZ = 8;     // pixels per tile
-const BG_COLOR = '#000008';
-
 // Face geometry — computed once per resize
-let _faceCX = 0, _faceCY = 0, _faceRX = 0, _faceRY = 0;
 
 // Deterministic LCG — same layout on every resize / page reload
-let _pRngSeed = 0;
 function _pRng() {
   _pRngSeed = (_pRngSeed * 1664525 + 1013904223) & 0xFFFFFFFF;
   return (_pRngSeed >>> 0) / 4294967295;
