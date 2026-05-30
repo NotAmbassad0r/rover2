@@ -341,20 +341,11 @@ function _buildFace() {
       // ── Region classification ──────────────────────────────────────────
       let region = 'face';
 
-      // Round eye circles — Euclidean distance in screen pixels for a true circle.
-      // Centres at (±0.26, -0.20) in normalised face coords.
-      // Radius = 12% of face half-width (rx); shadow ring extends to 16%.
-      const lEcx = cx - rx * 0.26, lEcy = cy - ry * 0.20;   // left eye centre (px)
-      const rEcx = cx + rx * 0.26, rEcy = cy - ry * 0.20;   // right eye centre (px)
-      const lEpxD = Math.sqrt((pcx - lEcx) * (pcx - lEcx) + (pcy - lEcy) * (pcy - lEcy));
-      const rEpxD = Math.sqrt((pcx - rEcx) * (pcx - rEcx) + (pcy - rEcy) * (pcy - rEcy));
-      const eyePxD = Math.min(lEpxD, rEpxD);
-      const eyeR   = rx * 0.12;   // circle radius in screen pixels
-
-      if (eyePxD < eyeR) {
-        region = 'eye';              // dark circle interior
-      } else if (eyePxD < rx * 0.16) {
-        region = 'eye_shadow';       // subtle shadow ring just outside circle edge
+      // Soft oval eyes — normalised-coord ellipse distance per eye
+      const leftEye  = Math.sqrt(((nx + 0.38) / 0.22) ** 2 + ((ny + 0.18) / 0.13) ** 2);
+      const rightEye = Math.sqrt(((nx - 0.38) / 0.22) ** 2 + ((ny + 0.18) / 0.13) ** 2);
+      if (leftEye < 1.0 || rightEye < 1.0) {
+        region = 'eye';
       } else if (ny > 0.05 && ny < 0.28 && nx > -0.14 && nx < 0.14) {
         region = 'nose';
       } else if (Math.abs(nx) < 0.35) {
@@ -373,9 +364,8 @@ function _buildFace() {
       // ── Base lightness per region ──────────────────────────────────────
       let lightBase;
       switch (region) {
-        case 'eye':        lightBase = 15 + Math.round(_pRng() * 6);  break; // 15–21  — dark circle
-        case 'eye_shadow': lightBase = 36 + Math.round(_pRng() * 12); break; // 36–48  — subtle shadow ring
-        case 'nose':       lightBase = 54 + Math.round(_pRng() * 16); break; // 54–70  — highlight
+        case 'eye':   lightBase = 18 + Math.round(_pRng() * 14); break; // 18–32 — dark
+        case 'nose':  lightBase = 54 + Math.round(_pRng() * 16); break; // 54–70 — highlight
         case 'mouth':      lightBase = 22 + Math.round(_pRng() * 14); break; // 22–36  — lip crease
         default:
           lightBase = Math.round(48 + (1 - Math.min(1, dist)) * 20 + (_pRng() * 22 - 11));
@@ -456,8 +446,8 @@ function _drawFrame() {
 
       if (b.region === 'mouth' && faceState === STATE.SPEAK) {
         light += Math.abs(Math.sin(_mouthPhase)) * 24;
-      } else if (b.region === 'eye') {
-        light -= 4;   // hold eye circles dark; same hue/drift as surrounding face blocks
+      } else if (b.region === 'eye' && sat > 40) {
+        light += 7;
       } else if (b.region === 'nose' && faceState !== STATE.OFFLINE) {
         light += 4;
       }
