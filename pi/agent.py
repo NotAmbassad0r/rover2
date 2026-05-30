@@ -506,7 +506,7 @@ _SPOKEN_FAST_PATTERNS: list[tuple[str, str, dict]] = [
      "control_follow_mode", {"action": "disable"}),
     (r"what do you see|describe.*see|look.*ahead|what.s in front|camera view|what.{0,10}ahead",
      "describe_camera", {}),
-    (r"run diagnostics|full check|health check|run a check|full scan|detailed (check|status)",
+    (r"\bdiagnostics?\b|run diagnostics?|one diagnostics?|show diagnostics?|system diagnostics?|give diagnostics?|tell diagnostics?|full check|health check|run a check|full scan|detailed (check|status)",
      "get_full_diagnostics", {}),
     (r"fix it|what.{0,8}wrong|any problem|suggest fix|anything wrong|what.s broken|is anything",
      "suggest_fix", {}),
@@ -514,6 +514,8 @@ _SPOKEN_FAST_PATTERNS: list[tuple[str, str, dict]] = [
      "get_hailo_status", {}),
     (r"current status|status report|how.{0,10}system",
      "speak_diagnostics_summary", {}),
+    (r"internal temp(erature)?|cpu temp(erature)?|pi temp(erature)?|system temp(erature)?|how hot|temperature of the (pi|rover)|rover temp(erature)?",
+     "get_temperature_status", {}),
 ]
 
 
@@ -590,6 +592,101 @@ def _fmt_tool_result_for_voice(tool_name: str, result: Any) -> str:
         return str(desc)[:200] if desc else "Camera not available or nothing visible."
     # wave_arm and control_follow_mode use canned responses — return nothing here
     return ""
+
+
+# Tools whose results are formatted entirely in Python — no LLM call, deterministic, <1 s.
+_SPOKEN_DIRECT_TOOLS: frozenset[str] = frozenset({
+    "get_temperature_status",
+    "get_full_diagnostics",
+})
+
+
+def _fmt_spoken_direct(tool_name: str, result: Any) -> str:
+    """Format a tool result as a concise spoken sentence in pure Python.
+
+    No LLM involved.  Returns a non-empty string always.
+    Both responses are ≤40 words and safe to feed to Web Speech API.
+    """
+    if not isinstance(result, dict):
+        return "Data unavailable."
+
+    if tool_name == "get_temperature_status":
+        temp_c    = result.get("temp_c")
+        level     = result.get("level", "cool")
+        throttled = result.get("throttled", False)
+        hailo_ok  = result.get("hailo_ready", False)
+        parts: list[str] = []
+        parts.append(
+            f"CPU temperature is {temp_c:.0f} degrees" if temp_c is not None
+            else "CPU temperature unavailable"
+        )
+        parts.append("Hailo is ready" if hailo_ok else "Hailo is idle")
+        if throttled:
+            parts.append("CPU is throttled")
+        elif level in ("hot", "critical"):
+            parts.append("running hot")
+        else:
+            parts.append("no thermal alerts")
+        return ". ".join(parts) + "."
+
+    if tool_name == "get_full_diagnostics":
+        status   = result.get("status", {})
+        diag     = result.get("diagnostics", {})
+        svcs_raw = result.get("services", {})
+        ext      = diag.get("extended", {})
+        lines: list[str] = []
+
+        # Sentence 1: CPU + RAM
+        stat: list[str] = []
+        cpu = ext.get("cpu_percent")
+        if cpu is not None:
+            stat.append(f"CPU {cpu:.0f} percent")
+        ram_used  = ext.get("ram_used_mb")
+        ram_total = ext.get("ram_total_mb")
+        if ram_used is not None and ram_total is not None:
+            stat.append(f"RAM {ram_used:.0f} of {ram_total:.0f} megabytes")
+        if stat:
+            lines.append(", ".join(stat))
+
+        # Sentence 2: Temperature — prefer ext sensor dict, fall back to services thermal
+        temp_c: float | None = None
+        for tdata in (ext.get("temperatures") or {}).values():
+            if isinstance(tdata, dict) and tdata.get("current") is not None:
+                temp_c = float(tdata["current"])
+                break
+        if temp_c is None:
+            temp_c = svcs_raw.get("thermal", {}).get("temp_c")
+        if temp_c is not None:
+            lines.append(f"Temperature {temp_c:.0f} degrees")
+
+        # Sentence 3: Hailo
+        hailo_ready = status.get("hailo_ready", False)
+        lines.append("Hailo ready" if hailo_ready else "Hailo idle")
+
+        # Sentence 4: Key services
+        svcs = svcs_raw.get("services", {})
+        _KEY = ("rover2-api.service", "hailo-ollama.service",
+                "ollama.service", "rover-camera.service")
+        down: list[str] = []
+        for svc in _KEY:
+            s = svcs.get(svc)
+            if isinstance(s, dict) and not s.get("active", True):
+                down.append(svc.replace(".service", ""))
+        lines.append(
+            f"{', '.join(down)} {'are' if len(down) > 1 else 'is'} down"
+            if down else "all services running"
+        )
+
+        # Sentence 5: Thermal alerts
+        th = svcs_raw.get("thermal", {})
+        if th.get("throttle_current") or th.get("level") in ("hot", "critical"):
+            lines.append("thermal alert active")
+        else:
+            lines.append("no alerts")
+
+        return ". ".join(lines) + "."
+
+    return "Data unavailable."
 
 
 # Canned responses for pure action tools (instant, no LLM needed).
@@ -1237,6 +1334,12 @@ class RoverAgent:
                 canned = _rng.choice(_ACTION_CANNED[action_key])
                 return AgentTurn(canned, tool_log, None)
 
+            # Direct Python formatting — deterministic, fast, no LLM overhead
+            if tool_name in _SPOKEN_DIRECT_TOOLS:
+                reply = _fmt_spoken_direct(tool_name, result)
+                logger.info("Agent: spoken direct-format %s → %r", tool_name, reply[:60])
+                return AgentTurn(reply, tool_log, None)
+
             # Data tools: try hailo for voice response with result context
             reply = await self._hailo_spoken_with_context(user_text, tool_name, result, lang)
             if reply:
@@ -1762,12 +1865,27 @@ class RoverAgent:
             if name == "wave_arm":
                 return await self._post("/api/arm/wave", {})
             if name == "get_full_diagnostics":
-                status, diag, procs = await asyncio.gather(
+                status, diag, procs, services = await asyncio.gather(
                     self._get("/api/status"),
                     self._get("/api/diagnostics/full"),
                     self._get("/api/diagnostics/processes"),
+                    self._get("/api/services"),
                 )
-                return {"status": status, "diagnostics": diag, "processes": procs}
+                return {"status": status, "diagnostics": diag, "processes": procs,
+                        "services": services}
+            if name == "get_temperature_status":
+                status, services = await asyncio.gather(
+                    self._get("/api/status"),
+                    self._get("/api/services"),
+                )
+                th = services.get("thermal", {})
+                return {
+                    "temp_c":           th.get("temp_c"),
+                    "level":            th.get("level", "cool"),
+                    "throttled":        th.get("throttle_current", False),
+                    "hailo_ready":      status.get("hailo_ready", False),
+                    "tracking_enabled": status.get("tracking_enabled", False),
+                }
             if name == "get_hailo_status":
                 status, hailo = await asyncio.gather(
                     self._get("/api/status"),

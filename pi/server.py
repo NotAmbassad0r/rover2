@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 _START = time.monotonic()
+
+# Closing phrases — trigger immediate session end after the reply is spoken on A32
+_CLOSING_PATTERNS: re.Pattern = re.compile(
+    r"\b(goodbye|good\s*bye|bye|see\s+you|see\s+ya|thank\s+you|thanks|"
+    r"have\s+a\s+good\s+(one|day|night|evening)|good\s*night|goodnight|"
+    r"farewell|that.{0,5}(all|enough)|take\s+care)\b",
+    re.IGNORECASE,
+)
 
 # Fuzzy wake-word set — faster-whisper mishearings of Czech/German-accented "rover"
 _WAKE_WORDS: frozenset[str] = frozenset({
@@ -1396,11 +1405,29 @@ def create_app(
 
         reply     = reply_tuple[0] if isinstance(reply_tuple, tuple) else reply_tuple
         routed_to = reply_tuple[1] if isinstance(reply_tuple, tuple) else "agent"
+
+        # Detect social closing in user message — signal A32 to end session after TTS.
+        end_session = bool(_CLOSING_PATTERNS.search(message))
+        if end_session:
+            logger.info("voice: closing phrase detected, ending session=%s", session_id[:8])
+            if _conversation_timeout_task is not None and not _conversation_timeout_task.done():
+                _conversation_timeout_task.cancel()
+            _conversation_active = False
+            if _tracking_was_enabled and body_tracker is not None:
+                body_tracker.set_enabled(True)
+                _tracking_was_enabled = False
+                logger.info("voice: FOLLOW restored after closing phrase session=%s", session_id[:8])
+
         logger.info(
-            "Agent: spoken turn OK (%d chars) via %s — TTS on A32",
-            len(reply), routed_to,
+            "Agent: spoken turn OK (%d chars) via %s — TTS on A32%s",
+            len(reply), routed_to, " [end_session]" if end_session else "",
         )
-        return JSONResponse({"reply": reply, "routed_to": routed_to, "session_id": session_id})
+        return JSONResponse({
+            "reply":       reply,
+            "routed_to":   routed_to,
+            "session_id":  session_id,
+            "end_session": end_session,
+        })
 
     @app.post("/api/voice/converse/end")
     async def voice_converse_end(request: Request) -> JSONResponse:
