@@ -306,70 +306,90 @@ function _buildFace() {
 
   const cx = W * 0.50;
   const cy = H * 0.42;     // slightly above canvas centre (portrait phone)
-  const rx = W * 0.36;     // horizontal semi-axis
-  const ry = H * 0.32;     // vertical semi-axis
+  const rx = W * 0.28;     // narrower oval — face fills ~56% of screen width
+  const ry = H * 0.38;     // taller oval for portrait proportions
 
   _faceCX = cx; _faceCY = cy; _faceRX = rx; _faceRY = ry;
 
-  // Scan bounding box slightly larger than the oval
-  const x0 = Math.floor(cx - rx * 1.38);
-  const x1 = Math.ceil (cx + rx * 1.38);
-  const y0 = Math.floor(cy - ry * 1.28);
-  const y1 = Math.ceil (cy + ry * 1.28);
+  // Scan bounding box matched to steeper falloff cutoff
+  const x0 = Math.floor(cx - rx * 1.20);
+  const x1 = Math.ceil (cx + rx * 1.20);
+  const y0 = Math.floor(cy - ry * 1.20);
+  const y1 = Math.ceil (cy + ry * 1.20);
 
   for (let by = y0; by < y1; by += BLOCK_SZ) {
     for (let bx = x0; bx < x1; bx += BLOCK_SZ) {
       const pcx  = bx + BLOCK_SZ * 0.5;
       const pcy  = by + BLOCK_SZ * 0.5;
-      const nx   = (pcx - cx) / rx;   // normalised face coords
+      const nx   = (pcx - cx) / rx;
       const ny   = (pcy - cy) / ry;
       const dist = Math.sqrt(nx * nx + ny * ny);
 
-      if (dist > 1.32) continue;
+      if (dist > 1.20) continue;
 
-      // Opacity: solid core, tapering + fragmenting at edges
+      // ── Steeper opacity falloff — silhouette edges dissolve fast ───────
       let opacity;
-      if      (dist < 0.55) opacity = 0.88;
-      else if (dist < 0.88) opacity = 0.88 - (dist - 0.55) / 0.33 * 0.28;
-      else if (dist < 1.00) opacity = 0.60 - (dist - 0.88) / 0.12 * 0.20;
-      else                  opacity = 0.40 - (dist - 1.00) / 0.32 * 0.40;
+      if      (dist < 0.50) opacity = 0.90;
+      else if (dist < 0.75) opacity = 0.90 - (dist - 0.50) / 0.25 * 0.38;
+      else if (dist < 0.90) opacity = 0.52 - (dist - 0.75) / 0.15 * 0.32;
+      else                  opacity = 0.20 - (dist - 0.90) / 0.30 * 0.20;
 
-      // Random fragmentation in dispersal band (baked-in skip)
-      if (dist > 0.86 && _pRng() < ((dist - 0.86) / 0.46) * 0.82) continue;
+      // Steeper random fragmentation — starts earlier, drops faster
+      if (dist > 0.70 && _pRng() < ((dist - 0.70) / 0.50) * 0.95) continue;
       if (opacity < 0.05) continue;
 
-      // Tile size — smaller toward edges for the fragmenting look
-      const bs = dist < 0.72
-        ? BLOCK_SZ
-        : Math.max(3, Math.round(BLOCK_SZ * (1 - (dist - 0.72) * 0.45)));
-
-      // Region classification (normalised face coords)
+      // ── Region classification ──────────────────────────────────────────
       let region = 'face';
-      if (ny > -0.33 && ny < -0.09) {
-        if ((nx > -0.65 && nx < -0.16) || (nx > 0.16 && nx < 0.65)) region = 'eye';
-      } else if (ny > 0.04 && ny < 0.30 && nx > -0.14 && nx < 0.14) {
+
+      // Eye geometry: almond ovals centred 28% l/r of face centre, 38% from top
+      // 38% from top of oval: top = ny=-1, so centre = -1 + 0.76 = -0.24
+      // Left eye centre:  nx=-0.28, ny=-0.24   Right eye centre: nx=+0.28, ny=-0.24
+      // Horizontal radius: 0.18 (normalised)   Vertical radius: 0.10
+      const lex = nx + 0.28, ley = ny + 0.24;   // vector from left eye centre
+      const rex = nx - 0.28, rey = ny + 0.24;   // vector from right eye centre
+      const lEyeD = Math.sqrt((lex / 0.18) * (lex / 0.18) + (ley / 0.10) * (ley / 0.10));
+      const rEyeD = Math.sqrt((rex / 0.18) * (rex / 0.18) + (rey / 0.10) * (rey / 0.10));
+      const eyeD  = Math.min(lEyeD, rEyeD);
+
+      if (eyeD < 1.0) {
+        if      (eyeD < 0.30) region = 'pupil';       // dark pupil core
+        else if (eyeD < 0.68) region = 'iris';         // lighter iris ring
+        else                  region = 'eye_shadow';   // darker eye socket shadow
+      } else if (ny > 0.05 && ny < 0.28 && nx > -0.14 && nx < 0.14) {
         region = 'nose';
-      } else if (ny > 0.40 && ny < 0.60 && nx > -0.44 && nx < 0.44) {
-        region = 'mouth';
+      } else if (Math.abs(nx) < 0.35) {
+        // Mouth: thin curved closed lips — gentle upward smile-neutral arc
+        // Centre line: ny = 0.38 + 0.06·nx² (slight parabola, opens upward)
+        // Band width: ±0.048 in ny (≈2 block rows)
+        const mouthNy = 0.38 + 0.06 * nx * nx;
+        if (Math.abs(ny - mouthNy) < 0.048) region = 'mouth';
       }
 
-      // Base lightness — per region, with small per-block variation
+      // ── Block size — eye tiles slightly larger for definition ──────────
+      const isEye = region === 'pupil' || region === 'iris' || region === 'eye_shadow';
+      const bsBase = isEye ? BLOCK_SZ + 2 : BLOCK_SZ;
+      const bs = dist < 0.72
+        ? bsBase
+        : Math.max(3, Math.round(bsBase * (1 - (dist - 0.72) * 0.45)));
+
+      // ── Base lightness per region ──────────────────────────────────────
       let lightBase;
       switch (region) {
-        case 'eye':   lightBase = 18 + Math.round(_pRng() * 14); break; // 18-32 — dark
-        case 'nose':  lightBase = 54 + Math.round(_pRng() * 16); break; // 54-70 — highlight
-        case 'mouth': lightBase = 22 + Math.round(_pRng() * 16); break; // 22-38 — medium dark
+        case 'pupil':      lightBase = 6  + Math.round(_pRng() * 8);  break; // 6–14   — very dark
+        case 'iris':       lightBase = 40 + Math.round(_pRng() * 20); break; // 40–60  — tinted ring
+        case 'eye_shadow': lightBase = 16 + Math.round(_pRng() * 12); break; // 16–28  — socket shadow
+        case 'nose':       lightBase = 54 + Math.round(_pRng() * 16); break; // 54–70  — highlight
+        case 'mouth':      lightBase = 22 + Math.round(_pRng() * 14); break; // 22–36  — lip crease
         default:
-          // Skin: lighter near centre, darker outward ± noise
           lightBase = Math.round(48 + (1 - Math.min(1, dist)) * 20 + (_pRng() * 22 - 11));
       }
 
       const tintOff = Math.round(_pRng() * 22 - 11);  // per-block hue offset ±11°
       const dAmp    = dist < 0.88 ? 1.1 + _pRng() * 0.9 : 1.6 + _pRng() * 1.4;
-      const dFreq   = 0.27 + _pRng() * 0.36;  // 0.27–0.63 Hz → 1.6–3.7 s period
+      const dFreq   = 0.27 + _pRng() * 0.36;
       const dPhX    = _pRng() * 6.283;
       const dPhY    = _pRng() * 6.283;
-      const pFreq   = 0.18 + _pRng() * 0.24;  // subtle lightness pulse
+      const pFreq   = 0.18 + _pRng() * 0.24;
       const pPh     = _pRng() * 6.283;
 
       _blocks.push({ bx, by, bs, opacity, lightBase, region, tintOff,
@@ -406,10 +426,12 @@ function _faceHSL() {
   }
 }
 
-let _mouthPhase = 0;
-let _lastFrame  = 0;
+let _mouthPhase    = 0;
+let _lastFrame     = 0;
+let _canvasVisible = true;  // false on PAGE 1/-1 — skip canvas render, save CPU
 
 function _drawFrame() {
+  if (!_canvasVisible) return;
   const now = Date.now();
   const dt  = now - (_lastFrame || now);
   _lastFrame = now;
@@ -436,9 +458,13 @@ function _drawFrame() {
       let light    = b.lightBase + pulse;
 
       if (b.region === 'mouth' && faceState === STATE.SPEAK) {
-        light += Math.abs(Math.sin(_mouthPhase)) * 20;
-      } else if (b.region === 'eye' && sat > 40) {
-        light += 7;
+        light += Math.abs(Math.sin(_mouthPhase)) * 24;
+      } else if (b.region === 'pupil') {
+        light -= 8;   // keep pupils very dark regardless of state
+      } else if (b.region === 'iris') {
+        light += sat > 30 ? 14 : 6;   // iris brightens and tints with emotion
+      } else if (b.region === 'eye_shadow') {
+        light += sat > 40 ? 3 : 0;
       } else if (b.region === 'nose' && faceState !== STATE.OFFLINE) {
         light += 4;
       }
@@ -811,14 +837,33 @@ function _ensureVoices() {
 function _makeTtsUtterance(text) {
   const u = new SpeechSynthesisUtterance(text);
   const voices = window.speechSynthesis.getVoices();
-  const preferred = ['Google UK English Female', 'Google UK English Male', 'en-GB'];
-  for (const pref of preferred) {
-    const v = voices.find(vv => vv.name.includes(pref) || vv.lang === pref);
-    if (v) { u.voice = v; break; }
+  // Priority 1: Daniel — Google's British male voice
+  let voice = voices.find(v => v.name.includes('Daniel'));
+  // Priority 2: any en-GB voice not labelled female
+  if (!voice) {
+    voice = voices.find(v =>
+      v.lang && v.lang.startsWith('en-GB') &&
+      !v.name.includes('Female') && !v.name.includes('female')
+    );
+  }
+  // Priority 3: en-US male voice (David, Mark, Alex, or non-female)
+  if (!voice) {
+    voice = voices.find(v =>
+      v.lang && v.lang.startsWith('en-US') &&
+      !v.name.includes('Female') && !v.name.includes('female') &&
+      (v.name.includes('Male') || v.name.includes('male') ||
+       v.name.includes('David') || v.name.includes('Mark') || v.name.includes('Alex'))
+    );
+  }
+  if (voice) {
+    u.voice = voice;
+    console.log('[TTS] voice selected:', voice.name, '(' + voice.lang + ')');
+  } else {
+    console.log('[TTS] no preferred male voice found — using browser default');
   }
   u.lang   = 'en-GB';
-  u.rate   = 0.88;   // slightly slower — deliberate, clipped delivery
-  u.pitch  = 0.85;   // slightly lower — more authoritative
+  u.rate   = 0.88;
+  u.pitch  = 0.85;
   u.volume = 1.0;
   return u;
 }
@@ -1493,6 +1538,10 @@ function _gotoPage(page) {
   document.getElementById('page-strip').style.transform = tx;
   // Fixed overlays — only visible on PAGE 0 (face)
   const onFace = page === 0;
+  // Canvas sits at z-index:2 — hide it on pages 1/-1 so controls/help are not obscured.
+  // Also pause the render loop (zero CPU when canvas is off-screen).
+  canvas.style.display = onFace ? '' : 'none';
+  _canvasVisible = onFace;
   document.getElementById('dbg-panel').style.display = onFace ? '' : 'none';
   document.getElementById('ui').style.display        = onFace ? '' : 'none';
   // Hide TTS bubble when navigating away from face
@@ -1650,7 +1699,7 @@ function _ctrlSetMode(mode) {
   });
 
   // Follow mode buttons — stopPropagation + API call
-  ['off', 'camera', 'fused', 'ble'].forEach((mode) => {
+  ['off', 'cam', 'fused', 'ble'].forEach((mode) => {
     const btn = document.getElementById('btn-follow-' + mode);
     btn.addEventListener('touchstart', (e) => {
       e.stopPropagation();
