@@ -341,19 +341,21 @@ function _buildFace() {
       // ── Region classification ──────────────────────────────────────────
       let region = 'face';
 
-      // Soft oval eyes — normalised-coord ellipse distance per eye
-      const leftEye  = Math.sqrt(((nx + 0.38) / 0.22) ** 2 + ((ny + 0.18) / 0.13) ** 2);
-      const rightEye = Math.sqrt(((nx - 0.38) / 0.22) ** 2 + ((ny + 0.18) / 0.13) ** 2);
-      if (leftEye < 1.0 || rightEye < 1.0) {
+      // Almond eyes — wide horizontal, narrow vertical, tips pinched at ends
+      const almondEye = (ecx, ecy) => {
+        const dx = (nx - ecx) / 0.26;
+        const dy = (ny - ecy) / 0.09;
+        return Math.sqrt(dx * dx + dy * dy + Math.abs(dx) * dy * dy * 0.8);
+      };
+      if (almondEye(-0.36, -0.20) < 1.0 || almondEye(0.36, -0.20) < 1.0) {
         region = 'eye';
       } else if (ny > 0.05 && ny < 0.28 && nx > -0.14 && nx < 0.14) {
         region = 'nose';
       } else if (Math.abs(nx) < 0.35) {
-        // Mouth: thin curved closed lips — gentle upward smile-neutral arc
-        // Centre line: ny = 0.38 + 0.06·nx² (slight parabola, opens upward)
-        // Band width: ±0.048 in ny (≈2 block rows)
-        const mouthNy = 0.38 + 0.06 * nx * nx;
-        if (Math.abs(ny - mouthNy) < 0.048) region = 'mouth';
+        // Mouth: neutral-positive resting smile — corners curve upward
+        // Centre line: ny = 0.36 - 0.05*(nx/0.35)² (parabola, opens downward → corners rise)
+        const mouthCurve = 0.36 - 0.05 * (nx / 0.35) * (nx / 0.35);
+        if (Math.abs(ny - mouthCurve) < 0.048) region = 'mouth';
       }
 
       // ── Block size — same for all regions ────────────────────────────
