@@ -1,4 +1,4 @@
-const CACHE = 'rover-face-v14';
+const CACHE = 'rover-face-v15';
 const ASSETS = ['/face/', '/face/index.html', '/face/manifest.json', '/face/sw.js'];
 
 self.addEventListener('install', e => {

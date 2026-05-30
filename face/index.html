@@ -12,7 +12,7 @@
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#e6edf3;
   font-family:'Courier New',Courier,monospace;user-select:none}
-canvas{display:block;image-rendering:pixelated;position:absolute;top:0;left:0;width:100%;height:100%}
+canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:1}
 #ui{position:fixed;bottom:0;left:0;right:0;z-index:10;display:flex;flex-direction:column;
   align-items:center;gap:0;padding-bottom:env(safe-area-inset-bottom,16px);
   background:linear-gradient(transparent,rgba(0,0,0,.92) 30%)}
@@ -46,7 +46,7 @@ canvas{display:block;image-rendering:pixelated;position:absolute;top:0;left:0;wi
 .dbg-row{display:flex;gap:6px}
 .dbg-key{color:#8b949e;min-width:34px;flex-shrink:0}
 /* ── Swipe pager ─────────────────────────────────────────────────────────── */
-#swipe-viewport{position:fixed;top:0;left:0;width:100vw;height:100vh;overflow:hidden;z-index:0}
+#swipe-viewport{position:fixed;top:0;left:0;width:100vw;height:100vh;overflow:hidden;z-index:2}
 #page-strip{display:flex;width:300vw;height:100vh;transition:transform 200ms ease;will-change:transform;transform:translateX(-33.333%)}
 #page-face,#page-ctrl,#page-help{width:100vw;height:100vh;flex-shrink:0;position:relative;overflow:hidden}
 /* Control panel page */
@@ -109,6 +109,7 @@ canvas{display:block;image-rendering:pixelated;position:absolute;top:0;left:0;wi
 </style>
 </head>
 <body>
+<canvas id="face"></canvas>
 <div id="swipe-viewport">
   <div id="page-strip">
     <div id="page-help">
@@ -153,9 +154,7 @@ canvas{display:block;image-rendering:pixelated;position:absolute;top:0;left:0;wi
         <div class="help-footer">swipe left for controls →</div>
       </div>
     </div>
-    <div id="page-face">
-      <canvas id="face"></canvas>
-    </div>
+    <div id="page-face"><!-- face canvas lives outside page-strip as position:fixed --></div>
     <div id="page-ctrl">
       <img id="cam-feed" alt="">
       <div class="ctrl-section">
@@ -250,9 +249,8 @@ const ctx    = canvas.getContext('2d');
 let W, H, SCALE;
 let _blocks = [];   // pre-computed block grid — rebuilt in _buildFace() on resize
 function resizeCanvas() {
-  // canvas is position:absolute;width:100%;height:100% inside #page-face (100vw×100vh)
-  // so offsetWidth/Height gives the correct parent dimensions after layout.
-  // Fallback to window dimensions if layout hasn't flushed yet (first inline call).
+  // canvas is position:fixed;width:100vw;height:100vh — lives outside page-strip so
+  // it is never inside a transformed flex container. offsetWidth/Height = viewport dims.
   W = canvas.width  = canvas.offsetWidth  || window.innerWidth;
   H = canvas.height = canvas.offsetHeight || window.innerHeight;
   SCALE = Math.max(6, Math.floor(W / 24));
@@ -1508,9 +1506,6 @@ function _gotoPage(page) {
     cam.removeAttribute('src');
   }
   _updatePageDots();
-  // Re-measure canvas after transform is applied — offsetWidth/Height are valid
-  // only once the element is in the rendered tree with its parent laid out.
-  if (page === 0) resizeCanvas();
 }
 
 function _updatePageDots() {
@@ -1666,14 +1661,9 @@ function _ctrlSetMode(mode) {
   });
 })();
 
-// Initialise to PAGE 0 (face) — required because the 3-page strip defaults to
-// translateX(0) which shows PAGE -1 (help); we must explicitly centre on PAGE 0.
-// Immediate call sets transform + overlays; deferred call (DOMContentLoaded+50ms)
-// re-sizes canvas AFTER layout is fully flushed (Android Chrome needs this).
+// Initialise to PAGE 0 (face) — sets strip transform + overlays visibility.
+// Canvas is position:fixed outside the strip — no layout-flush delay needed.
 _gotoPage(0);
-document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => { resizeCanvas(); _gotoPage(0); }, 50);
-});
 
 // ── Service worker registration ──────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
