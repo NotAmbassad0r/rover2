@@ -47,8 +47,8 @@ canvas{display:block;image-rendering:pixelated}
 .dbg-key{color:#8b949e;min-width:34px;flex-shrink:0}
 /* ── Swipe pager ─────────────────────────────────────────────────────────── */
 #swipe-viewport{position:fixed;top:0;left:0;width:100vw;height:100%;overflow:hidden;z-index:0}
-#page-strip{display:flex;width:200vw;height:100%;transition:transform 200ms ease;will-change:transform}
-#page-face,#page-ctrl{width:100vw;height:100%;flex-shrink:0;position:relative}
+#page-strip{display:flex;width:300vw;height:100%;transition:transform 200ms ease;will-change:transform}
+#page-face,#page-ctrl,#page-help{width:100vw;height:100%;flex-shrink:0;position:relative}
 /* Control panel page */
 #page-ctrl{overflow-y:auto;overflow-x:hidden;background:#0d1117;display:flex;
   flex-direction:column;align-items:stretch;padding:10px 12px;gap:10px;
@@ -75,14 +75,84 @@ canvas{display:block;image-rendering:pixelated}
   background:rgba(22,27,34,.8);color:#e6edf3;font-family:inherit;font-size:13px;
   letter-spacing:.06em;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .btn-arm.held,.btn-grip.held{background:rgba(88,166,255,.18);border-color:#58a6ff}
-/* Swipe hint — right edge of face page */
-#pg-hint{position:fixed;right:6px;top:50%;transform:translateY(-50%);
-  font-size:20px;color:rgba(255,255,255,.25);pointer-events:none;z-index:10}
+/* ── Help page ───────────────────────────────────────────────────────────── */
+#page-help{overflow-y:auto;overflow-x:hidden;background:#0d1117}
+.help-inner{padding:20px 16px;padding-bottom:calc(env(safe-area-inset-bottom,16px) + 20px)}
+.help-wake{font-size:15px;color:#e6edf3;letter-spacing:.06em;text-align:center;
+  padding:13px 10px;border:1px solid rgba(88,166,255,.28);border-radius:10px;
+  margin-bottom:18px;background:rgba(88,166,255,.06)}
+.help-section{display:flex;flex-direction:column;gap:0}
+.help-heading{font-size:10px;color:#3fb950;letter-spacing:.14em;margin-bottom:12px}
+.help-cmd-group{margin-bottom:13px}
+.help-group-label{font-size:9px;color:#58a6ff;letter-spacing:.12em;
+  border-bottom:1px solid rgba(88,166,255,.15);padding-bottom:2px;margin-bottom:5px}
+.help-cmd{display:flex;gap:6px;padding:2px 0;font-size:11px;line-height:1.45}
+.hk{color:#e6edf3;min-width:150px;flex-shrink:0}
+.hv{color:#8b949e}
+.help-footer{font-size:11px;color:#3fb950;text-align:center;
+  margin-top:16px;letter-spacing:.06em;opacity:.7}
+/* ── Page indicator dots ─────────────────────────────────────────────────── */
+#page-dots{position:fixed;top:8px;left:0;right:0;display:flex;justify-content:center;
+  gap:8px;z-index:15;pointer-events:none}
+.dot-pg{width:6px;height:6px;border-radius:50%;
+  background:rgba(255,255,255,.18);display:inline-block;transition:background .2s}
+.dot-pg.active{background:rgba(255,255,255,.82)}
+/* ── TTS speech bubble ───────────────────────────────────────────────────── */
+#tts-bubble{position:fixed;right:14px;top:46%;transform:translateY(-50%);
+  max-width:200px;background:rgba(26,26,46,.88);color:#e6edf3;
+  font-family:'Courier New',Courier,monospace;font-size:13px;line-height:1.5;
+  padding:10px 14px;border-radius:10px;border:1px solid rgba(88,100,200,.35);
+  display:none;z-index:20;word-break:break-word}
+#tts-bubble::after{content:'';position:absolute;bottom:-9px;left:16px;
+  border-left:8px solid transparent;border-right:8px solid transparent;
+  border-top:9px solid rgba(26,26,46,.88)}
 </style>
 </head>
 <body>
 <div id="swipe-viewport">
   <div id="page-strip">
+    <div id="page-help">
+      <div class="help-inner">
+        <div class="help-wake">SAY <strong style="color:#58a6ff">ROVER</strong> TO ACTIVATE</div>
+        <div class="help-section">
+          <div class="help-heading">VOICE COMMANDS</div>
+          <div class="help-cmd-group">
+            <div class="help-group-label">WAKE &amp; SESSION</div>
+            <div class="help-cmd"><span class="hk">rover</span><span class="hv">activate</span></div>
+            <div class="help-cmd"><span class="hk">goodbye / thank you</span><span class="hv">end session</span></div>
+          </div>
+          <div class="help-cmd-group">
+            <div class="help-group-label">DIAGNOSTICS</div>
+            <div class="help-cmd"><span class="hk">how are you</span><span class="hv">system status</span></div>
+            <div class="help-cmd"><span class="hk">full diagnostics</span><span class="hv">CPU / RAM / temp / services</span></div>
+            <div class="help-cmd"><span class="hk">internal temperature</span><span class="hv">CPU + Hailo temp</span></div>
+            <div class="help-cmd"><span class="hk">what's the temperature</span><span class="hv">current readings</span></div>
+          </div>
+          <div class="help-cmd-group">
+            <div class="help-group-label">MOVEMENT — requires MegaPi</div>
+            <div class="help-cmd"><span class="hk">follow me</span><span class="hv">enable follow mode</span></div>
+            <div class="help-cmd"><span class="hk">stop following</span><span class="hv">disable follow</span></div>
+            <div class="help-cmd"><span class="hk">move forward / back / left / right</span><span class="hv">drive 2 s</span></div>
+            <div class="help-cmd"><span class="hk">stop</span><span class="hv">halt motors</span></div>
+          </div>
+          <div class="help-cmd-group">
+            <div class="help-group-label">VISION</div>
+            <div class="help-cmd"><span class="hk">what do you see</span><span class="hv">VLM scene description</span></div>
+          </div>
+          <div class="help-cmd-group">
+            <div class="help-group-label">ARM &amp; GRIPPER</div>
+            <div class="help-cmd"><span class="hk">arm up / arm down</span><span class="hv">lift pulse</span></div>
+            <div class="help-cmd"><span class="hk">open / close gripper</span><span class="hv">—</span></div>
+          </div>
+          <div class="help-cmd-group">
+            <div class="help-group-label">PERSONALITY</div>
+            <div class="help-cmd"><span class="hk">hello</span><span class="hv">wave arm</span></div>
+            <div class="help-cmd"><span class="hk">tell me a joke / any question</span><span class="hv">AI conversation</span></div>
+          </div>
+        </div>
+        <div class="help-footer">swipe left for controls →</div>
+      </div>
+    </div>
     <div id="page-face">
       <canvas id="face"></canvas>
     </div>
@@ -128,7 +198,12 @@ canvas{display:block;image-rendering:pixelated}
     </div>
   </div>
 </div>
-<div id="pg-hint">›</div>
+<div id="page-dots">
+  <span class="dot-pg" id="dot-pg--1"></span>
+  <span class="dot-pg" id="dot-pg-0"></span>
+  <span class="dot-pg" id="dot-pg-1"></span>
+</div>
+<div id="tts-bubble"></div>
 
 <div id="dbg-panel" onclick="dbgToggle()">
   <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
@@ -173,10 +248,12 @@ const canvas = document.getElementById('face');
 const ctx    = canvas.getContext('2d');
 
 let W, H, SCALE;
+let _blocks = [];   // pre-computed block grid — rebuilt in _buildFace() on resize
 function resizeCanvas() {
   W = canvas.width  = window.innerWidth;
   H = canvas.height = window.innerHeight;
   SCALE = Math.max(6, Math.floor(W / 24));
+  if (typeof _buildFace === 'function') _buildFace();
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
@@ -199,272 +276,193 @@ function setState(s) {
   _stateAt   = Date.now();
 }
 
-// ── Voxel face renderer ──────────────────────────────────────────────────────
-// Coordinate system: voxel grid anchored at canvas center
-// Face dimensions in voxels (SCALE px each):
-const FACE_W = 14;   // face width in voxels
-const FACE_H = 18;   // face height in voxels
+// ── Block-grid face renderer ─────────────────────────────────────────────────
+// Face built from a pre-computed grid of small coloured tiles (BLOCK_SZ px).
+// Dense at centre, fragmenting outward (dissolving-pixel / voxel-dispersion look).
+// Emotion state shifts overall hue + saturation; regions (eyes, nose, mouth)
+// have fixed lightness offsets baked in at build time.
+// Loop: setInterval(100 ms) = 10 fps — setInterval is more energy-efficient
+// than a 60 fps requestAnimationFrame for a slow, non-interpolated animation.
 
-// Colors
-const C = {
-  bg:       '#000008',
-  face:     '#0d101a',
-  face_hl:  '#141824',
-  eye_bg:   '#111828',
-  iris_idle:   '#2d6ea8',
-  iris_detect: '#3a8fc8',
-  iris_follow: '#2ea043',
-  iris_search: '#d29922',
-  iris_block:  '#f85149',
-  iris_speak:  '#4a9eda',
-  iris_alert:  '#f85149',
-  iris_off:    '#21262d',
-  pupil:    '#000008',
-  mouth:    '#0d1820',
-  mouth_hi: '#1f3048',
-};
+const BLOCK_SZ = 8;     // pixels per tile
+const BG_COLOR = '#000008';
 
-// Blink animation
-let _blinkT = 0;
-let _blinkOpen = 1.0;   // 0=closed, 1=open
-let _nextBlink = 4000;
-let _blinkStart = 0;
-const BLINK_DUR = 140;
+// Face geometry — computed once per resize
+let _faceCX = 0, _faceCY = 0, _faceRX = 0, _faceRY = 0;
 
-// Pupil animation
-let _pupilX = 0, _pupilY = 0;   // offset in voxels, lerped
-let _targetPX = 0, _targetPY = 0;
-let _scanDir = 1, _scanT = 0;
+// Deterministic LCG — same layout on every resize / page reload
+let _pRngSeed = 0;
+function _pRng() {
+  _pRngSeed = (_pRngSeed * 1664525 + 1013904223) & 0xFFFFFFFF;
+  return (_pRngSeed >>> 0) / 4294967295;
+}
 
-// Mouth animation for speak state
-let _mouthPhase = 0;
+function _buildFace() {
+  _pRngSeed = 0x6D2B3C1A;  // fixed seed → deterministic, stable layout
+  _blocks = [];
 
+  const cx = W * 0.50;
+  const cy = H * 0.42;     // slightly above canvas centre (portrait phone)
+  const rx = W * 0.36;     // horizontal semi-axis
+  const ry = H * 0.32;     // vertical semi-axis
+
+  _faceCX = cx; _faceCY = cy; _faceRX = rx; _faceRY = ry;
+
+  // Scan bounding box slightly larger than the oval
+  const x0 = Math.floor(cx - rx * 1.38);
+  const x1 = Math.ceil (cx + rx * 1.38);
+  const y0 = Math.floor(cy - ry * 1.28);
+  const y1 = Math.ceil (cy + ry * 1.28);
+
+  for (let by = y0; by < y1; by += BLOCK_SZ) {
+    for (let bx = x0; bx < x1; bx += BLOCK_SZ) {
+      const pcx  = bx + BLOCK_SZ * 0.5;
+      const pcy  = by + BLOCK_SZ * 0.5;
+      const nx   = (pcx - cx) / rx;   // normalised face coords
+      const ny   = (pcy - cy) / ry;
+      const dist = Math.sqrt(nx * nx + ny * ny);
+
+      if (dist > 1.32) continue;
+
+      // Opacity: solid core, tapering + fragmenting at edges
+      let opacity;
+      if      (dist < 0.55) opacity = 0.88;
+      else if (dist < 0.88) opacity = 0.88 - (dist - 0.55) / 0.33 * 0.28;
+      else if (dist < 1.00) opacity = 0.60 - (dist - 0.88) / 0.12 * 0.20;
+      else                  opacity = 0.40 - (dist - 1.00) / 0.32 * 0.40;
+
+      // Random fragmentation in dispersal band (baked-in skip)
+      if (dist > 0.86 && _pRng() < ((dist - 0.86) / 0.46) * 0.82) continue;
+      if (opacity < 0.05) continue;
+
+      // Tile size — smaller toward edges for the fragmenting look
+      const bs = dist < 0.72
+        ? BLOCK_SZ
+        : Math.max(3, Math.round(BLOCK_SZ * (1 - (dist - 0.72) * 0.45)));
+
+      // Region classification (normalised face coords)
+      let region = 'face';
+      if (ny > -0.33 && ny < -0.09) {
+        if ((nx > -0.65 && nx < -0.16) || (nx > 0.16 && nx < 0.65)) region = 'eye';
+      } else if (ny > 0.04 && ny < 0.30 && nx > -0.14 && nx < 0.14) {
+        region = 'nose';
+      } else if (ny > 0.40 && ny < 0.60 && nx > -0.44 && nx < 0.44) {
+        region = 'mouth';
+      }
+
+      // Base lightness — per region, with small per-block variation
+      let lightBase;
+      switch (region) {
+        case 'eye':   lightBase = 18 + Math.round(_pRng() * 14); break; // 18-32 — dark
+        case 'nose':  lightBase = 54 + Math.round(_pRng() * 16); break; // 54-70 — highlight
+        case 'mouth': lightBase = 22 + Math.round(_pRng() * 16); break; // 22-38 — medium dark
+        default:
+          // Skin: lighter near centre, darker outward ± noise
+          lightBase = Math.round(48 + (1 - Math.min(1, dist)) * 20 + (_pRng() * 22 - 11));
+      }
+
+      const tintOff = Math.round(_pRng() * 22 - 11);  // per-block hue offset ±11°
+      const dAmp    = dist < 0.88 ? 1.1 + _pRng() * 0.9 : 1.6 + _pRng() * 1.4;
+      const dFreq   = 0.27 + _pRng() * 0.36;  // 0.27–0.63 Hz → 1.6–3.7 s period
+      const dPhX    = _pRng() * 6.283;
+      const dPhY    = _pRng() * 6.283;
+      const pFreq   = 0.18 + _pRng() * 0.24;  // subtle lightness pulse
+      const pPh     = _pRng() * 6.283;
+
+      _blocks.push({ bx, by, bs, opacity, lightBase, region, tintOff,
+                     dAmp, dFreq, dPhX, dPhY, pFreq, pPh });
+    }
+  }
+}
+
+// Retain _irisColor() for status text (colour matches current face state)
 function _irisColor() {
   switch (faceState) {
-    case STATE.DETECT:   return C.iris_detect;
-    case STATE.FOLLOW:   return C.iris_follow;
-    case STATE.SEARCH:   return C.iris_search;
-    case STATE.BLOCK:    return C.iris_block;
-    case STATE.SPEAK:    return C.iris_speak;
-    case STATE.ALERT:    return C.iris_alert;
-    case STATE.OFFLINE:  return C.iris_off;
-    default:             return C.iris_idle;
+    case STATE.DETECT:  return '#3a8fc8';
+    case STATE.FOLLOW:  return '#2ea043';
+    case STATE.SEARCH:  return '#d29922';
+    case STATE.BLOCK:   return '#f85149';
+    case STATE.SPEAK:   return '#4a9eda';
+    case STATE.ALERT:   return '#f85149';
+    case STATE.OFFLINE: return '#21262d';
+    default:            return '#2d6ea8';
   }
 }
 
-function _drawBlock(x, y, w, h, color, alpha) {
-  if (alpha !== undefined && alpha < 1) ctx.globalAlpha = alpha;
-  ctx.fillStyle = color;
-  const px = x * SCALE, py = y * SCALE;
-  ctx.fillRect(px, py, w * SCALE - 1, h * SCALE - 1);
-  if (alpha !== undefined && alpha < 1) ctx.globalAlpha = 1;
+// Map face state → [hue°, saturation%]
+function _faceHSL() {
+  switch (faceState) {
+    case STATE.FOLLOW:  return [140, 52];
+    case STATE.SEARCH:  return [44,  62];
+    case STATE.BLOCK:   return [4,   70];
+    case STATE.ALERT:   return [4,   70];
+    case STATE.DETECT:  return [194, 48];
+    case STATE.SPEAK:   return [202, 52];
+    case STATE.OFFLINE: return [215,  8];
+    default:            return [210, 30];  // IDLE — blue-grey
+  }
 }
 
-function _drawFace(now) {
-  // Face center in voxel coords
-  const cx = Math.floor(W / SCALE / 2);
-  const cy = Math.floor(H / SCALE / 2) - 2;
-  const fx = cx - Math.floor(FACE_W / 2);
-  const fy = cy - Math.floor(FACE_H / 2);
+let _mouthPhase = 0;
+let _lastFrame  = 0;
 
-  // ── Background ──
-  ctx.fillStyle = C.bg;
+function _drawFrame() {
+  const now = Date.now();
+  const dt  = now - (_lastFrame || now);
+  _lastFrame = now;
+  const t   = now * 0.001;  // seconds
+
+  if (faceState === STATE.SPEAK) { _mouthPhase += dt * 0.010; }
+  else                           { _mouthPhase  = 0; }
+
+  // Background
+  ctx.fillStyle = BG_COLOR;
   ctx.fillRect(0, 0, W, H);
 
-  // ── Face plate ──
-  _drawBlock(fx + 1, fy + 1, FACE_W - 2, FACE_H - 2, C.face);
-  // subtle highlight edge
-  _drawBlock(fx + 1, fy + 1, FACE_W - 2, 1, C.face_hl);
+  if (_blocks.length) {
+    const [hue, sat] = _faceHSL();
 
-  // ── Eyes ──
-  const EYE_W = 4, EYE_H_MAX = 5;
-  const eyeLx = fx + 1, eyeRx = fx + FACE_W - 1 - EYE_W;
-  const eyeY  = fy + 4;
+    for (const b of _blocks) {
+      const tw     = t * b.dFreq * 6.283;
+      const driftX = Math.sin(tw + b.dPhX) * b.dAmp;
+      const driftY = Math.cos(tw + b.dPhY) * b.dAmp * 0.55;
+      const px     = (b.bx + driftX + 0.5) | 0;
+      const py     = (b.by + driftY + 0.5) | 0;
 
-  // Blink: eye height shrinks to 0 during blink
-  let eyeH = EYE_H_MAX;
-  if (faceState === STATE.OFFLINE) {
-    eyeH = 1;
-  } else if (faceState === STATE.BLOCK) {
-    eyeH = EYE_H_MAX;
-  } else if (faceState === STATE.SEARCH) {
-    eyeH = 3;
-  }
-  eyeH = Math.round(eyeH * _blinkOpen);
-  if (eyeH < 1) eyeH = 1;
+      const pulse  = Math.sin(t * b.pFreq * 6.283 + b.pPh) * 4;
+      let light    = b.lightBase + pulse;
 
-  const irisColor = _irisColor();
-  // Left eye
-  _drawBlock(eyeLx, eyeY, EYE_W, eyeH, C.eye_bg);
-  if (faceState !== STATE.OFFLINE) {
-    // Iris (2×2 voxels, can shift)
-    const ipx = Math.round(Math.max(0, Math.min(EYE_W - 2, 1 + _pupilX)));
-    const ipy = Math.round(Math.max(0, Math.min(eyeH - 2, Math.floor(eyeH / 2) - 1 + _pupilY)));
-    _drawBlock(eyeLx + ipx, eyeY + ipy, 2, Math.min(2, eyeH), irisColor);
-    // Pupil (1×1 center of iris)
-    _drawBlock(eyeLx + ipx, eyeY + ipy, 1, 1, C.pupil);
-    // Specular highlight
-    _drawBlock(eyeLx + ipx + 1, eyeY + ipy, 1, 1, C.pupil);
-  }
+      if (b.region === 'mouth' && faceState === STATE.SPEAK) {
+        light += Math.abs(Math.sin(_mouthPhase)) * 20;
+      } else if (b.region === 'eye' && sat > 40) {
+        light += 7;
+      } else if (b.region === 'nose' && faceState !== STATE.OFFLINE) {
+        light += 4;
+      }
 
-  // Right eye
-  _drawBlock(eyeRx, eyeY, EYE_W, eyeH, C.eye_bg);
-  if (faceState !== STATE.OFFLINE) {
-    const ipx = Math.round(Math.max(0, Math.min(EYE_W - 2, 1 - _pupilX)));
-    const ipy = Math.round(Math.max(0, Math.min(eyeH - 2, Math.floor(eyeH / 2) - 1 + _pupilY)));
-    _drawBlock(eyeRx + ipx, eyeY + ipy, 2, Math.min(2, eyeH), irisColor);
-    _drawBlock(eyeRx + ipx, eyeY + ipy, 1, 1, C.pupil);
-    _drawBlock(eyeRx + ipx + 1, eyeY + ipy, 1, 1, C.pupil);
-  }
-
-  // ── Eyebrows ──
-  if (faceState !== STATE.OFFLINE) {
-    const browY = eyeY - 2;
-    if (faceState === STATE.BLOCK || faceState === STATE.ALERT) {
-      // V shape — worried
-      _drawBlock(eyeLx,          browY + 1, 2, 1, irisColor, .6);
-      _drawBlock(eyeLx + 2,      browY,     2, 1, irisColor, .6);
-      _drawBlock(eyeRx,          browY,     2, 1, irisColor, .6);
-      _drawBlock(eyeRx + 2,      browY + 1, 2, 1, irisColor, .6);
-    } else if (faceState === STATE.FOLLOW) {
-      // Raised slight — happy
-      _drawBlock(eyeLx,     browY, EYE_W, 1, irisColor, .4);
-      _drawBlock(eyeRx,     browY, EYE_W, 1, irisColor, .4);
-    } else {
-      // Flat neutral
-      _drawBlock(eyeLx,     browY + 1, EYE_W, 1, C.eye_bg);
-      _drawBlock(eyeRx,     browY + 1, EYE_W, 1, C.eye_bg);
+      ctx.globalAlpha = b.opacity;
+      ctx.fillStyle   = `hsl(${(hue + b.tintOff) | 0},${sat}%,${Math.min(88, Math.max(8, light | 0))}%)`;
+      ctx.fillRect(px, py, b.bs - 1, b.bs - 1);
     }
+    ctx.globalAlpha = 1;
   }
 
-  // ── Mouth ──
-  const mouthY = fy + 12;
-  const mouthX = fx + 2;
-  const mouthW = FACE_W - 4;
-
-  if (faceState === STATE.OFFLINE) {
-    // Single dim line
-    _drawBlock(mouthX, mouthY, mouthW, 1, C.mouth);
-  } else if (faceState === STATE.FOLLOW) {
-    // Smile — curved up at ends
-    _drawBlock(mouthX,         mouthY + 1, 2,         1, C.mouth_hi);
-    _drawBlock(mouthX + 2,     mouthY,     mouthW - 4, 1, C.mouth_hi);
-    _drawBlock(mouthX + mouthW - 2, mouthY + 1, 2,     1, C.mouth_hi);
-  } else if (faceState === STATE.SEARCH || faceState === STATE.ALERT) {
-    // Frown — curved down at ends
-    _drawBlock(mouthX,         mouthY,     2,          1, C.mouth_hi);
-    _drawBlock(mouthX + 2,     mouthY + 1, mouthW - 4, 1, C.mouth_hi);
-    _drawBlock(mouthX + mouthW - 2, mouthY, 2,          1, C.mouth_hi);
-  } else if (faceState === STATE.BLOCK) {
-    // Open O
-    _drawBlock(mouthX + 1, mouthY,     mouthW - 2, 1, C.mouth_hi);
-    _drawBlock(mouthX,     mouthY + 1, 1,          2, C.mouth_hi);
-    _drawBlock(mouthX + mouthW - 1, mouthY + 1, 1, 2, C.mouth_hi);
-    _drawBlock(mouthX + 1, mouthY + 3, mouthW - 2, 1, C.mouth_hi);
-  } else if (faceState === STATE.SPEAK) {
-    // Talking — animated open/close
-    const phase = _mouthPhase;
-    const openH = Math.round(1 + 2 * Math.abs(Math.sin(phase)));
-    _drawBlock(mouthX,     mouthY,     mouthW, 1,     C.mouth_hi);
-    if (openH > 1) {
-      _drawBlock(mouthX,     mouthY + 1, 1,     openH - 1, C.mouth_hi);
-      _drawBlock(mouthX + mouthW - 1, mouthY + 1, 1, openH - 1, C.mouth_hi);
-    }
-    if (openH > 2) {
-      _drawBlock(mouthX + 1, mouthY + openH, mouthW - 2, 1, C.mouth_hi);
-    }
-  } else {
-    // Neutral — flat line
-    _drawBlock(mouthX, mouthY, mouthW, 1, C.mouth_hi);
-  }
-
-  // ── Nose (subtle 2-dot) ──
-  if (faceState !== STATE.OFFLINE) {
-    const noseY = fy + 9;
-    _drawBlock(cx - 1, noseY, 1, 1, C.eye_bg);
-    _drawBlock(cx + 1, noseY, 1, 1, C.eye_bg);
-  }
-
-  // ── Status text (bottom-centre) ──
+  // Status text — bottom-centre, iris colour, 70% opacity
   if (_statusText) {
     ctx.save();
-    ctx.globalAlpha = 0.7;
-    ctx.fillStyle = irisColor;
-    ctx.font = '11px monospace';
+    ctx.globalAlpha   = 0.70;
+    ctx.fillStyle     = _irisColor();
+    ctx.font          = '11px monospace';
     ctx.letterSpacing = '3px';
-    ctx.textAlign = 'center';
-    ctx.fillText(_statusText, W / 2, H - 30);
+    ctx.textAlign     = 'center';
+    ctx.fillText(_statusText, W * 0.5, H - 30);
     ctx.restore();
   }
 }
 
-// ── Animation loop ──────────────────────────────────────────────────────────
-let _lastFrame = 0;
-
-function _animate(now) {
-  requestAnimationFrame(_animate);
-  const dt = now - _lastFrame;
-  _lastFrame = now;
-
-  // Blink
-  const shouldBlink = faceState !== STATE.OFFLINE && faceState !== STATE.BLOCK;
-  if (shouldBlink) {
-    _blinkT += dt;
-    if (_blinkStart === 0 && _blinkT > _nextBlink) {
-      _blinkStart = now;
-      _nextBlink = 3000 + Math.random() * 4000;
-      _blinkT = 0;
-    }
-    if (_blinkStart > 0) {
-      const elapsed = now - _blinkStart;
-      if (elapsed < BLINK_DUR / 2) {
-        _blinkOpen = 1 - elapsed / (BLINK_DUR / 2);
-      } else if (elapsed < BLINK_DUR) {
-        _blinkOpen = (elapsed - BLINK_DUR / 2) / (BLINK_DUR / 2);
-      } else {
-        _blinkOpen = 1;
-        _blinkStart = 0;
-      }
-    }
-  } else {
-    _blinkOpen = 1;
-    _blinkStart = 0;
-  }
-
-  // Pupil movement
-  if (faceState === STATE.FOLLOW) {
-    _targetPX = _personDir * 1.5;
-    _targetPY = 0;
-  } else if (faceState === STATE.SEARCH) {
-    _scanT += dt;
-    if (_scanT > 900) { _scanDir *= -1; _scanT = 0; }
-    _targetPX = _scanDir * 1.5;
-    _targetPY = 0;
-  } else if (faceState === STATE.IDLE || faceState === STATE.DETECT) {
-    _scanT += dt;
-    if (_scanT > 3000 + Math.random() * 2000) {
-      _targetPX = (Math.random() - .5) * 1.5;
-      _targetPY = (Math.random() - .5) * 0.8;
-      _scanT = 0;
-    }
-  } else {
-    _targetPX = 0;
-    _targetPY = 0;
-  }
-  const lf = Math.min(1, dt * 0.006);
-  _pupilX += (_targetPX - _pupilX) * lf;
-  _pupilY += (_targetPY - _pupilY) * lf;
-
-  // Mouth speak animation
-  if (faceState === STATE.SPEAK) {
-    _mouthPhase += dt * 0.012;
-  } else {
-    _mouthPhase = 0;
-  }
-
-  _drawFace(now);
-}
-requestAnimationFrame(_animate);
+// 10 fps — setInterval is more energy-efficient than throttled requestAnimationFrame
+// for a slow non-interpolated animation (no idle vsync wakeups)
+setInterval(_drawFrame, 100);
 
 // ── WebSocket telemetry ──────────────────────────────────────────────────────
 let _ws = null;
@@ -1281,7 +1279,9 @@ async function _convLoop(sessionId, history) {
       history.push({role: 'assistant', content: reply});
       if (history.length > 12) history.splice(0, 2);
       _showBubble('rover', reply);
+      _ttsBubbleShow(reply);          // face overlay — visible while speaking
       await _ttsSpeakAsync(reply);
+      _ttsBubbleHide();               // schedule 1.5 s fade after TTS ends
     }
 
     if (endSession) { await _end(); return; }  // end immediately after TTS — no silence wait
@@ -1435,6 +1435,28 @@ function _showBubble(cls, text) {
   _bubbleTimer = setTimeout(_hideBubble, 12000);
 }
 
+// ── TTS face bubble — canvas overlay shown during conversation replies ────────
+// Appears immediately when a reply is ready (or within 500ms of speak()).
+// Hides 1.5 s after TTS resolves. Only shown on PAGE 0 (face).
+let _ttsBubbleTimer = null;
+
+function _ttsBubbleShow(text) {
+  if (!_conversation) return;  // only during active conversation
+  clearTimeout(_ttsBubbleTimer);
+  const el = document.getElementById('tts-bubble');
+  if (!el) return;
+  el.textContent = text.length > 120 ? text.slice(0, 117) + '…' : text;
+  el.style.display = 'block';
+}
+
+function _ttsBubbleHide() {
+  clearTimeout(_ttsBubbleTimer);
+  _ttsBubbleTimer = setTimeout(() => {
+    const el = document.getElementById('tts-bubble');
+    if (el) el.style.display = 'none';
+  }, 1500);
+}
+
 function _hideBubble() {
   document.getElementById('chat-bubble').style.display = 'none';
 }
@@ -1460,19 +1482,32 @@ let _currentPage = 0;
 
 function _gotoPage(page) {
   _currentPage = page;
-  document.getElementById('page-strip').style.transform =
-    page === 0 ? 'translateX(0)' : 'translateX(-100vw)';
-  // Toggle fixed overlays — they live outside #swipe-viewport so position:fixed works correctly
-  document.getElementById('dbg-panel').style.display = page === 0 ? '' : 'none';
-  document.getElementById('ui').style.display        = page === 0 ? '' : 'none';
-  document.getElementById('pg-hint').style.display   = page === 0 ? '' : 'none';
-  // MJPEG feed — set src only when PAGE 1 is visible to save bandwidth
+  // 3-page strip: -1=help (left), 0=face (centre), 1=controls (right)
+  const tx = page === -1 ? 'translateX(0)'
+           : page ===  0 ? 'translateX(-100vw)'
+           :               'translateX(-200vw)';
+  document.getElementById('page-strip').style.transform = tx;
+  // Fixed overlays — only visible on PAGE 0 (face)
+  const onFace = page === 0;
+  document.getElementById('dbg-panel').style.display = onFace ? '' : 'none';
+  document.getElementById('ui').style.display        = onFace ? '' : 'none';
+  // Hide TTS bubble when navigating away from face
+  if (!onFace) { const b = document.getElementById('tts-bubble'); if (b) b.style.display = 'none'; }
+  // MJPEG — load only on PAGE 1 (saves bandwidth)
   const cam = document.getElementById('cam-feed');
   if (page === 1) {
     cam.setAttribute('src', `http://${PI_HOST}:8081/`);
   } else {
     cam.removeAttribute('src');
   }
+  _updatePageDots();
+}
+
+function _updatePageDots() {
+  [-1, 0, 1].forEach(p => {
+    const el = document.getElementById('dot-pg-' + p);
+    if (el) el.classList.toggle('active', p === _currentPage);
+  });
 }
 
 function _wsSend(msg) {
@@ -1516,8 +1551,13 @@ function _ctrlSetMode(mode) {
     const dx = e.changedTouches[0].clientX - _tx;
     const dy = e.changedTouches[0].clientY - _ty;
     if (Math.abs(dx) < 50 || Math.abs(dx) <= Math.abs(dy)) return;
-    if (dx < 0 && _currentPage === 0) _gotoPage(1);   // swipe left  → PAGE 1
-    else if (dx > 0 && _currentPage === 1) _gotoPage(0); // swipe right → PAGE 0
+    if (dx < 0) {  // swipe left
+      if (_currentPage === -1) _gotoPage(0);
+      else if (_currentPage === 0) _gotoPage(1);
+    } else {  // swipe right
+      if (_currentPage === 0) _gotoPage(-1);
+      else if (_currentPage === 1) _gotoPage(0);
+    }
   }, { passive: true });
 })();
 
@@ -1609,6 +1649,10 @@ function _ctrlSetMode(mode) {
     btn.addEventListener('touchend',   (e) => e.stopPropagation(), { passive: false });
   });
 })();
+
+// Initialise to PAGE 0 (face) — required because the 3-page strip defaults to
+// translateX(0) which shows PAGE -1 (help); we must explicitly centre on PAGE 0.
+_gotoPage(0);
 
 // ── Service worker registration ──────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
