@@ -45,10 +45,90 @@ canvas{display:block;image-rendering:pixelated}
   font-family:'Courier New',Courier,monospace}
 .dbg-row{display:flex;gap:6px}
 .dbg-key{color:#8b949e;min-width:34px;flex-shrink:0}
+/* ── Swipe pager ─────────────────────────────────────────────────────────── */
+#swipe-viewport{position:fixed;top:0;left:0;width:100vw;height:100%;overflow:hidden;z-index:0}
+#page-strip{display:flex;width:200vw;height:100%;transition:transform 200ms ease;will-change:transform}
+#page-face,#page-ctrl{width:100vw;height:100%;flex-shrink:0;position:relative}
+/* Control panel page */
+#page-ctrl{overflow-y:auto;overflow-x:hidden;background:#0d1117;display:flex;
+  flex-direction:column;align-items:stretch;padding:10px 12px;gap:10px;
+  padding-bottom:calc(env(safe-area-inset-bottom,16px) + 10px)}
+#cam-feed{width:100%;max-height:42vh;object-fit:cover;border-radius:8px;
+  background:#111;display:block}
+.ctrl-section{display:flex;flex-direction:column;gap:6px}
+.ctrl-label{font-size:10px;color:#8b949e;letter-spacing:.1em;padding-left:2px}
+#ctrl-follow-row{display:flex;gap:5px}
+.btn-follow{flex:1;padding:9px 4px;border-radius:8px;border:1px solid #30363d;
+  background:rgba(22,27,34,.8);color:#e6edf3;font-family:inherit;font-size:11px;
+  letter-spacing:.06em;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn-follow.active{background:rgba(63,185,80,.18);border-color:#3fb950;color:#3fb950}
+#ctrl-dpad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;
+  max-width:192px;margin:0 auto}
+.btn-dpad{padding:0;aspect-ratio:1;border-radius:8px;border:1px solid #30363d;
+  background:rgba(22,27,34,.8);color:#e6edf3;font-family:inherit;font-size:22px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  -webkit-tap-highlight-color:transparent;user-select:none}
+.btn-dpad.stop{font-size:14px;letter-spacing:.06em}
+.btn-dpad.held{background:rgba(88,166,255,.18);border-color:#58a6ff}
+#ctrl-arm-row,#ctrl-grip-row{display:flex;gap:6px}
+.btn-arm,.btn-grip{flex:1;padding:10px 4px;border-radius:8px;border:1px solid #30363d;
+  background:rgba(22,27,34,.8);color:#e6edf3;font-family:inherit;font-size:13px;
+  letter-spacing:.06em;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn-arm.held,.btn-grip.held{background:rgba(88,166,255,.18);border-color:#58a6ff}
+/* Swipe hint — right edge of face page */
+#pg-hint{position:fixed;right:6px;top:50%;transform:translateY(-50%);
+  font-size:20px;color:rgba(255,255,255,.25);pointer-events:none;z-index:10}
 </style>
 </head>
 <body>
-<canvas id="face"></canvas>
+<div id="swipe-viewport">
+  <div id="page-strip">
+    <div id="page-face">
+      <canvas id="face"></canvas>
+    </div>
+    <div id="page-ctrl">
+      <img id="cam-feed" alt="">
+      <div class="ctrl-section">
+        <div class="ctrl-label">FOLLOW MODE</div>
+        <div id="ctrl-follow-row">
+          <button class="btn-follow" id="btn-follow-off">OFF</button>
+          <button class="btn-follow" id="btn-follow-cam">CAMERA</button>
+          <button class="btn-follow" id="btn-follow-fused">FUSED</button>
+          <button class="btn-follow" id="btn-follow-ble">BLE</button>
+        </div>
+      </div>
+      <div class="ctrl-section">
+        <div class="ctrl-label">DRIVE</div>
+        <div id="ctrl-dpad">
+          <div></div>
+          <button class="btn-dpad" id="dpad-fwd">↑</button>
+          <div></div>
+          <button class="btn-dpad" id="dpad-left">←</button>
+          <button class="btn-dpad stop" id="dpad-stop">■</button>
+          <button class="btn-dpad" id="dpad-right">→</button>
+          <div></div>
+          <button class="btn-dpad" id="dpad-back">↓</button>
+          <div></div>
+        </div>
+      </div>
+      <div class="ctrl-section">
+        <div class="ctrl-label">ARM</div>
+        <div id="ctrl-arm-row">
+          <button class="btn-arm" id="arm-up">ARM ↑</button>
+          <button class="btn-arm" id="arm-down">ARM ↓</button>
+        </div>
+      </div>
+      <div class="ctrl-section">
+        <div class="ctrl-label">GRIP</div>
+        <div id="ctrl-grip-row">
+          <button class="btn-grip" id="grip-open">OPEN</button>
+          <button class="btn-grip" id="grip-close">CLOSE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="pg-hint">›</div>
 
 <div id="dbg-panel" onclick="dbgToggle()">
   <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
@@ -472,6 +552,7 @@ function _applyTelemetry(d) {
     _alertMsg = '';
   }
   document.getElementById('alert-bar').textContent = _alertMsg;
+  _ctrlUpdateState(d);
 }
 
 function _connectWS() {
@@ -1171,7 +1252,7 @@ async function _convLoop(sessionId, history) {
     history.push({role: 'user', content: transcript});
     if (history.length > 12) history.splice(0, 2);  // max 6 pairs
 
-    let reply = '', routedTo = 'hailo';
+    let reply = '', routedTo = 'hailo', endSession = false;
     try {
       const resp = await fetch(API_BASE + '/api/voice/converse', {
         method: 'POST',
@@ -1186,8 +1267,9 @@ async function _convLoop(sessionId, history) {
       });
       if (resp.ok) {
         const data = await resp.json();
-        reply    = (data.reply || '').trim();
-        routedTo = data.routed_to || 'hailo';
+        reply      = (data.reply || '').trim();
+        routedTo   = data.routed_to || 'hailo';
+        endSession = !!data.end_session;  // server detected social closing phrase
       }
     } catch (err) {
       _dbg.last = 'converse err: ' + (err.message || '').slice(0, 20); _dbgUpdate();
@@ -1202,6 +1284,7 @@ async function _convLoop(sessionId, history) {
       await _ttsSpeakAsync(reply);
     }
 
+    if (endSession) { await _end(); return; }  // end immediately after TTS — no silence wait
     if (_convEndRequest) { await _end('Very well, sir.'); return; }
 
     loop();  // next turn (recursive async — tail-call-like)
@@ -1371,6 +1454,161 @@ async function toggleAudioRoute() {
     _showBubble('rover', 'Route switch failed: ' + e.message);
   }
 }
+
+// ── Control panel (PAGE 1) ────────────────────────────────────────────────────
+let _currentPage = 0;
+
+function _gotoPage(page) {
+  _currentPage = page;
+  document.getElementById('page-strip').style.transform =
+    page === 0 ? 'translateX(0)' : 'translateX(-100vw)';
+  // Toggle fixed overlays — they live outside #swipe-viewport so position:fixed works correctly
+  document.getElementById('dbg-panel').style.display = page === 0 ? '' : 'none';
+  document.getElementById('ui').style.display        = page === 0 ? '' : 'none';
+  document.getElementById('pg-hint').style.display   = page === 0 ? '' : 'none';
+  // MJPEG feed — set src only when PAGE 1 is visible to save bandwidth
+  const cam = document.getElementById('cam-feed');
+  if (page === 1) {
+    cam.setAttribute('src', `http://${PI_HOST}:8081/`);
+  } else {
+    cam.removeAttribute('src');
+  }
+}
+
+function _wsSend(msg) {
+  if (_ws && _ws.readyState === 1) _ws.send(JSON.stringify(msg));
+}
+
+function _ctrlUpdateState(d) {
+  const isOff   = !d.tracking_enabled && !d.ble_follow_enabled;
+  const isCam   = !!d.tracking_enabled && !d.ble_follow_enabled;
+  const isFused = !!d.tracking_enabled && !!d.ble_follow_enabled;
+  const isBle   = !d.tracking_enabled && !!d.ble_follow_enabled;
+  const el = (id) => document.getElementById(id);
+  el('btn-follow-off').classList.toggle('active',   isOff);
+  el('btn-follow-cam').classList.toggle('active',   isCam);
+  el('btn-follow-fused').classList.toggle('active', isFused);
+  el('btn-follow-ble').classList.toggle('active',   isBle);
+}
+
+function _ctrlSetMode(mode) {
+  const p = { enabled: false, detect_only: false, ble_follow_enabled: false };
+  if (mode === 'camera') { p.enabled = true; }
+  else if (mode === 'fused') { p.enabled = true; p.ble_follow_enabled = true; }
+  else if (mode === 'ble')   { p.ble_follow_enabled = true; }
+  fetch(API_BASE + '/api/tracking', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  }).catch(() => {});
+}
+
+// ── Swipe page detection ──────────────────────────────────────────────────────
+// Threshold: 50 px horizontal + horizontal dominance (|dx| > |dy|) to avoid
+// triggering on vertical scrolls or taps inside the control panel.
+(function () {
+  let _tx = 0, _ty = 0;
+  const vp = document.getElementById('swipe-viewport');
+  vp.addEventListener('touchstart', (e) => {
+    _tx = e.touches[0].clientX;
+    _ty = e.touches[0].clientY;
+  }, { passive: true });
+  vp.addEventListener('touchend', (e) => {
+    const dx = e.changedTouches[0].clientX - _tx;
+    const dy = e.changedTouches[0].clientY - _ty;
+    if (Math.abs(dx) < 50 || Math.abs(dx) <= Math.abs(dy)) return;
+    if (dx < 0 && _currentPage === 0) _gotoPage(1);   // swipe left  → PAGE 1
+    else if (dx > 0 && _currentPage === 1) _gotoPage(0); // swipe right → PAGE 0
+  }, { passive: true });
+})();
+
+// ── D-pad, arm and grip controls ──────────────────────────────────────────────
+// All touchstart/touchend handlers call e.stopPropagation() to prevent swipe
+// detection from triggering while the user is holding a control button.
+(function () {
+  function _makeHold(onTick, onRelease) {
+    let _iv = null;
+    const start = (e) => {
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      e.currentTarget.classList.add('held');
+      onTick();
+      _iv = setInterval(onTick, 100);
+    };
+    const stop = (e) => {
+      e.stopPropagation();
+      clearInterval(_iv); _iv = null;
+      e.currentTarget.classList.remove('held');
+      if (onRelease) onRelease();
+    };
+    return { start, stop };
+  }
+
+  // Directional D-pad
+  [['dpad-fwd','forward'],['dpad-back','back'],
+   ['dpad-left','left'],['dpad-right','right']].forEach(([id, dir]) => {
+    const btn = document.getElementById(id);
+    const { start, stop } = _makeHold(
+      () => _wsSend({ type: 'drive', direction: dir, speed: 1.0 }),
+      () => _wsSend({ type: 'stop' })
+    );
+    btn.addEventListener('touchstart',  start, { passive: false });
+    btn.addEventListener('touchend',    stop,  { passive: false });
+    btn.addEventListener('touchcancel', stop,  { passive: false });
+  });
+
+  // Centre stop button — immediate, no hold
+  const stopBtn = document.getElementById('dpad-stop');
+  stopBtn.addEventListener('touchstart', (e) => {
+    e.stopPropagation();
+    if (e.cancelable) e.preventDefault();
+    _wsSend({ type: 'stop' });
+  }, { passive: false });
+  stopBtn.addEventListener('touchend',   (e) => e.stopPropagation(), { passive: false });
+  stopBtn.addEventListener('touchcancel',(e) => e.stopPropagation(), { passive: false });
+
+  // Arm hold
+  ['arm-up', 'arm-down'].forEach((id) => {
+    const dir = id === 'arm-up' ? 'up' : 'down';
+    const btn = document.getElementById(id);
+    const { start, stop } = _makeHold(
+      () => _wsSend({ type: 'arm', direction: dir, speed: 200 }),
+      () => _wsSend({ type: 'arm', direction: 'stop', speed: 0 })
+    );
+    btn.addEventListener('touchstart',  start, { passive: false });
+    btn.addEventListener('touchend',    stop,  { passive: false });
+    btn.addEventListener('touchcancel', stop,  { passive: false });
+  });
+
+  // Grip — single tap (open/close command sent on touchstart, no hold repeat)
+  ['grip-open', 'grip-close'].forEach((id) => {
+    const action = id === 'grip-open' ? 'open' : 'close';
+    const btn = document.getElementById(id);
+    btn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      btn.classList.add('held');
+      _wsSend({ type: 'grip', action });
+    }, { passive: false });
+    btn.addEventListener('touchend', (e) => {
+      e.stopPropagation();
+      btn.classList.remove('held');
+    }, { passive: false });
+    btn.addEventListener('touchcancel', (e) => {
+      e.stopPropagation();
+      btn.classList.remove('held');
+    }, { passive: false });
+  });
+
+  // Follow mode buttons — stopPropagation + API call
+  ['off', 'camera', 'fused', 'ble'].forEach((mode) => {
+    const btn = document.getElementById('btn-follow-' + mode);
+    btn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      _ctrlSetMode(mode);
+    }, { passive: false });
+    btn.addEventListener('touchend',   (e) => e.stopPropagation(), { passive: false });
+  });
+})();
 
 // ── Service worker registration ──────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
