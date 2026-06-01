@@ -98,14 +98,17 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   background:rgba(255,255,255,.18);display:inline-block;transition:background .2s}
 .dot-pg.active{background:rgba(255,255,255,.82)}
 /* ── TTS speech bubble ───────────────────────────────────────────────────── */
-#tts-bubble{position:fixed;right:14px;top:46%;transform:translateY(-50%);
-  max-width:200px;background:rgba(26,26,46,.88);color:#e6edf3;
+#tts-bubble{position:fixed;right:14px;top:63%;transform:translateY(-50%);
+  max-width:42vw;background:rgba(10,20,40,.88);color:#e6edf3;
   font-family:'Courier New',Courier,monospace;font-size:13px;line-height:1.5;
-  padding:10px 14px;border-radius:10px;border:1px solid rgba(88,100,200,.35);
-  display:none;z-index:20;word-break:break-word}
-#tts-bubble::after{content:'';position:absolute;bottom:-9px;left:16px;
-  border-left:8px solid transparent;border-right:8px solid transparent;
-  border-top:9px solid rgba(26,26,46,.88)}
+  padding:10px 14px;border-radius:10px;border:1px solid rgba(100,160,255,.3);
+  z-index:50;word-break:break-word;pointer-events:none;
+  opacity:0;transition:opacity 150ms ease}
+#tts-bubble.visible{opacity:1}
+/* left-pointing tail */
+#tts-bubble::before{content:'';position:absolute;left:-10px;top:50%;
+  transform:translateY(-50%);border:10px solid transparent;
+  border-right-color:rgba(10,20,40,.88)}
 </style>
 </head>
 <body>
@@ -856,6 +859,7 @@ function _makeTtsUtterance(text) {
 function _ttsSpeak(text) {
   if (!window.speechSynthesis) { console.warn('Web Speech API not available'); return; }
   window.speechSynthesis.cancel();
+  _ttsBubbleShow(text);  // show bubble immediately
 
   let started = false;
 
@@ -873,6 +877,7 @@ function _ttsSpeak(text) {
       setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
       _voiceState = 'idle'; _updateStatusText();
       _dbg.vad = 'idle'; _dbgUpdate();
+      _ttsBubbleHide();
     };
     u.onerror = (e) => {
       if (e.error === 'interrupted') return;  // cancelled for retry — ignore
@@ -880,6 +885,7 @@ function _ttsSpeak(text) {
       _speakUntil = 0;
       _voiceState = 'idle'; _updateStatusText();
       _dbg.vad = 'idle'; _dbgUpdate();
+      _ttsBubbleHide();
     };
     window.speechSynthesis.speak(u);
   }
@@ -895,6 +901,7 @@ function _ttsSpeakAsync(text) {
   return new Promise((resolve) => {
     if (!window.speechSynthesis) { resolve(); return; }
     window.speechSynthesis.cancel();
+    _ttsBubbleShow(text);  // show bubble immediately
 
     let started  = false;
     let resolved = false;
@@ -916,6 +923,7 @@ function _ttsSpeakAsync(text) {
         setState(faceState === STATE.SPEAK ? STATE.IDLE : faceState);
         _voiceState = 'idle'; _updateStatusText();
         _dbg.vad = 'idle'; _dbgUpdate();
+        _ttsBubbleHide();
         done();
       };
       u.onerror = (e) => {
@@ -924,6 +932,7 @@ function _ttsSpeakAsync(text) {
         _speakUntil = 0;
         _voiceState = 'idle'; _updateStatusText();
         _dbg.vad = 'idle'; _dbgUpdate();
+        _ttsBubbleHide();
         done();
       };
       window.speechSynthesis.speak(u);
@@ -1469,25 +1478,39 @@ function _showBubble(cls, text) {
 }
 
 // ── TTS face bubble — canvas overlay shown during conversation replies ────────
-// Appears immediately when a reply is ready (or within 500ms of speak()).
-// Hides 1.5 s after TTS resolves. Only shown on PAGE 0 (face).
+// Appears immediately when TTS starts. Fades out when TTS ends.
+// Only shown on PAGE 0 (face). pointer-events:none always.
 let _ttsBubbleTimer = null;
+let _ttsBubbleFadeTimer = null;
 
 function _ttsBubbleShow(text) {
-  if (!_conversation) return;  // only during active conversation
+  if (_currentPage !== 0) return;  // only on face page
   clearTimeout(_ttsBubbleTimer);
+  clearTimeout(_ttsBubbleFadeTimer);
   const el = document.getElementById('tts-bubble');
   if (!el) return;
-  el.textContent = text.length > 120 ? text.slice(0, 117) + '…' : text;
-  el.style.display = 'block';
+  const truncated = text.length > 140 ? text.slice(0, 137) + '…' : text;
+  el.textContent = truncated;
+  // Ensure element is visible (opacity transition from 0)
+  el.classList.remove('visible');
+  // Force reflow so the remove takes effect before we add back
+  void el.offsetWidth;
+  el.classList.add('visible');  // triggers 150ms fade-in
+  // Auto-hide fallback: covers Android Chrome onend quirks
+  const autoMs = truncated.length * 65 + 1500;
+  _ttsBubbleTimer = setTimeout(() => _ttsBubbleHide(), autoMs);
 }
 
 function _ttsBubbleHide() {
   clearTimeout(_ttsBubbleTimer);
-  _ttsBubbleTimer = setTimeout(() => {
-    const el = document.getElementById('tts-bubble');
-    if (el) el.style.display = 'none';
-  }, 1500);
+  clearTimeout(_ttsBubbleFadeTimer);
+  const el = document.getElementById('tts-bubble');
+  if (!el) return;
+  el.classList.remove('visible');  // triggers 400ms CSS fade-out
+  // After fade completes, ensure opacity is gone (already 0 via CSS transition)
+  _ttsBubbleFadeTimer = setTimeout(() => {
+    // nothing needed — CSS handles opacity; element stays in DOM
+  }, 400);
 }
 
 function _hideBubble() {
@@ -1530,7 +1553,7 @@ function _gotoPage(page) {
   document.getElementById('dbg-panel').style.display = onFace ? '' : 'none';
   document.getElementById('ui').style.display        = onFace ? '' : 'none';
   // Hide TTS bubble when navigating away from face
-  if (!onFace) { const b = document.getElementById('tts-bubble'); if (b) b.style.display = 'none'; }
+  if (!onFace) { clearTimeout(_ttsBubbleTimer); clearTimeout(_ttsBubbleFadeTimer); const b = document.getElementById('tts-bubble'); if (b) b.classList.remove('visible'); }
   // MJPEG — load only on PAGE 1 (saves bandwidth)
   const cam = document.getElementById('cam-feed');
   if (page === 1) {
