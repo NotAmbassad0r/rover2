@@ -25,20 +25,22 @@ VISION & FOLLOW
 - Obstacle: forward ultrasonic < safe_distance_cm (default 40) blocks FWD; follow steers around
 
 SAFETY
-- WebSocket heartbeat: UI must ping while driving/following or motors stop after ~4s
+- WebSocket heartbeat: UI must ping while driving/following or motors stop after ~10s (heartbeat_timeout_s: 10.0)
 - E-stop in UI stops motors and tracking
 
 POWER
 - Viking PN-964PD power bank — may sleep without USB load; pass-through or keep-alive dongle for battery
-- hailo-ollama must stay DISABLED (conflicts with Hailo for follow)
 
 SERVICES (systemd)
-- rover2-api, rover-camera, ollama, rover2-restore-wifi, rover2-virtual-usb-dongle (optional)
+- rover2-api (port 8082), rover-camera (port 8081), ollama (port 11434), hailo-ollama (port 8000)
+- rover2-restore-wifi, rover2-virtual-usb-dongle (optional keepalive for power bank)
+- hailo-ollama: ENABLED by default (backend=hailo). Chip sharing via group_id=rover2 + ROUND_ROBIN.
 
 AGENT
-- Target: LLM on AI HAT+ via hailo-ollama (Pi is bridge only). backend=hailo in config.yaml.
-- Fast-path tools (logs, temps, alerts) use Pi HTTP only — no LLM.
-- gemma2:2b does NOT support tools on Ollama.
+- Primary: qwen2.5-instruct:1.5b on hailo-ollama (AI HAT+, port 8000). backend=hailo in config.yaml.
+- CPU fallback: llama3.2:1b on ollama (port 11434) when hailo-ollama unavailable.
+- Fast-path tools (logs, temps, alerts) use Pi HTTP only — no LLM call.
+- gemma2:2b does NOT support tools on Ollama — do not use for agent.
 
 TUNABLE VIA AGENT (config.yaml, live apply)
 - body_tracker: confidence, centre_zone, target_bbox_width, turn_speed, forward_speed, avoid_default, frame_interval_s

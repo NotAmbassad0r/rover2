@@ -222,4 +222,4 @@ else
 fi
 
 echo ""
-echo "==> Done. Web UI: http://192.168.70.11:8082/ (eth0 — override PI_HOST if needed)"
+echo "==> Done. Web UI: https://192.168.70.11:8082/ (eth0 — override PI_HOST if needed)"

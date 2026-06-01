@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-30 (Face PWA visual overhaul: almond eyes, resting smile, swipe navigation, control panel, TTS male voice)
+Last updated: 2026-06-01 (Maintenance audit: docs/code consistency pass; TTS speech bubble v27)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -133,23 +133,34 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
                        → Web Speech API TTS reply
 
     ── Python services (pi/) ──────────────────────────────────────────────────
-    pi/main.py          Entrypoint: wires all components, starts uvicorn
-    pi/server.py        FastAPI: 42+ REST endpoints + WebSocket hub
-    pi/ws_control.py    WebSocket hub; telemetry push with extra fields (alerts)
-    pi/safety.py        Ultrasonic forward gate
-    pi/body_tracker.py  Hailo YOLOv8m person follow + BLE fallback + obstacle steer
-    pi/body_tracker_parse.py  YOLO NMS output parser (detection-major)
-    pi/follow_nav.py    Obstacle steer + BLE RSSI homing helpers
-    pi/ble_tracker.py   BLE RSSI beacon scanner (bleak)
-    pi/megapi.py        pyserial, ultrasonic poll
-    pi/diagnostics.py   gather_diagnostics(), SCRIPT_CATALOG, WiFi helper
-    pi/metrics_store.py SQLite time-series metrics DB (~5 s sample interval)
-    pi/log_buffer.py    In-process log ring for /api/logs
-    pi/chat_router.py   Regex NL command router (zero-LLM fast path, 14 commands)
-    pi/agent.py         RoverAgent: Ollama tool-use agentic loop (26 tools, fast-path, spoken agent)
-    pi/vlm_engine.py    VLMEngine: Hailo Qwen2-VL-2B-Instruct scene description
-    pi/voice_engine.py  Piper TTS (binary subprocess) + faster-whisper STT + ROVER personality
-    pi/audio_router.py  UDP audio router (asyncio, zero-CPU idle) + /ws/audio WebSocket bridge
+    pi/main.py               Entrypoint: wires all components, starts uvicorn
+    pi/server.py             FastAPI: 50+ REST endpoints + WebSocket hub
+    pi/ws_control.py         WebSocket hub; telemetry push with extra fields (alerts)
+    pi/safety.py             Ultrasonic forward gate
+    pi/body_tracker.py       Hailo YOLOv8m person follow + BLE fallback + obstacle steer
+    pi/body_tracker_parse.py YOLO NMS output parser (detection-major)
+    pi/follow_nav.py         Obstacle steer + BLE RSSI homing helpers
+    pi/ble_tracker.py        BLE RSSI beacon scanner (bleak)
+    pi/megapi.py             pyserial, ultrasonic poll
+    pi/arm_control.py        Arm PWM helper (PORT3B hold-to-move + pulse)
+    pi/camera_proxy.py       MJPEG proxy from rover-camera through rover2-api
+    pi/camera_idle.py        Ultrasonic-triggered camera idle sleep (stops proxy pull)
+    pi/guard.py              Door guard: BLE arm/disarm + Hailo intruder detect + HA webhooks
+    pi/thermal.py            Thermal monitor: vcgencmd, auto CPU throttle at 80°C
+    pi/diagnostics.py        gather_diagnostics(), SCRIPT_CATALOG, WiFi helper
+    pi/metrics_store.py      SQLite time-series metrics DB (~5 s sample interval)
+    pi/log_buffer.py         In-process log ring for /api/logs
+    pi/chat_router.py        Regex NL command router (zero-LLM fast path, 14 commands)
+    pi/agent.py              RoverAgent: Ollama tool-use agentic loop (35 tools, fast-path, spoken agent)
+    pi/agent_knowledge.py    Static ROVER2 hardware/software reference injected into agent context
+    pi/agent_solutions.py    Diagnostic fix proposals for suggest_fix tool
+    pi/vlm_engine.py         VLMEngine: Hailo Qwen2-VL-2B-Instruct scene description
+    pi/voice_engine.py       Piper TTS (binary subprocess) + faster-whisper STT + ROVER personality
+    pi/audio_router.py       UDP audio router (asyncio, zero-CPU idle) + /ws/audio WebSocket bridge
+    pi/config_public.py      Config masking for GET /api/config (redacts secrets)
+    pi/config_runtime.py     Live patch application (apply_config_patch())
+    pi/config_store.py       YAML validation, merge, and persistence for tuning endpoint
+    pi/firmware_flash.py     OTA AVR firmware flash via avrdude (POST /api/firmware/flash)
 
     ── ROVER Face PWA ────────────────────────────────────────────────────────────
     face/index.html     Samsung Galaxy A32 voxel face (canvas, 8 states, fullscreen portrait)
@@ -176,7 +187,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 |---------|------|--------|
 | `rover2-api.service` | **8082** | ROVER2 control + follow + AI |
 | `rover-camera.service` | **8081** | MJPEG (v1 stack; shared) |
-| `ollama.service` | **11434** | Local LLM — llama3.2:1b for agent tool-use |
+| `ollama.service` | **11434** | Local LLM — llama3.2:1b for agent CPU fallback |
 | `rover-api` (v1) | 8080 | Stop when testing ROVER2 serial |
 | `hailo-ollama` | **8000** | Voice agent fast-path (qwen2.5-instruct:1.5b on AI HAT+); enabled by `deploy_pi.sh` |
 | `rover2-restore-wifi.service` | — | Boot: re-apply WiFi from `/boot/firmware/network-config` |
@@ -201,10 +212,9 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **UI SOURCE row** — shows CAMERA / BLE (dBm) / SEARCHING… in real time
 - PMIC power logging at Hailo load (`[pre/post-hailo-load]` in journal)
 - Boot partition read-only (`/etc/fstab`: `ro,defaults`) — cmdline.txt protected from corruption
-- `hailo-ollama.service` permanently disabled
 - **ROVER Face PWA** — `/face/` served by rover2-api; voxel face canvas, 8 states, WebSocket telemetry
 - **Face canvas status text** — bottom-centre label rendered in iris colour at 70% opacity; 11 px monospace, 3 px letter-spacing, uppercase. Voice states take priority over robot states: LISTENING… / THINKING… / SPEAKING → FOLLOWING / SEARCHING / OBSTACLE DETECTED / ALERT / MOVING / OFFLINE. IDLE = no text (clean face). Updated on every telemetry tick, VAD transition, and TTS start/end
-- **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache on `rover-face-v26`
+- **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache on `rover-face-v27`
 - **Face initial state** — `faceState` initialises as `STATE.IDLE` (not OFFLINE); face shows normally on page load. `_ws.onopen` snaps to IDLE immediately; `_ws.onclose` transitions to OFFLINE and shows "OFFLINE" in status text
 - **Voice conversation concurrency fix** — `_convLoopActive` guard at outer `_convLoop` prevents duplicate invocations; `if (!_conversation) return` at start of inner `loop()` stops runaway iterations when the 10-second silence timeout fires `_end()` mid-fetch
 - **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice; `POST /api/voice/speak` streams WAV; length_scale 1.05; for proactive server events only. Agent replies spoken via **Web Speech API** on A32 (`speechSynthesis`, British voice, rate 0.88)
@@ -218,18 +228,22 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Web DIAG tab** — full system diagnostics with charts
 - **Web CHAT tab** — NL commands, VLM, AI agent, 16 presets, voice
 - **Web METRICS tab** — Chart.js graphs (CPU%, Temp, RAM%)
-- **AI Agent** — Ollama llama3.2:1b + 26 tools; 9 fast-path patterns (web UI); voice uses separate spoken fast-path
-- **Agentic voice assistant** — `run_spoken_turn()` routes voice through tool-use loop; 11 regex patterns for natural commands; instant canned responses for actions; hailo for data queries; `POST /api/arm/wave` endpoint
+- **AI Agent** — 35 tools (31 read-only + 4 dangerous); primary backend: hailo-ollama `qwen2.5-instruct:1.5b` on AI HAT+; CPU fallback: `llama3.2:1b`; 10 web-chat fast-path patterns; voice uses 12 spoken fast-path patterns
+- **Agentic voice assistant** — `run_spoken_turn()` routes voice through tool-use loop; 12 spoken fast-path patterns; instant canned responses for actions; hailo for data queries; `POST /api/arm/wave` endpoint
 - **VLM scene description** — Hailo Qwen2-VL snapshot caption
 - **Wake word detection** — faster-whisper tiny, `vad_filter=False` on both wake and conversation paths (A32 RMS VAD is the sole gate). Wake word "rover" matched with German-accent fuzzy variants: rower, rofer, roffer, rofar, over, rove, robo, robot, mover, dover, lover. `beam_size=3`, `language="en"` forced on wake path
 - **Wake chime** — two-tone ascending chime (880 Hz → 1320 Hz, 70 ms apart, 80 ms each, 5 ms attack / 30 ms release) plays on A32 via Web Audio API on wake confirmation, before conversation starts
 - **Full voice pipeline verified** — wake → chime → "Yes, sir." → conversation → TTS reply → social closing ends session → returns to wake listening. Fast-path commands ~0.1 s, hailo-ollama path ~3–4 s
 - **AudioSourceManager** — built-in mic fallback when MINIMIC1 not plugged in; `devicechange` event re-enumerates sources on hot-swap. MIC row in debug overlay shows active track label. No polling
 - **MegaPi disconnect tolerance** — `body_tracker.set_enabled()` and `POST /api/tracking` no longer raise 500 when MegaPi serial is not connected; `RuntimeError` caught in `try/except`, `WARNING` logged, tracking state updates correctly
-- **Face PWA visual overhaul (2026-05-30)** — pixelated block-grid face: narrower oval (W×0.28 × H×0.38), steeper edge dispersal, almond eyes (wide/narrow ellipse, centred ±0.36, −0.20), resting smile (parabolic mouth curve corners-up). SW cache `rover-face-v26`
+- **Face PWA visual overhaul (2026-05-30)** — pixelated block-grid face: narrower oval (W×0.28 × H×0.38), steeper edge dispersal, almond eyes (wide/narrow ellipse, centred ±0.36, −0.20), resting smile (parabolic mouth curve corners-up). SW cache `rover-face-v27`
 - **Three-page swipe navigation** — swipe right = help page, swipe left = controls page; percentage-based `translateX` (reliable on Android Chrome); page indicator dots
 - **Control panel PAGE 1** — camera feed (MJPEG), follow mode selector (OFF/CAMERA/FUSED/BLE), D-pad, arm lift, gripper. Canvas hidden on PAGE 1 (was obscuring controls via z-index:2 stacking)
 - **TTS male voice** — `_makeTtsUtterance()` prefers Daniel (GB male) > any en-GB non-female > en-US male > default; logs selected voice name to console
+- **TTS speech bubble (2026-06-01)** — face PWA overlay: right side at ~63% height (mouth level), left-pointing tail, fade-in 150ms / fade-out 400ms, max 140 chars, auto-hide fallback, `pointer-events:none`, page-0 only
+- **Guard mode** — BLE-triggered arm/disarm (DISARMED → ARMED when beacon RSSI drops below threshold for 10s), Hailo person detection for intruder alert, Home Assistant webhook integration, TTS announcements; enabled=false by default in config.yaml
+- **Camera idle sleep** — when FOLLOW/DETECT both off and ultrasonic variance ≤8 cm for 90s, proxy stops pulling from rover-camera (zero camera bandwidth); wake triggers: ultrasonic delta >8 cm, tracking enable, stream client connect
+- **Thermal monitor** — on every `/api/services` call: read vcgencmd, auto-throttle CPU to 1.6 GHz at 80°C, restore to 1.8 GHz when cool; alerts published to WebSocket
 
 ---
 
@@ -274,9 +288,11 @@ A32 voice pipeline (fully local — no cloud)
 
 ### agent.py — agentic tool-use loop
 
-- **Model:** `llama3.2:1b` via Ollama on Pi (fully local, no internet)
-- **Tools:** 20 total — 16 read-only + 4 dangerous (require Confirm button)
-- **Fast-path:** 9 patterns skip Ollama entirely, call tool directly, format result in Python
+- **Primary model:** `qwen2.5-instruct:1.5b` via hailo-ollama on AI HAT+ (port 8000, `agent.backend=hailo`)
+- **CPU fallback model:** `llama3.2:1b` via Ollama (port 11434; used when hailo-ollama unavailable)
+- **Tools:** 35 total — 31 read-only + 4 dangerous (require Confirm button)
+- **Web-chat fast-path:** 10 patterns skip Ollama, call tool directly, format result in Python
+- **Spoken fast-path:** 12 patterns in `_SPOKEN_FAST_PATTERNS` for voice agent
 
 **Adding new tools:**
 1. Add definition to `_READ_TOOLS` or `_DANGEROUS_TOOLS` in `agent.py`
@@ -362,7 +378,7 @@ cd ~/Documents/projects/rover2
 ```
 
 - Auto-picks first reachable host: `rover-eth`, `<ROVER_ETH_IP>`, WiFi, Tailscale.
-- Disables `hailo-ollama.service` permanently.
+- When `agent.backend=hailo` (default): runs `setup_ai_on_hailo.sh` to **enable** hailo-ollama. When `backend=cpu`: starts ollama. When `backend=tools_only`: disables both.
 - Runs `scripts/link_hailo_for_rover2.sh` on Pi.
 - Sideloads `httpx` and `bleak` if pip fails.
 
@@ -419,7 +435,7 @@ Unchanged from previous session — see prior HANDOFF or the UI itself.
 
 ## WebSocket protocol
 
-Endpoint: `ws://<ROVER_WIFI_IP>:8082/ws`
+Endpoint: `wss://<ROVER_WIFI_IP>:8082/ws`
 
 **Client → server:** `drive`, `stop`, `grip`, `arm`, `arm_pulse`, `tracking`, `ping`
 **Server → client:** `telemetry`, `ack`, `pong`, `error`
@@ -456,7 +472,7 @@ body_tracker:
   confidence: 0.40
   centre_zone: 0.30
   target_bbox_width: 0.35
-  ble_follow_enabled: true     # set false to disable BLE fallback
+  ble_follow_enabled: false    # BLE fallback off by default — enable via UI BLE button
 
 ble_tracker:
   enabled: true        # set false for office demo (saves CPU + heat — no BLE needed)
@@ -500,9 +516,8 @@ ble_tracker:
 10. **Browser cache** — Hard-refresh (`Ctrl+Shift+R`) after every deploy.
 11. **piper-phonemize has no cp313 wheel** — Python piper-tts API unusable on Pi's Python 3.13. Solution: use `piper` binary at `/opt/rover2/piper/piper` (statically linked, installed by `deploy_pi.sh`). voice_engine.py calls it as a subprocess.
 12. **voices/ excluded from rsync** — `deploy_pi.sh` uses `--exclude 'voices/'` to protect downloaded models from `--delete`. Voice model lives at `/opt/rover2/voices/` on Pi only.
-13. **STT memory cost** — `openai-whisper` depends on `torch` (~800 MB RSS when loaded). Once transcribe() is called, rover2-api RSS spikes from ~80 MB to ~912 MB. The memory watchdog correctly fires critical alerts. Whisper is lazy-loaded (only on first transcribe call). Restart rover2-api to recover memory. Long-term fix: switch to `faster-whisper` (ctranslate2, ~150 MB RSS) — needs ctranslate2/av aarch64 wheels sideloaded. STT endpoint (`/api/voice/transcribe`) now returns valid JSON always — never 500.
-    **faster-whisper is the STT backend** — `openai-whisper`/`torch` are NOT used. faster-whisper tiny (int8, CPU, ~150 MB RSS) transcribes audio via `/api/voice/transcribe` and `/api/voice/wake`. `webkitSpeechRecognition` was removed (requires Google servers — breaks offline demo). Wake word and conversation audio is now captured on A32 via `MediaRecorder` + `AnalyserNode` RMS VAD and POSTed to the Pi.
-14. **Whisper import path** — `openai-whisper` is in `/home/ambassad0r/.local/lib/python3.13/site-packages/` (installed with `pip install --user`). `tqdm` and `torch` are in `/usr/lib/python3/dist-packages/` (apt/system pip). `voice_engine._load_whisper()` adds both paths to `sys.path` before `import whisper`.
+13. **STT backend: faster-whisper** — `faster-whisper` tiny (int8, CPU, ctranslate2, ~150 MB RSS on first transcribe call) is the STT backend. `openai-whisper`/`torch` are NOT installed or used. RSS base is ~92 MB; after first transcribe call it rises to ~240 MB and stabilises. `webkitSpeechRecognition` removed (requires Google servers). Wake/conversation audio captured on A32 via `MediaRecorder` + `AnalyserNode` RMS VAD and POSTed to Pi.
+14. **Whisper download cache** — faster-whisper downloads `tiny` model on first call to `/opt/rover2/whisper-models/`. This directory is excluded from rsync `--delete` to protect the downloaded model.
 15. **Face PWA on A32** — server now runs HTTPS, so getUserMedia works without `chrome://flags`. Accept the self-signed cert warning once on first visit to `https://<ROVER_WIFI_IP>:8082/`.
 16. **HTTPS self-signed cert** — Browsers warn on first visit. Accept once (Advanced → Proceed). Curl on Pi needs `-k` flag. Cert files: `/opt/rover2/rover.key` + `rover.crt` (owned root:ambassad0r, mode 640). Not in repo — regenerate with `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout rover.key -out rover.crt -days 3650 -nodes -subj "/CN=rover"` if lost.
 17. **Left/right direction was inverted** — Fixed 2026-05-26 by swapping direction_map in config.yaml: `left: [1,0]`, `right: [0,-1]`. Root cause: PORT1B is wired to the physical right motor, so firmware's "left motor" is actually the right wheel. D-pad, follow, BLE turns, and obstacle avoidance all fixed by this single config change.
@@ -563,12 +578,15 @@ ble_tracker:
 - Voice conversation no longer fires duplicate LLM requests
 - AudioSourceManager: built-in mic fallback, devicechange hot-swap, MIC row shows active track label
 - Visual overhaul: almond eyes, resting smile, narrower oval, steeper dispersal, swipe pager, controls on PAGE 1
-- Service worker on `rover-face-v26`; unregister SW on A32 after any deploy
+- Service worker on `rover-face-v27`; unregister SW on A32 after any deploy
+
+**Face PWA speech bubble (2026-06-01):** ✓ done
+- TTS speech bubble on right side at ~63% height, left-pointing tail, 150ms fade-in / 400ms fade-out
+- Hooks into `_ttsSpeak()` and `_ttsSpeakAsync()` — shows at speak start, hides at onend/onerror
+- Service worker on `rover-face-v27`
 
 **Next session priorities:**
-- Run full maintenance/audit prompt (5-phase cleanup: idle CPU, memory, dead code, tests, docs)
 - T1.4–T1.7 follow tests when MegaPi connected (turn accuracy, advance, obstacle steer)
-- TTS speech bubble on face canvas during conversation replies
 - MINIMIC1 Ring 2 hardware fix (tape/nail polish on TRRS plug, optional)
 - HailoRT 5.2.0 upgrade to unblock VLM (check Pi OS compatibility first)
 
@@ -629,8 +647,8 @@ Then: U0 battery test when 5A cable arrives.
 - Do **not** set global `PYTHONPATH` to system site-packages on rover2-api
 - Port **8082** for ROVER2; do not change v1 **8080** without coordination
 - Only one of `rover-api` / `rover2-api` may use `/dev/ttyUSB0`
-- `hailo-ollama` must remain disabled while ROVER2 is in use
-- Agent model must be `llama3.2:1b` — gemma2:2b does not support tool calls in Ollama
+- `hailo-ollama` must be **running** when `agent.backend=hailo` (default) — chip-sharing conflict resolved via `group_id=rover2` + ROUND_ROBIN; do not disable it while ROVER2 is in use with backend=hailo
+- Agent CPU fallback model must be `llama3.2:1b` — gemma2:2b does not support tool calls in Ollama
 - Boot partition is read-only — remount rw before editing `/boot/firmware/` files
 
 ---
@@ -647,4 +665,4 @@ Then: U0 battery test when 5A cable arrives.
 | **Metrics collection** | Default 5 s interval. Do not decrease below 5 s. |
 | **WebSocket telemetry** | Default 400 ms. Do not push faster. |
 | **New features** | Before merging: check DIAG tab — cpu_percent, temperature. |
-| **Memory** | rover2-api target: <150 MB RSS. |
+| **Memory** | rover2-api base RSS target: <150 MB (measured ~92 MB at idle). Watchdog thresholds: warn 280 MB, target 300 MB, critical 400 MB (whisper loads ~150 MB RSS on first transcribe). |

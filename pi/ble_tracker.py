@@ -120,9 +120,10 @@ class BLETracker:
         addr = device.address.upper()
         if addr not in self._seen_addrs:
             self._seen_addrs.add(addr)
-            logger.info("BLE seen: %s  name=%r  rssi=%s  uuids=%s",
-                        addr, name or "(unnamed)", adv.rssi,
-                        list(adv.service_uuids) if adv.service_uuids else "[]")
+            # DEBUG level: first-seen per-device. INFO floods the journal in dense BLE environments.
+            logger.debug("BLE seen: %s  name=%r  rssi=%s  uuids=%s",
+                         addr, name or "(unnamed)", adv.rssi,
+                         list(adv.service_uuids) if adv.service_uuids else "[]")
         if self._target_uuid:
             match = any(
                 self._target_uuid in u.lower()

@@ -12,7 +12,7 @@
 
 - Hailo does all inference. Never run vision/ML on CPU.
 - CPU governor: `schedutil` always.
-- rover2-api memory target: <150 MB RSS.
+- rover2-api base RSS target: <150 MB (idle, ~92 MB measured). Watchdog: warn 280 MB, critical 400 MB.
 - `stress-ng` / virtual USB dongle: only on battery, always off on mains.
 
 ## Layout
