@@ -69,14 +69,14 @@ ROVER2 uses port **8082** so it can run alongside ROVER v1 on 8080.
 cd ~/Documents/projects/rover2
 chmod +x deploy_pi.sh
 ./deploy_pi.sh
-# Default deploy target is eth0 192.168.70.11; override: ROVER2_PI_HOST=192.168.250.254 ./deploy_pi.sh
+# Default deploy target is eth0 <ROVER_ETH_IP>; override: ROVER2_PI_HOST=<ROVER_WIFI_IP> ./deploy_pi.sh
 ```
 
 **Serial port:** only one service can use `/dev/ttyUSB0`. ROVER2 was started while `rover-api` was stopped. Do not run both against the MegaPi at once.
 
 ### 4. Control
 
-Open in a browser: `http://192.168.70.11:8082/` (eth0; WiFi: `http://192.168.250.254:8082/`).
+Open in a browser: `http://<ROVER_ETH_IP>:8082/` (eth0; WiFi: `http://<ROVER_WIFI_IP>:8082/`).
 
 - **WebSocket** (`/ws`): D-pad, gripper, live telemetry (~2.5 Hz). Motors stop if the tab disconnects.
 - Hold D-pad directions; release to stop.
@@ -105,8 +105,8 @@ Sketch: `firmware/rover2_basic/` — fixed ports, no auto-detect (`rover2-basic-
 **From central-computer** (compile + flash over SSH):
 
 ```bash
-./scripts/flash_firmware.sh                    # default Pi eth0 192.168.70.11
-ROVER2_PI_HOST=192.168.250.254 ./scripts/flash_firmware.sh   # WiFi fallback
+./scripts/flash_firmware.sh                    # default Pi eth0 <ROVER_ETH_IP>
+ROVER2_PI_HOST=<ROVER_WIFI_IP> ./scripts/flash_firmware.sh   # WiFi fallback
 ```
 
 **First time on a Pi** — install avrdude under `/opt/rover2/tools`:

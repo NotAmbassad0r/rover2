@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-05-30 (Voice pipeline verified end-to-end; wake chime; AudioSourceManager; MegaPi disconnect tolerance)
+Last updated: 2026-05-30 (Face PWA visual overhaul: almond eyes, resting smile, swipe navigation, control panel, TTS male voice)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -29,7 +29,7 @@ Hard rules applied to every change:
 | Item | Value |
 |------|--------|
 | Developer | ambassad0r |
-| Dev machine | central-computer — 192.168.20.11 (Kubuntu 26.04) |
+| Dev machine | central-computer — <CENTRAL_IP> (Kubuntu 26.04) |
 | Dev repo | `~/Documents/projects/rover2/` |
 | Pi deploy path | `/opt/rover2/` |
 | Pi hostname | `rover` (Pi 5 8GB + AI HAT+ 2; same host as v1) |
@@ -38,18 +38,18 @@ Hard rules applied to every change:
 
 | Interface | IP |
 |-----------|-----|
-| eth0 | **192.168.70.11** (preferred — use for deploy, UI, SSH) |
-| WiFi | 192.168.250.254 |
-| Tailscale | 100.67.13.10 |
+| eth0 | **<ROVER_ETH_IP>** (preferred — use for deploy, UI, SSH) |
+| WiFi | <ROVER_WIFI_IP> |
+| Tailscale | <ROVER_TAILSCALE_IP> |
 
-**Dev machine has no route to 192.168.250.254** — deploy always via eth0 (rover-eth). Use WiFi IP only from a device on the same WiFi (phone, laptop on local network).
+**Dev machine has no route to <ROVER_WIFI_IP>** — deploy always via eth0 (rover-eth). Use WiFi IP only from a device on the same WiFi (phone, laptop on local network).
 
 ### SSH
 
 ```bash
-ssh ambassad0r@192.168.70.11       # eth0 (preferred)
-ssh rover-eth                      # ~/.ssh/config → 192.168.70.11
-ssh ambassad0r@192.168.250.254     # WiFi (from same-subnet device only)
+ssh ambassad0r@<ROVER_ETH_IP>       # eth0 (preferred)
+ssh rover-eth                      # ~/.ssh/config → <ROVER_ETH_IP>
+ssh ambassad0r@<ROVER_WIFI_IP>     # WiFi (from same-subnet device only)
 ```
 
 ### WiFi down after hard power cut
@@ -119,7 +119,7 @@ Root cause confirmed via PMIC ADC (`vcgencmd pmic_read_adc`):
 ## Architecture
 
 ```
-Browser (index.html)  https://192.168.70.11:8082/
+Browser (index.html)  https://<ROVER_ETH_IP>:8082/
     → WebSocket wss://<pi>:8082/ws       drive, grip, arm, tracking, telemetry, alerts
     → HTTPS REST /api/*                  drive, diagnostics, scripts, WiFi, AI agent, metrics
     → Camera preview                     http://<pi>:8081/stream  (rover-camera.service)
@@ -204,7 +204,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - `hailo-ollama.service` permanently disabled
 - **ROVER Face PWA** — `/face/` served by rover2-api; voxel face canvas, 8 states, WebSocket telemetry
 - **Face canvas status text** — bottom-centre label rendered in iris colour at 70% opacity; 11 px monospace, 3 px letter-spacing, uppercase. Voice states take priority over robot states: LISTENING… / THINKING… / SPEAKING → FOLLOWING / SEARCHING / OBSTACLE DETECTED / ALERT / MOVING / OFFLINE. IDLE = no text (clean face). Updated on every telemetry tick, VAD transition, and TTS start/end
-- **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache now on `rover-face-v6`
+- **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache on `rover-face-v26`
 - **Face initial state** — `faceState` initialises as `STATE.IDLE` (not OFFLINE); face shows normally on page load. `_ws.onopen` snaps to IDLE immediately; `_ws.onclose` transitions to OFFLINE and shows "OFFLINE" in status text
 - **Voice conversation concurrency fix** — `_convLoopActive` guard at outer `_convLoop` prevents duplicate invocations; `if (!_conversation) return` at start of inner `loop()` stops runaway iterations when the 10-second silence timeout fires `_end()` mid-fetch
 - **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice; `POST /api/voice/speak` streams WAV; length_scale 1.05; for proactive server events only. Agent replies spoken via **Web Speech API** on A32 (`speechSynthesis`, British voice, rate 0.88)
@@ -226,6 +226,10 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Full voice pipeline verified** — wake → chime → "Yes, sir." → conversation → TTS reply → social closing ends session → returns to wake listening. Fast-path commands ~0.1 s, hailo-ollama path ~3–4 s
 - **AudioSourceManager** — built-in mic fallback when MINIMIC1 not plugged in; `devicechange` event re-enumerates sources on hot-swap. MIC row in debug overlay shows active track label. No polling
 - **MegaPi disconnect tolerance** — `body_tracker.set_enabled()` and `POST /api/tracking` no longer raise 500 when MegaPi serial is not connected; `RuntimeError` caught in `try/except`, `WARNING` logged, tracking state updates correctly
+- **Face PWA visual overhaul (2026-05-30)** — pixelated block-grid face: narrower oval (W×0.28 × H×0.38), steeper edge dispersal, almond eyes (wide/narrow ellipse, centred ±0.36, −0.20), resting smile (parabolic mouth curve corners-up). SW cache `rover-face-v26`
+- **Three-page swipe navigation** — swipe right = help page, swipe left = controls page; percentage-based `translateX` (reliable on Android Chrome); page indicator dots
+- **Control panel PAGE 1** — camera feed (MJPEG), follow mode selector (OFF/CAMERA/FUSED/BLE), D-pad, arm lift, gripper. Canvas hidden on PAGE 1 (was obscuring controls via z-index:2 stacking)
+- **TTS male voice** — `_makeTtsUtterance()` prefers Daniel (GB male) > any en-GB non-female > en-US male > default; logs selected voice name to console
 
 ---
 
@@ -357,7 +361,7 @@ cd ~/Documents/projects/rover2
 ./deploy_pi.sh
 ```
 
-- Auto-picks first reachable host: `rover-eth`, `192.168.70.11`, WiFi, Tailscale.
+- Auto-picks first reachable host: `rover-eth`, `<ROVER_ETH_IP>`, WiFi, Tailscale.
 - Disables `hailo-ollama.service` permanently.
 - Runs `scripts/link_hailo_for_rover2.sh` on Pi.
 - Sideloads `httpx` and `bleak` if pip fails.
@@ -368,12 +372,12 @@ ROVER2_SKIP_VIRTUAL_DONGLE=1 ./deploy_pi.sh   # code-only, skip power profile
 
 Logs:
 ```bash
-ssh ambassad0r@192.168.250.254 "journalctl -u rover2-api -f"
+ssh ambassad0r@<ROVER_WIFI_IP> "journalctl -u rover2-api -f"
 ```
 
 Verify:
 ```bash
-ssh ambassad0r@192.168.250.254 "curl -sk https://localhost:8082/api/status | python3 -m json.tool"
+ssh ambassad0r@<ROVER_WIFI_IP> "curl -sk https://localhost:8082/api/status | python3 -m json.tool"
 # Expect: tracking_available true, tracking_hailo_ready true (only after DETECT/FOLLOW first enabled),
 #         ble_available true, ble_seen true, ble_follow_enabled true
 # Note: -k flag needed for curl with self-signed cert
@@ -383,7 +387,7 @@ ssh ambassad0r@192.168.250.254 "curl -sk https://localhost:8082/api/status | pyt
 
 ## Web UI
 
-**https://192.168.250.254:8082/** (WiFi) or **https://192.168.70.11:8082/** (eth)
+**https://<ROVER_WIFI_IP>:8082/** (WiFi) or **https://<ROVER_ETH_IP>:8082/** (eth)
 
 > **HTTPS only** — rover2-api runs with a self-signed TLS cert. Use `https://`. First visit: accept the cert warning (Advanced → Proceed). The UI auto-selects `wss://` for WebSocket when served over HTTPS.
 
@@ -415,7 +419,7 @@ Unchanged from previous session — see prior HANDOFF or the UI itself.
 
 ## WebSocket protocol
 
-Endpoint: `ws://192.168.250.254:8082/ws`
+Endpoint: `ws://<ROVER_WIFI_IP>:8082/ws`
 
 **Client → server:** `drive`, `stop`, `grip`, `arm`, `arm_pulse`, `tracking`, `ping`
 **Server → client:** `telemetry`, `ack`, `pong`, `error`
@@ -499,11 +503,12 @@ ble_tracker:
 13. **STT memory cost** — `openai-whisper` depends on `torch` (~800 MB RSS when loaded). Once transcribe() is called, rover2-api RSS spikes from ~80 MB to ~912 MB. The memory watchdog correctly fires critical alerts. Whisper is lazy-loaded (only on first transcribe call). Restart rover2-api to recover memory. Long-term fix: switch to `faster-whisper` (ctranslate2, ~150 MB RSS) — needs ctranslate2/av aarch64 wheels sideloaded. STT endpoint (`/api/voice/transcribe`) now returns valid JSON always — never 500.
     **faster-whisper is the STT backend** — `openai-whisper`/`torch` are NOT used. faster-whisper tiny (int8, CPU, ~150 MB RSS) transcribes audio via `/api/voice/transcribe` and `/api/voice/wake`. `webkitSpeechRecognition` was removed (requires Google servers — breaks offline demo). Wake word and conversation audio is now captured on A32 via `MediaRecorder` + `AnalyserNode` RMS VAD and POSTed to the Pi.
 14. **Whisper import path** — `openai-whisper` is in `/home/ambassad0r/.local/lib/python3.13/site-packages/` (installed with `pip install --user`). `tqdm` and `torch` are in `/usr/lib/python3/dist-packages/` (apt/system pip). `voice_engine._load_whisper()` adds both paths to `sys.path` before `import whisper`.
-15. **Face PWA on A32** — server now runs HTTPS, so getUserMedia works without `chrome://flags`. Accept the self-signed cert warning once on first visit to `https://192.168.250.254:8082/`.
+15. **Face PWA on A32** — server now runs HTTPS, so getUserMedia works without `chrome://flags`. Accept the self-signed cert warning once on first visit to `https://<ROVER_WIFI_IP>:8082/`.
 16. **HTTPS self-signed cert** — Browsers warn on first visit. Accept once (Advanced → Proceed). Curl on Pi needs `-k` flag. Cert files: `/opt/rover2/rover.key` + `rover.crt` (owned root:ambassad0r, mode 640). Not in repo — regenerate with `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout rover.key -out rover.crt -days 3650 -nodes -subj "/CN=rover"` if lost.
 17. **Left/right direction was inverted** — Fixed 2026-05-26 by swapping direction_map in config.yaml: `left: [1,0]`, `right: [0,-1]`. Root cause: PORT1B is wired to the physical right motor, so firmware's "left motor" is actually the right wheel. D-pad, follow, BLE turns, and obstacle avoidance all fixed by this single config change.
 18. **MegaPi on AA batteries** — Brand new AAs may not provide enough current for arc turns at speed 210. If motors stall, use MegaPi mains or reduce turn_speed.
 19. **MINIMIC1 speaker muting** — Veles-X MINIMIC1 TRRS lavalier mic plugged into A32 causes Android to mute the main speaker (routes to non-existent earpiece). `setSinkId('speaker')` and silent-buffer AudioContext workarounds are ineffective on Android Chrome. Hardware fix (insulating tape / nail polish on the Ring 2 / microphone contact of the TRRS plug to make Android see it as a 3-pole jack) not yet applied. **Workaround: use built-in mic (unplug MINIMIC1).**
+20. **VLM blocked — HailoRT 5.2.0 upgrade required** — `Qwen2-VL-2B-Instruct.hef` requires HailoRT ≥ 5.2.0; current Pi install is on an earlier version. VLM endpoint returns error until runtime is upgraded. Body tracker (YOLO) unaffected.
 
 ---
 
@@ -548,7 +553,7 @@ ble_tracker:
 - Say "rover" → A32 RMS VAD → 2.5 s MediaRecorder chunk → `POST /api/voice/wake` → faster-whisper (vad_filter=False) → fuzzy match → wake chime → "Yes, sir." → conversation loop → `run_spoken_turn()` → hailo/tool/canned reply → Web Speech TTS → social closing → back to wake listening
 - **Natural commands:** hello (wave arm), how are you (live diagnostics), follow me, stop following, what do you see, run diagnostics, fix it
 - **Timing:** action commands ~0.1 s, hailo-ollama path ~3–4 s
-- To test offline: enable airplane mode on A32, visit `https://192.168.250.254:8082/face/`, say "rover"
+- To test offline: enable airplane mode on A32, visit `https://<ROVER_WIFI_IP>:8082/face/`, say "rover"
 - For office demo with no BLE: set `ble_tracker.enabled: false` in config.yaml → deploy
 - **Tip:** use built-in A32 mic (MINIMIC1 mutes speaker — see known issue #19)
 
@@ -557,7 +562,15 @@ ble_tracker:
 - Face no longer shows dark/offline on page load — starts IDLE
 - Voice conversation no longer fires duplicate LLM requests
 - AudioSourceManager: built-in mic fallback, devicechange hot-swap, MIC row shows active track label
-- Service worker on `rover-face-v6`; unregister SW on A32 (DevTools → Application → Service Workers → Unregister) then reload after any deploy
+- Visual overhaul: almond eyes, resting smile, narrower oval, steeper dispersal, swipe pager, controls on PAGE 1
+- Service worker on `rover-face-v26`; unregister SW on A32 after any deploy
+
+**Next session priorities:**
+- Run full maintenance/audit prompt (5-phase cleanup: idle CPU, memory, dead code, tests, docs)
+- T1.4–T1.7 follow tests when MegaPi connected (turn accuracy, advance, obstacle steer)
+- TTS speech bubble on face canvas during conversation replies
+- MINIMIC1 Ring 2 hardware fix (tape/nail polish on TRRS plug, optional)
+- HailoRT 5.2.0 upgrade to unblock VLM (check Pi OS compatibility first)
 
 **Software options:**
 - "ME only" follow: BLE + camera must agree before following (prevents false positives in dense BLE environments)
@@ -581,7 +594,7 @@ body_tracker:
 ```
 Read HANDOFF.md in full before making changes.
 
-Continue ROVER2 development. Pi at 192.168.250.254 (WiFi) or 192.168.70.11 (eth).
+Continue ROVER2 development. Pi at <ROVER_WIFI_IP> (WiFi) or <ROVER_ETH_IP> (eth).
 API is HTTPS — use https:// and curl -k. WebSocket is wss://.
 Current status: follow works on mains; left/right direction corrected 2026-05-26.
 Battery test blocked by USB cable (5A cable ordered).
@@ -611,7 +624,7 @@ Then: U0 battery test when 5A cable arrives.
 
 ## Standing rules (this repo)
 
-- After Pi code changes: `./deploy_pi.sh` (targets **192.168.70.11** by default) or rsync manually
+- After Pi code changes: `./deploy_pi.sh` (targets **<ROVER_ETH_IP>** by default) or rsync manually
 - After firmware changes: `./scripts/flash_firmware.sh`
 - Do **not** set global `PYTHONPATH` to system site-packages on rover2-api
 - Port **8082** for ROVER2; do not change v1 **8080** without coordination

@@ -31,13 +31,13 @@
 ## Pi access
 
 ```bash
-ssh ambassad0r@192.168.70.11      # eth0 (cable) — always preferred
-ssh ambassad0r@192.168.250.254    # WiFi — only from devices on local WiFi
-ssh ambassad0r@100.67.13.10       # Tailscale
+ssh ambassad0r@<ROVER_ETH_IP>      # eth0 (cable) — always preferred
+ssh ambassad0r@<ROVER_WIFI_IP>    # WiFi — only from devices on local WiFi
+ssh ambassad0r@<ROVER_TAILSCALE_IP>       # Tailscale
 ```
 
 Deploy: `./deploy_pi.sh`  
-Logs: `ssh ambassad0r@192.168.70.11 journalctl -u rover2-api -f`
+Logs: `ssh ambassad0r@<ROVER_ETH_IP> journalctl -u rover2-api -f`
 
 ## Current branch: `dev`
 
@@ -67,8 +67,8 @@ websocket:
 `rover2-api` runs on **HTTPS** (self-signed cert). Always use `https://`:
 
 ```
-https://192.168.250.254:8082/   # WiFi
-https://192.168.70.11:8082/     # eth0
+https://<ROVER_WIFI_IP>:8082/   # WiFi
+https://<ROVER_ETH_IP>:8082/     # eth0
 ```
 
 Certs live at `/opt/rover2/rover.key` and `/opt/rover2/rover.crt` (generated once, not in repo).

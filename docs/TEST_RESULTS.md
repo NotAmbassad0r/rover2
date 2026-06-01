@@ -7,7 +7,7 @@ Copy a section per session. Mark pass/fail and short notes.
 ## Session: 2026-05-16 — tethered (mains + eth)
 
 **Tester:** ambassad0r  
-**Pi:** eth 192.168.70.11 · WiFi 192.168.250.254 available  
+**Pi:** eth <ROVER_ETH_IP> · WiFi <ROVER_WIFI_IP> available  
 **Power:** mains (no untethered test1 until USB keep-alive)  
 **Commit:** (local dev)
 

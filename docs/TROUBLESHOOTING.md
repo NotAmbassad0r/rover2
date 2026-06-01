@@ -11,8 +11,8 @@
 ### Pull live Pi files back to repo (after manual Pi edits)
 If changes were made directly on the Pi (e.g. via sed), sync them back:
 ```bash
-ssh ambassad0r@192.168.70.11 "cat /opt/rover2/face/index.html" > ~/Documents/projects/rover2/face/index.html
-ssh ambassad0r@192.168.70.11 "cat /opt/rover2/face/sw.js" > ~/Documents/projects/rover2/face/sw.js
+ssh ambassad0r@<ROVER_ETH_IP> "cat /opt/rover2/face/index.html" > ~/Documents/projects/rover2/face/index.html
+ssh ambassad0r@<ROVER_ETH_IP> "cat /opt/rover2/face/sw.js" > ~/Documents/projects/rover2/face/sw.js
 cd ~/Documents/projects/rover2
 git diff face/
 ```
@@ -21,7 +21,7 @@ git diff face/
 Option A — Chrome site data (most reliable):
 Chrome menu → Settings → Privacy and security → Clear browsing data
 → All time → Cached images and files + Cookies and site data → Clear
-Then navigate fresh to https://192.168.250.254:8082/face/
+Then navigate fresh to https://<ROVER_WIFI_IP>:8082/face/
 
 Option B — JavaScript console (Chrome address bar):
 javascript:navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister())).then(()=>location.reload(true))
@@ -31,16 +31,16 @@ Application → Service Workers → Unregister → reload
 
 ### Bump cache version manually on Pi (emergency)
 ```bash
-ssh ambassad0r@192.168.70.11 "sed -i 's/rover-face-vN/rover-face-vN+1/' /opt/rover2/face/sw.js"
-ssh ambassad0r@192.168.70.11 "grep CACHE /opt/rover2/face/sw.js"
+ssh ambassad0r@<ROVER_ETH_IP> "sed -i 's/rover-face-vN/rover-face-vN+1/' /opt/rover2/face/sw.js"
+ssh ambassad0r@<ROVER_ETH_IP> "grep CACHE /opt/rover2/face/sw.js"
 ```
 Then clear A32 cache and reload.
 
 ### Check what version the Pi is serving
 ```bash
-ssh ambassad0r@192.168.70.11 "grep CACHE /opt/rover2/face/sw.js"
-ssh ambassad0r@192.168.70.11 "curl -sk https://localhost:8082/face/index.html | grep -c '100vh'"
-ssh ambassad0r@192.168.70.11 "curl -sk https://localhost:8082/face/index.html | grep -c '_gotoPage'"
+ssh ambassad0r@<ROVER_ETH_IP> "grep CACHE /opt/rover2/face/sw.js"
+ssh ambassad0r@<ROVER_ETH_IP> "curl -sk https://localhost:8082/face/index.html | grep -c '100vh'"
+ssh ambassad0r@<ROVER_ETH_IP> "curl -sk https://localhost:8082/face/index.html | grep -c '_gotoPage'"
 ```
 
 ---
@@ -59,12 +59,12 @@ ls -la /tmp/wake_debug_last.wav
 
 ### What whisper actually heard
 ```bash
-ssh ambassad0r@192.168.70.11 "journalctl -u rover2-api -n 50 | grep 'voice/wake'"
+ssh ambassad0r@<ROVER_ETH_IP> "journalctl -u rover2-api -n 50 | grep 'voice/wake'"
 ```
 
 ### Pull last wake audio to dev machine
 ```bash
-scp ambassad0r@192.168.70.11:/tmp/wake_debug_last.wav /tmp/wake_check.wav
+scp ambassad0r@<ROVER_ETH_IP>:/tmp/wake_debug_last.wav /tmp/wake_check.wav
 ```
 Then play /tmp/wake_check.wav — if silent/inaudible, mic gain is the issue.
 
@@ -156,7 +156,7 @@ sudo systemctl status rover2-api hailo-ollama rover-camera
 journalctl -u rover2-api -f
 
 # Memory
-ssh ambassad0r@192.168.70.11 "ps aux --sort=-%mem | head -10"
+ssh ambassad0r@<ROVER_ETH_IP> "ps aux --sort=-%mem | head -10"
 
 # CPU + temp
 vcgencmd measure_temp

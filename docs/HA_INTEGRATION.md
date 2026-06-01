@@ -108,28 +108,28 @@ DISARMED  → webhook fired → TTS: "Welcome back, sir"
 
 **Step 1 — Manual arm:**
 ```bash
-curl -sk -X POST https://192.168.250.254:8082/api/guard/override \
+curl -sk -X POST https://<ROVER_WIFI_IP>:8082/api/guard/override \
   -H 'Content-Type: application/json' \
   -d '{"action":"arm"}'
 ```
 
 **Step 2 — Check status:**
 ```bash
-curl -sk https://192.168.250.254:8082/api/guard/status | python3 -m json.tool
+curl -sk https://<ROVER_WIFI_IP>:8082/api/guard/status | python3 -m json.tool
 ```
 
 **Step 3 — Walk in front of camera** → verify response shows `"state": "ALERT"` and `detections_this_session: 1`.
 
 **Step 4 — Disarm:**
 ```bash
-curl -sk -X POST https://192.168.250.254:8082/api/guard/override \
+curl -sk -X POST https://<ROVER_WIFI_IP>:8082/api/guard/override \
   -H 'Content-Type: application/json' \
   -d '{"action":"disarm"}'
 ```
 
 **Step 5 — Journal check:**
 ```bash
-ssh ambassad0r@192.168.250.254 "journalctl -u rover2-api -n 30 --no-pager | grep -i guard"
+ssh ambassad0r@<ROVER_WIFI_IP> "journalctl -u rover2-api -n 30 --no-pager | grep -i guard"
 ```
 Expected lines: `Guard: DISARMED → ARMED`, `Guard: ARMED → ALERT`, webhook POST result.
 

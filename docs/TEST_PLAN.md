@@ -2,7 +2,7 @@
 
 **Power context:** You can run full follow tests **without** the USB keep-alive dongle using any of:
 
-1. **Mains + eth** (lab) — `192.168.70.11`
+1. **Mains + eth** (lab) — `<ROVER_ETH_IP>`
 2. **Viking pass-through** — charger → bank IN, Pi → bank OUT (walk with long USB-C)
 3. **Battery + virtual dongle** — `rover2-virtual-usb-dongle.service` (less reliable; OK for short walks)
 
@@ -14,7 +14,7 @@ Record manual results in `docs/TEST_RESULTS.md`.
 
 ---
 
-## Today — tethered (eth `192.168.70.11`)
+## Today — tethered (eth `<ROVER_ETH_IP>`)
 
 ### T0 — Preflight (automated + 2 min manual)
 
@@ -22,7 +22,7 @@ Record manual results in `docs/TEST_RESULTS.md`.
 |----|------|-----|------|
 | T0.1 | Unit tests on dev PC | `./scripts/run_local_tests.sh` | All OK |
 | T0.2 | Pi services | `./scripts/check_rover_ready.sh` | All OK |
-| T0.3 | Web UI loads | Browser `http://192.168.70.11:8082/` Ctrl+Shift+R | Page + camera preview |
+| T0.3 | Web UI loads | Browser `http://<ROVER_ETH_IP>:8082/` Ctrl+Shift+R | Page + camera preview |
 | T0.4 | Serial stable | STATUS: SERIAL ok; no rapid disconnect in UI | Stable ≥2 min |
 
 ### T1 — Camera follow (Phase 3)
@@ -89,14 +89,14 @@ If M1.1–M1.3 pass → treat as **test1 functional pass** for v1.0.0 (even befo
 | ID | Test | Pass |
 |----|------|------|
 | U0.1 | Keep-alive in spare Viking port; double-tap wake | Bank stays on ≥30 min idle |
-| U0.2 | Unplug eth; Pi on WiFi `192.168.250.254` | Phone reaches UI |
+| U0.2 | Unplug eth; Pi on WiFi `<ROVER_WIFI_IP>` | Phone reaches UI |
 | U0.3 | Optional: disable `rover2-virtual-usb-dongle` if hardware enough | Pi stable |
 
 ### U1 — test1 mobility
 
 | ID | Test | Pass |
 |----|------|------|
-| U1.1 | Phone `http://192.168.250.254:8082/`, FOLLOW ON | ☐ |
+| U1.1 | Phone `http://<ROVER_WIFI_IP>:8082/`, FOLLOW ON | ☐ |
 | U1.2 | Walk apartment, stay in frame | Camera follow ≥10 min |
 | U1.3 | Leave frame | BLE follow ≥30 s |
 | U1.4 | Return to frame | Camera resumes |
@@ -116,7 +116,7 @@ If M1.1–M1.3 pass → treat as **test1 functional pass** for v1.0.0 (even befo
 ```bash
 ./scripts/run_local_tests.sh
 ./deploy_pi.sh
-./scripts/check_rover_ready.sh 192.168.70.11
+./scripts/check_rover_ready.sh <ROVER_ETH_IP>
 ```
 
 Manual smoke: T1.2, T2.1, T3.1 (5 min).

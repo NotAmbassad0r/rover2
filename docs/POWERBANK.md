@@ -53,7 +53,7 @@ There is **no documented “always on / low‑current” menu** on this series. 
 Emulates a keep‑alive dongle by holding a **small constant CPU load** (~10% of one core by default). Extra power is drawn through the **same USB‑C cable** as the Pi (not the bank’s spare port).
 
 ```bash
-# On the Pi (or: ssh ambassad0r@192.168.70.11 '...')
+# On the Pi (or: ssh ambassad0r@<ROVER_ETH_IP> '...')
 sudo systemctl enable --now rover2-virtual-usb-dongle.service
 sudo systemctl status rover2-virtual-usb-dongle.service
 
