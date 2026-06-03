@@ -181,6 +181,22 @@ else
 fi
 
 echo ""
+echo "==> Applying Ollama memory optimisation (KEEP_ALIVE=1m)..."
+if [ -f "$ROOT/systemd/ollama-override.conf" ]; then
+  ssh "$PI_HOST" "sudo mkdir -p /etc/systemd/system/ollama.service.d/"
+  scp "$ROOT/systemd/ollama-override.conf" "$PI_HOST:/tmp/ollama-override.conf"
+  ssh "$PI_HOST" "sudo cp /tmp/ollama-override.conf /etc/systemd/system/ollama.service.d/override.conf"
+  ssh "$PI_HOST" "sudo systemctl daemon-reload && sudo systemctl restart ollama 2>/dev/null || true"
+  echo "    OLLAMA_KEEP_ALIVE=1m applied"
+fi
+
+echo ""
+echo "==> Disabling desktop GUI (sets multi-user.target, saves ~300 MB RAM)..."
+if ssh "$PI_HOST" "[ -f /opt/rover2/scripts/disable-desktop.sh ]" 2>/dev/null; then
+  ssh "$PI_HOST" "sudo bash /opt/rover2/scripts/disable-desktop.sh"
+fi
+
+echo ""
 echo "==> Installing systemd units (if present)..."
 for unit in rover2-api.service rover2-powerbank-keepalive.service rover2-powerbank-keepalive.timer rover2-virtual-usb-dongle.service rover2-restore-wifi.service; do
   if [ -f "$ROOT/systemd/$unit" ]; then

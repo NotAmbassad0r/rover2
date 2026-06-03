@@ -393,6 +393,8 @@ cd ~/Documents/projects/rover2
 - When `agent.backend=hailo` (default): runs `setup_ai_on_hailo.sh` to **enable** hailo-ollama. When `backend=cpu`: starts ollama. When `backend=tools_only`: disables both.
 - Runs `scripts/link_hailo_for_rover2.sh` on Pi.
 - Sideloads `httpx` and `bleak` if pip fails.
+- Applies `OLLAMA_KEEP_ALIVE=1m` via `/etc/systemd/system/ollama.service.d/override.conf` (saves 1.5–2.5 GB RAM vs. default 5-min cache).
+- Runs `scripts/disable-desktop.sh` (sets `multi-user.target`, disables labwc/wireplumber, saves ~300 MB RAM). Idempotent — no-op once already set.
 
 ```bash
 ROVER2_SKIP_VIRTUAL_DONGLE=1 ./deploy_pi.sh   # code-only, skip power profile
@@ -513,6 +515,32 @@ ble_tracker:
 - `usb_max_current_enable=1` — requests max USB current via PD
 - `arm_freq=1800` — CPU capped at 1800MHz (was arm_boost=1 @ 2400MHz), saves ~2W
 - `country_code=GB` — WiFi regulatory domain
+
+**Pi system state (applied by `deploy_pi.sh`):**
+- Default runlevel: `multi-user.target` (desktop disabled — saves ~300 MB RAM). Applied by `scripts/disable-desktop.sh`. To check: `systemctl get-default`
+- Ollama model cache: `OLLAMA_KEEP_ALIVE=1m` via `/etc/systemd/system/ollama.service.d/override.conf` (was 5 min default — saves 1.5–2.5 GB when idle). To check: `systemctl show ollama -p Environment`
+
+---
+
+## Pi system files (outside repo)
+
+Files on the Pi that are **not** in the Git repo and must be created manually on a fresh install or added to the setup script.
+
+| File | Purpose |
+|------|---------|
+| `/opt/rover2/rover.key` + `rover.crt` | Self-signed TLS cert (SANs: 10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local). Regenerate with `openssl req -x509 ...` if lost. |
+| `/opt/rover2/voices/en_GB-cori-high.onnx` | Piper TTS voice model — downloaded once, excluded from rsync `--delete`. |
+| `/opt/rover2/whisper-models/` | faster-whisper tiny model — downloaded on first transcribe call. |
+| `/etc/rover.env` | Runtime environment variables for camera and TTS (see below). |
+
+**`/etc/rover.env` — camera and TTS runtime config:**
+```
+ROVER_TTS_RATE=0.85
+ROVER_TTS_PITCH=0.9
+ROVER_PI_IP=192.168.250.254
+ROVER_CAMERA_FPS=10
+```
+Must be created manually on a fresh Pi setup. Not yet sourced by rover2-api (documented for reference — add to `EnvironmentFile=` in `rover2-api.service` when needed).
 
 ---
 
