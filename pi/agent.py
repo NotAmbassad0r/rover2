@@ -1116,6 +1116,9 @@ class RoverAgent:
         # Tracks which backend/model the last spoken turn used (for keepalive)
         self._spoken_base: str = _SPOKEN_CPU_BASE
         self._spoken_model: str = _SPOKEN_MODEL
+        # Live health of hailo-ollama /api/generate for web chat turns.
+        # Set to False on first failure; resets to True on next success.
+        self._hailo_up: bool = True
         # Home Assistant client — enabled only when HA_TOKEN + HA_URL are in env
         ha_token = os.environ.get("HA_TOKEN", "")
         ha_url   = os.environ.get("HA_URL", "")
@@ -1686,22 +1689,33 @@ class RoverAgent:
         conv = [{"role": "system", "content": _SYSTEM_PROMPT}] + list(messages)
         tool_log: list[dict] = []
 
+        # Once hailo fails within a turn, use CPU for all remaining rounds.
+        use_cpu_fallback = self._backend == "hailo" and not self._hailo_up
+
         for _round in range(_MAX_TOOL_ROUNDS):
-            resp = await self._call_model(conv)
+            resp = await (self._call_model_cpu(conv) if use_cpu_fallback
+                          else self._call_model(conv))
+            if resp is None and self._backend == "hailo" and not use_cpu_fallback:
+                # First hailo failure this turn — try CPU Ollama immediately
+                logger.info("Agent: hailo unavailable in run_turn, trying CPU Ollama fallback")
+                use_cpu_fallback = True
+                resp = await self._call_model_cpu(conv)
             if resp is None:
-                if self._backend == "hailo":
-                    hint = (
+                if use_cpu_fallback:
+                    detail = self._last_model_error or (
+                        f"Both hailo-ollama and CPU Ollama ({_SPOKEN_CPU_BASE}) unreachable. "
+                        "On the Pi: systemctl status ollama hailo-ollama"
+                    )
+                elif self._backend == "hailo":
+                    detail = self._last_model_error or (
                         "hailo-ollama on AI HAT+ not reachable. "
-                        "Run: sudo bash /opt/rover2/scripts/setup_ai_on_hailo.sh "
-                        "(stops CPU ollama, starts hailo-ollama). "
-                        "Turn FOLLOW off if the HAT is busy."
+                        "Run: sudo bash /opt/rover2/scripts/setup_ai_on_hailo.sh"
                     )
                 else:
-                    hint = (
+                    detail = self._last_model_error or (
                         f"Ollama unreachable or model {self._model} missing. "
                         "On the Pi: systemctl status ollama && ollama list"
                     )
-                detail = self._last_model_error or hint
                 return AgentTurn(f"Agent unavailable — {detail}", tool_log, None)
 
             msg        = resp.get("message", {})
@@ -1747,10 +1761,18 @@ class RoverAgent:
         return await self._run_tool(name, args)
 
     def get_status(self) -> dict[str, Any]:
+        # Report the effective backend: if hailo is configured but currently down,
+        # web chat is running on CPU Ollama — show that to the UI.
+        if self._backend == "hailo" and not self._hailo_up:
+            effective_backend = "cpu"
+            effective_model   = self._cpu_model
+        else:
+            effective_backend = self._backend
+            effective_model   = self._model
         return {
-            "backend": self._backend,
-            "base": self._base or None,
-            "model": self._model,
+            "backend":  effective_backend,
+            "base":     self._base or None,
+            "model":    effective_model,
             "available": self._available,
         }
 
@@ -2126,6 +2148,7 @@ class RoverAgent:
                               "stream": False, "options": {"num_predict": 300}},
                     )
                     if r.status_code == 200:
+                        self._hailo_up = True
                         return {"message": {"content": r.json().get("response", "").strip(),
                                             "tool_calls": []}}
                     self._last_model_error = r.text[:200]
@@ -2133,6 +2156,7 @@ class RoverAgent:
             except Exception as exc:
                 self._last_model_error = str(exc)
                 logger.warning("Agent: hailo _call_model error: %s", exc)
+            self._hailo_up = False
             return None
 
         payload = {"model": self._model, "messages": messages,
@@ -2189,4 +2213,38 @@ class RoverAgent:
                 self._last_model_error = (str(exc) or type(exc).__name__)[:200]
                 logger.warning("Agent: Ollama error: %s", self._last_model_error)
                 return None
+        return None
+
+    async def _call_model_cpu(self, messages: list[dict]) -> dict | None:
+        """CPU Ollama fallback for web chat — llama3.2:1b with full tool support.
+
+        Used when hailo-ollama is down so web chat continues to work.
+        Auto-recovers: next call to _call_model() that succeeds resets _hailo_up.
+        """
+        if not await self._ensure_cpu_ollama():
+            self._last_model_error = (
+                f"CPU Ollama ({_SPOKEN_CPU_BASE}) also unreachable — "
+                "no LLM backend available"
+            )
+            return None
+        payload = {
+            "model":   self._cpu_model,
+            "messages": messages,
+            "tools":   _ALL_TOOLS,
+            "stream":  False,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout_s) as c:
+                r = await c.post(f"{_SPOKEN_CPU_BASE}/api/chat", json=payload)
+                if r.status_code == 200:
+                    logger.info(
+                        "Agent: cpu fallback OK (hailo_up=%s, model=%s)",
+                        self._hailo_up, self._cpu_model,
+                    )
+                    return r.json()
+                self._last_model_error = r.text[:200]
+                logger.warning("Agent: cpu fallback HTTP %d", r.status_code)
+        except Exception as exc:
+            self._last_model_error = (str(exc) or type(exc).__name__)[:200]
+            logger.warning("Agent: cpu fallback error: %s", exc)
         return None

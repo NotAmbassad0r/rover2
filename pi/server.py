@@ -599,6 +599,7 @@ def create_app(
                         logger.info("hailo-ollama: warmup OK on attempt %d/%d", attempt, max_attempts)
                         if rover_agent is not None:
                             rover_agent._available = True
+                            rover_agent._hailo_up  = True
                             rover_agent._last_availability_check = time.monotonic()
                         return
                     logger.debug("hailo-ollama: warmup HTTP %d on attempt %d", r.status_code, attempt)
@@ -610,6 +611,8 @@ def create_app(
             "hailo-ollama: warmup failed after %d attempts — CPU fallback active until it responds",
             max_attempts,
         )
+        if rover_agent is not None:
+            rover_agent._hailo_up = False
 
     @app.on_event("startup")
     async def _start_metrics() -> None:
