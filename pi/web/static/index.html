@@ -34,24 +34,12 @@
     /* ── header ── */
     #site-header {
       width: 100%; max-width: 480px;
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex; align-items: center; justify-content: center;
       margin-bottom: 16px;
       padding-bottom: 8px;
       border-bottom: 1px solid var(--border);
     }
     #header-title { font-size: 14px; letter-spacing: 0.3em; color: var(--accent); }
-    #header-badges { display: flex; gap: 16px; }
-    /* JS sets className='status-row' or 'status-row err' — parent selector handles layout */
-    #header-badges .status-row {
-      display: flex; flex-direction: column; align-items: center;
-      font-size: 9px; gap: 2px; line-height: 1.3;
-      border-bottom: none; cursor: default;
-      justify-content: center;
-    }
-    #header-badges .status-row span:first-child { color: var(--muted); letter-spacing: 0.08em; }
-    #header-badges .status-row span:last-child  { color: var(--text); }
-    #header-badges .status-row.err  span:last-child { color: var(--danger); }
-    #header-badges .status-row.warn span:last-child { color: var(--warn); }
 
     /* ── alert bar ── */
     #alert-bar {
@@ -408,11 +396,6 @@
   <!-- ── Header ── -->
   <header id="site-header">
     <span id="header-title">ROVER2</span>
-    <div id="header-badges">
-      <span id="row-ws" class="status-row"><span>WSS</span><span id="st-ws">—</span></span>
-      <span id="row-serial" class="status-row"><span>SER</span><span id="st-serial">—</span></span>
-      <span class="status-row"><span>MOT</span><span id="st-motors">—</span></span>
-    </div>
   </header>
 
   <!-- ── Alert bar ── -->
@@ -448,6 +431,10 @@
 
     <div class="panel">
       <div class="panel-title">STATUS</div>
+      <div class="status-row" id="row-ws"><span>WEBSOCKET</span><span id="st-ws">—</span></div>
+      <div class="status-row" id="row-serial"><span>SERIAL</span><span id="st-serial">—</span></div>
+      <div class="status-row"><span>MOTORS</span><span id="st-motors">—</span></div>
+      <div class="status-row" id="row-firmware"><span>FIRMWARE</span><span id="st-firmware">—</span></div>
       <div class="status-row" id="row-ultra"><span>ULTRASONIC</span><span id="st-ultra">—</span></div>
       <div class="status-row" id="row-safety"><span>SAFETY</span><span id="st-safety">—</span></div>
       <div class="status-row" id="row-tracking"><span>FOLLOW</span><span id="st-tracking">—</span></div>
@@ -1575,6 +1562,7 @@
       serialEl.textContent = d.serial_connected ? 'OK' : 'OFFLINE';
       rowSerial.className = 'status-row' + (d.serial_connected ? '' : ' err');
       document.getElementById('st-motors').textContent = d.motors_ready ? 'READY' : 'PENDING';
+      if (d.firmware) document.getElementById('st-firmware').textContent = d.firmware;
       const u = d.ultrasonic_cm;
       const ultraRow = document.getElementById('row-ultra');
       document.getElementById('st-ultra').textContent = formatUltrasonic(u, d.ultrasonic_age_s);
