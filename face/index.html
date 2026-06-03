@@ -99,7 +99,8 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 .dot-pg.active{background:rgba(255,255,255,.82)}
 /* ── TTS speech bubble ───────────────────────────────────────────────────── */
 #tts-bubble{position:fixed;right:14px;top:63%;transform:translateY(-50%);
-  max-width:42vw;background:rgba(10,20,40,.88);color:#e6edf3;
+  max-width:42vw;max-height:40vh;overflow:hidden;
+  background:rgba(10,20,40,.88);color:#e6edf3;
   font-family:'Courier New',Courier,monospace;font-size:13px;line-height:1.5;
   padding:10px 14px;border-radius:10px;border:1px solid rgba(100,160,255,.3);
   z-index:50;word-break:break-word;pointer-events:none;
@@ -109,6 +110,10 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 #tts-bubble::before{content:'';position:absolute;left:-10px;top:50%;
   transform:translateY(-50%);border:10px solid transparent;
   border-right-color:rgba(10,20,40,.88)}
+@keyframes tts-scroll{
+  from{transform:translateY(0)}
+  to{transform:translateY(var(--tts-scroll-dist,0px))}
+}
 </style>
 </head>
 <body>
@@ -205,7 +210,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   <span class="dot-pg" id="dot-pg-0"></span>
   <span class="dot-pg" id="dot-pg-1"></span>
 </div>
-<div id="tts-bubble"></div>
+<div id="tts-bubble"><div id="speech-bubble-text"></div></div>
 
 <div id="dbg-panel" onclick="dbgToggle()">
   <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
@@ -239,7 +244,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const USE_WEB_SPEECH = true;  // false = use Pi Piper TTS (legacy)
-const PI_HOST   = '192.168.250.254';
+const PI_HOST   = window.location.hostname;
 const PI_PORT   = 8082;
 const API_BASE  = `https://${PI_HOST}:${PI_PORT}`;
 const WS_URL    = `wss://${PI_HOST}:${PI_PORT}/ws`;
@@ -1488,16 +1493,31 @@ function _ttsBubbleShow(text) {
   clearTimeout(_ttsBubbleTimer);
   clearTimeout(_ttsBubbleFadeTimer);
   const el = document.getElementById('tts-bubble');
-  if (!el) return;
-  const truncated = text.length > 140 ? text.slice(0, 137) + '…' : text;
-  el.textContent = truncated;
-  // Ensure element is visible (opacity transition from 0)
+  const textEl = document.getElementById('speech-bubble-text');
+  if (!el || !textEl) return;
+
+  // Reset any previous scroll animation
+  textEl.style.animation = '';
+  textEl.style.transform = '';
+
+  textEl.textContent = text;  // full text, no truncation
+
+  // Fade in
   el.classList.remove('visible');
-  // Force reflow so the remove takes effect before we add back
-  void el.offsetWidth;
+  void el.offsetWidth;  // force reflow so remove takes effect
   el.classList.add('visible');  // triggers 150ms fade-in
-  // Auto-hide fallback: covers Android Chrome onend quirks
-  const autoMs = truncated.length * 65 + 1500;
+
+  // Measure overflow now that layout is computed
+  const overflow = textEl.scrollHeight - el.clientHeight;
+  let scrollDur = 0;
+  if (overflow > 0) {
+    scrollDur = Math.round(overflow / 60 * 1000);
+    textEl.style.setProperty('--tts-scroll-dist', '-' + overflow + 'px');
+    textEl.style.animation = 'tts-scroll ' + scrollDur + 'ms linear forwards';
+  }
+
+  // Auto-hide fallback: long enough to cover full scroll + reading time
+  const autoMs = Math.max(text.length * 65 + 1500, scrollDur + 2000);
   _ttsBubbleTimer = setTimeout(() => _ttsBubbleHide(), autoMs);
 }
 
@@ -1505,9 +1525,11 @@ function _ttsBubbleHide() {
   clearTimeout(_ttsBubbleTimer);
   clearTimeout(_ttsBubbleFadeTimer);
   const el = document.getElementById('tts-bubble');
+  const textEl = document.getElementById('speech-bubble-text');
   if (!el) return;
+  // Cancel scroll animation and reset position
+  if (textEl) { textEl.style.animation = ''; textEl.style.transform = ''; }
   el.classList.remove('visible');  // triggers 400ms CSS fade-out
-  // After fade completes, ensure opacity is gone (already 0 via CSS transition)
   _ttsBubbleFadeTimer = setTimeout(() => {
     // nothing needed — CSS handles opacity; element stays in DOM
   }, 400);
@@ -1557,7 +1579,7 @@ function _gotoPage(page) {
   // MJPEG — load only on PAGE 1 (saves bandwidth)
   const cam = document.getElementById('cam-feed');
   if (page === 1) {
-    cam.setAttribute('src', `http://${PI_HOST}:8081/`);
+    cam.setAttribute('src', `https://${PI_HOST}:8082/stream`);
   } else {
     cam.removeAttribute('src');
   }
