@@ -125,6 +125,10 @@
       overflow: hidden; margin-bottom: 8px; position: relative; aspect-ratio: 16/9;
     }
     .camera-wrap img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    #detect-overlay {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%; pointer-events: none;
+    }
     #cam-idle-overlay {
       position: absolute; inset: 0; display: flex;
       background: rgba(0,0,0,0.85); align-items: center; justify-content: center;
@@ -467,6 +471,7 @@
       <div class="camera-hint" id="camera-hint">LIVE CAMERA</div>
       <div class="camera-wrap">
         <img id="camera" src="" alt="Live camera" />
+        <canvas id="detect-overlay"></canvas>
         <div id="cam-idle-overlay" style="display:none;" onclick="wakeCamera()">
           <span style="font-size:12px;letter-spacing:0.12em;color:var(--muted);">CAM IDLE</span>
           <span style="font-size:10px;color:var(--muted);opacity:0.6;">tap to wake</span>
@@ -1673,6 +1678,7 @@
         cameraSleeping = !!d.camera_sleeping;
         _applyCameraSleep(cameraSleeping);
       }
+      _drawDetectionOverlay(d);
     }
 
     function _applyCameraSleep(sleeping) {
@@ -2503,6 +2509,55 @@
     // ── END METRICS / VOICE / ALERTS ─────────────────────────────────────────
 
     // ── END CHAT TAB ──────────────────────────────────────────────────────────
+
+    // ── Detection overlay ─────────────────────────────────────────────────────
+    (function () {
+      const _canvas = document.getElementById('detect-overlay');
+      const _ctx    = _canvas.getContext('2d');
+      const _img    = document.getElementById('camera');
+
+      function _syncSize() {
+        const r = _img.getBoundingClientRect();
+        const w = Math.round(r.width), h = Math.round(r.height);
+        if (_canvas.width !== w || _canvas.height !== h) {
+          _canvas.width = w; _canvas.height = h;
+        }
+      }
+      new ResizeObserver(_syncSize).observe(_img);
+      _syncSize();
+
+      // Returns the sub-rect where the image content is actually rendered
+      // (accounts for object-fit:contain letterboxing/pillarboxing)
+      function _contentRect() {
+        const cw = _canvas.width, ch = _canvas.height;
+        const iw = _img.naturalWidth  || cw;
+        const ih = _img.naturalHeight || ch;
+        const scale = Math.min(cw / iw, ch / ih);
+        const fw = iw * scale, fh = ih * scale;
+        return { x: (cw - fw) / 2, y: (ch - fh) / 2, w: fw, h: fh };
+      }
+
+      window._drawDetectionOverlay = function (d) {
+        _syncSize();
+        _ctx.clearRect(0, 0, _canvas.width, _canvas.height);
+        if (!d.person_detected || !d.person_bbox) return;
+        const [y0, x0, y1, x1] = d.person_bbox;
+        const { x: ox, y: oy, w: fw, h: fh } = _contentRect();
+        const rx = ox + x0 * fw, ry = oy + y0 * fh;
+        const rw = (x1 - x0) * fw, rh = (y1 - y0) * fh;
+        _ctx.strokeStyle = '#4a9eda';
+        _ctx.lineWidth = 2;
+        _ctx.strokeRect(rx, ry, rw, rh);
+        const conf = d.person_conf != null ? Math.round(d.person_conf * 100) + '%' : '';
+        const dist = (d.safe_distance_cm > 0) ? d.safe_distance_cm + 'cm' : '—';
+        const label = 'PERSON  ' + conf + '  ' + dist;
+        _ctx.font = '11px "Courier New", monospace';
+        _ctx.fillStyle = '#4a9eda';
+        const ty = ry > 16 ? ry - 4 : ry + rh + 13;
+        _ctx.fillText(label, rx, ty);
+      };
+    })();
+    // ── END Detection overlay ─────────────────────────────────────────────────
 
     _agentSetBusy(false);
   </script>

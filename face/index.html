@@ -1576,10 +1576,10 @@ function _wsSend(msg) {
 }
 
 function _ctrlUpdateState(d) {
-  const isOff   = !d.tracking_enabled && !d.ble_follow_enabled;
-  const isCam   = !!d.tracking_enabled && !d.ble_follow_enabled;
+  const isOff   = !d.tracking_enabled && !d.tracking_detect_only && !d.ble_follow_enabled;
+  const isCam   = !d.tracking_enabled && !!d.tracking_detect_only && !d.ble_follow_enabled;
   const isFused = !!d.tracking_enabled && !!d.ble_follow_enabled;
-  const isBle   = !d.tracking_enabled && !!d.ble_follow_enabled;
+  const isBle   = !d.tracking_enabled && !d.tracking_detect_only && !!d.ble_follow_enabled;
   const el = (id) => document.getElementById(id);
   el('btn-follow-off').classList.toggle('active',   isOff);
   el('btn-follow-cam').classList.toggle('active',   isCam);
@@ -1589,7 +1589,7 @@ function _ctrlUpdateState(d) {
 
 function _ctrlSetMode(mode) {
   const p = { enabled: false, detect_only: false, ble_follow_enabled: false };
-  if (mode === 'camera') { p.enabled = true; }
+  if (mode === 'cam')        { p.detect_only = true; }
   else if (mode === 'fused') { p.enabled = true; p.ble_follow_enabled = true; }
   else if (mode === 'ble')   { p.ble_follow_enabled = true; }
   fetch(API_BASE + '/api/tracking', {
