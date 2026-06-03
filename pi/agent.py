@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -19,6 +20,7 @@ import httpx
 
 from agent_knowledge import ROVER2_KNOWLEDGE
 from agent_solutions import build_solutions
+from ha_client import HAClient
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +358,51 @@ _READ_TOOLS: list[dict] = [
     },
 ]
 
+# ── Home Assistant tools (appended when HA_TOKEN + HA_URL are in env) ─────────
+_HA_READ_TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_get_status",
+            "description": (
+                "Get Home Assistant status — all lights, switches, sensors, "
+                "temperature readings, and media players."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_get_temperatures",
+            "description": "Get all room temperatures from Home Assistant sensors.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+]
+_HA_DANGEROUS_TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_toggle",
+            "description": (
+                "Toggle a Home Assistant entity on or off. "
+                "Use for lights, switches, power strips, and plugs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_id": {
+                        "type": "string",
+                        "description": "HA entity_id, e.g. light.office_go or switch.hue_smart_plug_1",
+                    },
+                },
+                "required": ["entity_id"],
+            },
+        },
+    },
+]
+
 # Dangerous — require explicit user confirmation via the Confirm button.
 _DANGEROUS_TOOLS: list[dict] = [
     {
@@ -419,8 +466,12 @@ _DANGEROUS_TOOLS: list[dict] = [
     },
 ]
 
-_ALL_TOOLS     = _READ_TOOLS + _DANGEROUS_TOOLS
-_DANGEROUS_NAMES = {t["function"]["name"] for t in _DANGEROUS_TOOLS}
+_HA_ENABLED = bool(os.environ.get("HA_TOKEN") and os.environ.get("HA_URL"))
+_ALL_TOOLS = (
+    _READ_TOOLS + _HA_READ_TOOLS
+    + _DANGEROUS_TOOLS + _HA_DANGEROUS_TOOLS
+) if _HA_ENABLED else _READ_TOOLS + _DANGEROUS_TOOLS
+_DANGEROUS_NAMES = {t["function"]["name"] for t in _DANGEROUS_TOOLS + _HA_DANGEROUS_TOOLS}
 
 # Minimal tool set for spoken agent — avoids large context that slows llama3.2:1b.
 # Only the tools relevant to voice interaction (status, control, camera, diagnostics).
@@ -428,6 +479,7 @@ _SPOKEN_TOOL_NAMES = {
     "wave_arm", "get_full_diagnostics", "get_hailo_status",
     "speak_diagnostics_summary", "suggest_fix", "control_follow_mode",
     "describe_camera", "get_status",
+    "ha_get_temperatures", "ha_get_status",
 }
 _SPOKEN_TOOLS = [t for t in _READ_TOOLS if t["function"]["name"] in _SPOKEN_TOOL_NAMES]
 
@@ -516,6 +568,14 @@ _SPOKEN_FAST_PATTERNS: list[tuple[str, str, dict]] = [
      "speak_diagnostics_summary", {}),
     (r"internal temp(erature)?|cpu temp(erature)?|pi temp(erature)?|system temp(erature)?|how hot|temperature of the (pi|rover)|rover temp(erature)?",
      "get_temperature_status", {}),
+    # Home Assistant — room temperatures
+    (r"room temp(erature)?|temperature (in|of|at)\b|how warm|how cold|what.{0,10}temp|"
+     r"house temp(erature)?|flat temp(erature)?",
+     "ha_get_temperatures", {}),
+    # Home Assistant — home status / lights / switches
+    (r"what.{0,10}'?s on|lights? on|switches? on|home status|what.{0,10}lights?|"
+     r"anything on at home|what.{0,10}running at home",
+     "ha_get_status", {}),
 ]
 
 
@@ -598,6 +658,8 @@ def _fmt_tool_result_for_voice(tool_name: str, result: Any) -> str:
 _SPOKEN_DIRECT_TOOLS: frozenset[str] = frozenset({
     "get_temperature_status",
     "get_full_diagnostics",
+    "ha_get_temperatures",
+    "ha_get_status",
 })
 
 
@@ -685,6 +747,31 @@ def _fmt_spoken_direct(tool_name: str, result: Any) -> str:
             lines.append("no alerts")
 
         return ". ".join(lines) + "."
+
+    if tool_name == "ha_get_temperatures":
+        sensors: list[dict] = result.get("sensors", [])
+        if not sensors:
+            return "No temperature sensors found in Home Assistant."
+        parts = [f"{s['name']} {s['temperature']:.0f}" for s in sensors[:6]]
+        return "Temperatures: " + ", ".join(parts) + " degrees."
+
+    if tool_name == "ha_get_status":
+        toggleables: list[dict] = result.get("toggleables", [])
+        temps: list[dict] = result.get("temperatures", [])
+        on_lights   = [e for e in toggleables if e["domain"] == "light"        and e["state"] == "on"]
+        on_switches = [e for e in toggleables if e["domain"] == "switch"       and e["state"] == "on"]
+        playing     = [e for e in toggleables if e["domain"] == "media_player" and e["state"] == "playing"]
+        parts: list[str] = []
+        if on_lights:
+            parts.append(f"{len(on_lights)} light{'s' if len(on_lights) > 1 else ''} on")
+        if on_switches:
+            parts.append(f"{len(on_switches)} switch{'es' if len(on_switches) > 1 else ''} on")
+        if playing:
+            parts.append(", ".join(e["name"] for e in playing[:2]) + " playing")
+        if temps:
+            t = temps[0]
+            parts.append(f"{t['name']} {t['temperature']:.0f} degrees")
+        return (". ".join(parts) + ".") if parts else "Everything appears off."
 
     return "Data unavailable."
 
@@ -1029,6 +1116,21 @@ class RoverAgent:
         # Tracks which backend/model the last spoken turn used (for keepalive)
         self._spoken_base: str = _SPOKEN_CPU_BASE
         self._spoken_model: str = _SPOKEN_MODEL
+        # Home Assistant client — enabled only when HA_TOKEN + HA_URL are in env
+        ha_token = os.environ.get("HA_TOKEN", "")
+        ha_url   = os.environ.get("HA_URL", "")
+        if ha_token and ha_url:
+            self._ha_client: HAClient | None = HAClient(ha_url, ha_token)
+            logger.info("Agent: HA client initialised (url=%s)", ha_url)
+        else:
+            self._ha_client = None
+            if not ha_token or not ha_url:
+                logger.debug("Agent: HA_TOKEN/HA_URL not set — HA tools disabled")
+
+    @property
+    def ha_available(self) -> bool:
+        """True when a HAClient was successfully initialised."""
+        return self._ha_client is not None
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -1970,6 +2072,26 @@ class RoverAgent:
                 return await self._post("/api/tracking",
                                         {"enabled": False, "detect_only": False,
                                          "ble_follow_enabled": False})
+            # ── Home Assistant tools ────────────────────────────────────────
+            if name in ("ha_get_status", "ha_get_temperatures", "ha_toggle"):
+                ha = self._ha_client
+                if ha is None:
+                    return {"error": "HA not configured — set HA_TOKEN and HA_URL in /etc/rover2.env"}
+                if name == "ha_get_temperatures":
+                    sensors = await ha.get_temperature_sensors()
+                    return {"sensors": sensors}
+                if name == "ha_get_status":
+                    toggleables, temps = await asyncio.gather(
+                        ha.get_toggleable_entities(),
+                        ha.get_temperature_sensors(),
+                    )
+                    return {"toggleables": toggleables, "temperatures": temps}
+                if name == "ha_toggle":
+                    entity_id = args.get("entity_id", "")
+                    if not entity_id:
+                        return {"error": "entity_id required"}
+                    ok = await ha.toggle(entity_id)
+                    return {"ok": ok, "entity_id": entity_id}
         except Exception as exc:
             return {"error": str(exc)}
         return {"error": f"unknown tool: {name}"}

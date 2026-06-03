@@ -1753,6 +1753,7 @@ def create_app(
         payload.pop("type", None)
         payload["ws_client_count"] = hub.client_count
         payload["audio_mode"] = audio_router.get_mode() if audio_router else None
+        payload["ha_available"] = rover_agent.ha_available if rover_agent is not None else False
         return JSONResponse(payload)
 
     @app.post("/api/tracking")
