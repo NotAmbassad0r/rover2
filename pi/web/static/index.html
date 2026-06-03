@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- v2025-05-16e -->
+<!DOCTYPE html><!-- v2026-06-03 brutalist -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -7,649 +7,522 @@
   <script src="/static/chart.min.js"></script>
   <style>
     :root {
-      --bg: #0d1117;
-      --panel: #161b22;
-      --border: #30363d;
+      --bg: #000000;
+      --surface: #0a0a0a;
+      --border: #1a1a2e;
       --text: #e6edf3;
       --muted: #8b949e;
-      --accent: #3fb950;
+      --accent: #4a9eda;
+      --accent-bright: #79c0ff;
+      --success: #3fb950;
       --warn: #d29922;
       --danger: #f85149;
-      --mono: "JetBrains Mono", "Consolas", monospace;
+      --panel: #0a0a0a;
     }
-    * { box-sizing: border-box; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      margin: 0;
-      min-height: 100vh;
-      font-family: var(--mono);
+      font-family: 'Courier New', monospace;
       background: var(--bg);
       color: var(--text);
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 1.5rem;
+      padding: 16px 8px 32px;
+      min-height: 100vh;
     }
-    h1 { font-size: 1.25rem; letter-spacing: 0.15em; margin: 0 0 0.25rem; }
-    .sub { color: var(--muted); font-size: 0.75rem; margin-bottom: 1.5rem; }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1.25rem;
-      width: min(420px, 100%);
-      margin-bottom: 1rem;
+
+    /* ── header ── */
+    #site-header {
+      width: 100%; max-width: 480px;
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
     }
-    .status-row {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.8rem;
-      margin-bottom: 0.35rem;
-    }
-    .status-row span:last-child { color: var(--accent); }
-    .status-row.err span:last-child { color: var(--danger); }
-    .status-row.warn span:last-child { color: var(--warn); }
-    .dpad {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      grid-template-rows: 1fr 1fr 1fr;
-      gap: 0.5rem;
-      max-width: 240px;
-      margin: 0 auto 1rem;
-    }
-    .dpad button {
-      aspect-ratio: 1;
-      font-family: inherit;
-      font-size: 0.85rem;
-      font-weight: 600;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--text);
-      cursor: pointer;
-      user-select: none;
-      touch-action: none;
-    }
-    .dpad button:hover { border-color: var(--accent); }
-    .dpad button:active, .dpad button.active,
-    .row button.active {
-      background: var(--accent);
-      color: #000;
-      border-color: var(--accent);
-    }
-    .dpad .empty { visibility: hidden; pointer-events: none; }
-    .row {
-      display: flex;
-      gap: 0.5rem;
-      flex-wrap: wrap;
+    #header-title { font-size: 14px; letter-spacing: 0.3em; color: var(--accent); }
+    #header-badges { display: flex; gap: 16px; }
+    /* JS sets className='status-row' or 'status-row err' — parent selector handles layout */
+    #header-badges .status-row {
+      display: flex; flex-direction: column; align-items: center;
+      font-size: 9px; gap: 2px; line-height: 1.3;
+      border-bottom: none; cursor: default;
       justify-content: center;
     }
-    .row button, .speed input {
-      font-family: inherit;
-      font-size: 0.8rem;
-      padding: 0.5rem 0.75rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--text);
-      cursor: pointer;
+    #header-badges .status-row span:first-child { color: var(--muted); letter-spacing: 0.08em; }
+    #header-badges .status-row span:last-child  { color: var(--text); }
+    #header-badges .status-row.err  span:last-child { color: var(--danger); }
+    #header-badges .status-row.warn span:last-child { color: var(--warn); }
+
+    /* ── alert bar ── */
+    #alert-bar {
+      width: 100%; max-width: 480px;
+      margin-bottom: 8px; background: #0a0000;
+      border: 1px solid var(--danger); padding: 8px 16px; font-size: 12px;
     }
-    .row button.danger { border-color: var(--danger); color: var(--danger); }
-    .mode-row {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
+
+    /* ── voice bar ── */
+    #voice-bar {
+      width: 100%; max-width: 480px;
+      display: flex; gap: 8px; margin-bottom: 8px;
     }
-    .mode-btn {
-      flex: 1;
-      font-family: inherit;
-      font-size: 0.8rem;
-      padding: 0.6rem 0.5rem;
-      border: 2px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--muted);
-      cursor: pointer;
-      letter-spacing: 0.08em;
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    #btn-global-voice {
+      flex: 1; background: var(--surface);
+      border: 1px solid var(--accent); color: var(--muted);
+      padding: 10px 12px; font-family: 'Courier New', monospace;
+      font-size: 12px; cursor: pointer; letter-spacing: 0.06em;
+      text-align: left; min-height: 44px;
     }
-    .mode-btn.active-follow {
-      background: var(--accent);
-      color: #000;
-      border-color: var(--accent);
+    #btn-global-voice.listening {
+      border-color: var(--danger); color: var(--danger); animation: pulse 1s infinite;
     }
-    .mode-btn.active-detect {
-      background: var(--warn);
-      color: #000;
-      border-color: var(--warn);
+    #btn-tts {
+      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+      padding: 10px 14px; font-family: 'Courier New', monospace; font-size: 14px;
+      cursor: pointer; min-height: 44px;
     }
-    .mode-btn.active-ble {
-      background: #1f6feb;
-      color: #fff;
-      border-color: #1f6feb;
+
+    /* ── tabs ── */
+    #tab-bar {
+      width: 100%; max-width: 480px;
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      border-bottom: 1px solid var(--border); margin-bottom: 16px;
     }
-    .mode-btn.active-fused {
-      background: #1a7f7f;
-      color: #fff;
-      border-color: #1a7f7f;
+    #tab-bar button {
+      font-family: 'Courier New', monospace; font-size: 11px; letter-spacing: 0.1em;
+      padding: 10px 0; border: none; border-bottom: 2px solid transparent;
+      background: none; color: var(--muted); cursor: pointer; text-align: center;
     }
-    .mode-btn.inactive {
-      opacity: 0.5;
+    #tab-bar button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── tab pages ── */
+    .tab-page { display: none; width: 100%; max-width: 480px; }
+    .tab-page.active { display: block; }
+
+    /* ── panel ── */
+    .panel {
+      background: var(--surface); border: 1px solid var(--border);
+      padding: 16px; width: 100%; margin-bottom: 8px;
     }
-    .row button.follow-on {
-      background: var(--accent);
-      color: #000;
-      border-color: var(--accent);
-    }
-    .row button.detect-on {
-      background: var(--warn);
-      color: #000;
-      border-color: var(--warn);
-    }
-    .dpad.disabled button { opacity: 0.45; pointer-events: none; }
     .panel-title {
-      font-size: 0.75rem;
-      letter-spacing: 0.12em;
-      color: var(--muted);
-      margin: 0 0 0.75rem;
-      text-align: center;
+      font-size: 11px; letter-spacing: 0.1em; color: var(--accent);
+      text-transform: uppercase; margin: 0 0 12px;
     }
-    .arm-pad {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.5rem;
-      margin-bottom: 0.75rem;
+
+    /* ── status rows ── */
+    .status-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; line-height: 28px; border-bottom: 1px solid var(--border);
     }
+    .status-row:last-child { border-bottom: none; }
+    .status-row span:first-child { color: var(--muted); font-size: 11px; letter-spacing: 0.05em; }
+    .status-row span:last-child  { color: var(--text); }
+    .status-row.err  span:last-child { color: var(--danger); }
+    .status-row.warn span:last-child { color: var(--warn); }
+
+    /* ── camera ── */
+    .camera-wrap {
+      width: 100%; background: #000; border: 1px solid var(--border);
+      overflow: hidden; margin-bottom: 8px; position: relative; aspect-ratio: 16/9;
+    }
+    .camera-wrap img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    #cam-idle-overlay {
+      position: absolute; inset: 0; display: flex;
+      background: rgba(0,0,0,0.85); align-items: center; justify-content: center;
+      flex-direction: column; gap: 4px; cursor: pointer;
+    }
+    .camera-hint { font-size: 11px; color: var(--muted); margin-bottom: 8px; letter-spacing: 0.08em; }
+
+    /* ── event log ── */
+    #event-log { font-size: 11px; line-height: 1.6; max-height: 120px; overflow-y: auto; }
+
+    /* ── arm pad ── */
+    .arm-pad { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
     .arm-pad button {
-      font-family: inherit;
-      font-size: 0.85rem;
-      font-weight: 600;
-      padding: 0.85rem 0.5rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--text);
-      cursor: pointer;
-      user-select: none;
-      touch-action: none;
+      font-family: 'Courier New', monospace; font-size: 12px; font-weight: 600;
+      height: 48px; border: 1px solid var(--border); background: #0d1117; color: var(--text);
+      cursor: pointer; user-select: none; touch-action: none; letter-spacing: 0.05em;
     }
-    .arm-pad button:hover { border-color: var(--accent); }
-    .arm-pad button.hold-up, .arm-pad button.hold-down {
-      grid-column: span 2;
-    }
+    .arm-pad button.hold-up, .arm-pad button.hold-down { grid-column: span 2; }
     .arm-pad button:active, .arm-pad button.active {
-      background: var(--accent);
-      color: #000;
-      border-color: var(--accent);
+      background: var(--accent); color: #000; border-color: var(--accent);
     }
+
+    /* ── speed slider ── */
     .speed {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      margin: 1rem 0;
-      font-size: 0.8rem;
+      display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+      font-size: 11px; color: var(--muted); letter-spacing: 0.05em;
     }
     .speed input[type=range] { flex: 1; accent-color: var(--accent); }
+    .speed span { color: var(--text); min-width: 36px; text-align: right; }
+
+    /* ── d-pad ── */
+    .dpad {
+      display: grid; grid-template-columns: repeat(3, 72px);
+      grid-template-rows: repeat(3, 72px); gap: 4px;
+      margin: 0 auto 16px; justify-content: center;
+    }
+    .dpad button {
+      width: 72px; height: 72px; font-family: 'Courier New', monospace;
+      font-size: 13px; font-weight: 700; border: 1px solid var(--border);
+      background: #0d1117; color: var(--text); cursor: pointer;
+      user-select: none; touch-action: none;
+    }
+    .dpad button:active, .dpad button.active {
+      background: var(--accent); color: #000; border-color: var(--accent);
+    }
+    .dpad button[data-dir="stop"] { border-color: var(--accent); color: var(--accent); }
+    .dpad button[data-dir="stop"]:active { background: var(--accent); color: #000; }
+    .dpad .empty { visibility: hidden; pointer-events: none; }
+    .dpad.disabled button { opacity: 0.45; pointer-events: none; }
+
+    /* ── follow mode buttons ── */
+    .mode-row { display: flex; gap: 0; margin-bottom: 8px; }
+    .mode-btn {
+      flex: 1; font-family: 'Courier New', monospace; font-size: 11px;
+      padding: 10px 4px; border: 1px solid var(--border); border-right: none;
+      background: #0d1117; color: var(--muted); cursor: pointer;
+      letter-spacing: 0.06em; min-height: 44px;
+    }
+    .mode-btn:last-child { border-right: 1px solid var(--border); }
+    .mode-btn.active-follow { background: var(--success); color: #000; border-color: var(--success); }
+    .mode-btn.active-detect { background: var(--warn);    color: #000; border-color: var(--warn); }
+    .mode-btn.active-ble    { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+    .mode-btn.active-fused  { background: #1a7f7f; color: #fff; border-color: #1a7f7f; }
+    .mode-btn.inactive { opacity: 0.45; }
+
+    /* ── action button rows ── */
+    .row { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+    .row button {
+      font-family: 'Courier New', monospace; font-size: 11px; padding: 10px 12px;
+      border: 1px solid var(--border); background: #0d1117; color: var(--text);
+      cursor: pointer; min-height: 44px; flex: 1; letter-spacing: 0.04em;
+    }
+    .row button:hover { border-color: var(--accent); }
+    .row button.active, .row button.follow-on {
+      background: var(--accent); color: #000; border-color: var(--accent);
+    }
+    .row button.detect-on { background: var(--warn); color: #000; border-color: var(--warn); }
+    .row button.danger    { border-color: var(--danger); color: var(--danger); }
+
+    /* ── toast ── */
     .toast {
-      position: fixed;
-      bottom: 1rem;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 0.5rem 1rem;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      font-size: 0.75rem;
-      opacity: 0;
-      transition: opacity 0.2s;
-      pointer-events: none;
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      padding: 8px 16px; background: var(--surface); border: 1px solid var(--border);
+      font-size: 12px; opacity: 0; transition: opacity 0.2s;
+      pointer-events: none; z-index: 9999; white-space: nowrap;
     }
     .toast.show { opacity: 1; }
-    .camera-wrap {
-      width: 100%;
-      max-height: 200px;
-      background: #000;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-      margin-bottom: 0.75rem;
+
+    /* ── tools tab ── */
+    .tools-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
+    .tools-actions button {
+      font-family: 'Courier New', monospace; font-size: 11px; padding: 8px 12px;
+      border: 1px solid var(--border); background: #0d1117; color: var(--text);
+      cursor: pointer; letter-spacing: 0.04em; min-height: 40px;
     }
-    .camera-wrap img {
-      display: block;
-      width: 100%;
-      height: auto;
-      max-height: 200px;
-      object-fit: contain;
+    .tools-actions button:hover { border-color: var(--accent); }
+    .muted { color: var(--muted); font-size: 11px; margin-bottom: 8px; display: block; }
+    .log-area, .config-pre {
+      font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.4;
+      max-height: 140px; overflow-y: auto; background: #000;
+      border: 1px solid var(--border); padding: 8px; margin: 0;
+      white-space: pre-wrap; word-break: break-word; color: var(--text);
     }
-    .camera-hint {
-      font-size: 0.7rem;
-      color: var(--muted);
-      margin-bottom: 0.75rem;
-      text-align: center;
+    .log-line.warn  { color: var(--warn); }
+    .log-line.error { color: var(--danger); }
+    .tune-grid {
+      display: flex; flex-direction: column; gap: 8px;
+      font-size: 11px; margin-bottom: 16px; color: var(--muted);
     }
-    .tabs {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
-      width: min(420px, 100%);
+    .tune-grid label { display: flex; flex-direction: column; gap: 4px; }
+    .tune-grid input[type=range] { width: 100%; accent-color: var(--accent); }
+    .tune-grid select {
+      font-family: 'Courier New', monospace; background: #0d1117;
+      color: var(--text); border: 1px solid var(--border); padding: 4px 8px; font-size: 11px;
     }
-    .tabs button {
-      flex: 1;
-      font-family: inherit;
-      font-size: 0.75rem;
-      letter-spacing: 0.1em;
-      padding: 0.5rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--muted);
-      cursor: pointer;
-    }
-    .tabs button.active {
-      color: #000;
-      background: var(--accent);
-      border-color: var(--accent);
-    }
-    .tab-page { display: none; width: min(420px, 100%); }
-    .tab-page.active { display: block; }
-    .diag-grid { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.72rem; }
+
+    /* ── diag grid ── */
+    .diag-grid { display: flex; flex-direction: column; font-size: 11px; }
     .diag-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 0.5rem;
-      padding: 0.35rem 0;
-      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between;
+      gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border);
     }
     .diag-row:last-child { border-bottom: none; }
     .diag-row .label { color: var(--muted); }
-    .diag-row.ok span.val { color: var(--accent); }
-    .diag-row.warn span.val { color: var(--warn); }
+    .diag-row.ok    span.val { color: var(--success); }
+    .diag-row.warn  span.val { color: var(--warn); }
     .diag-row.error span.val { color: var(--danger); }
-    .script-row {
-      font-size: 0.7rem;
-      padding: 0.5rem 0;
-      border-bottom: 1px solid var(--border);
-    }
+
+    /* ── script rows ── */
+    .script-row { font-size: 11px; padding: 8px 0; border-bottom: 1px solid var(--border); }
     .script-row:last-child { border-bottom: none; }
-    .script-row code {
-      display: block;
-      margin-top: 0.25rem;
-      color: var(--accent);
-      word-break: break-all;
-    }
-    .tools-actions button {
-      font-family: inherit;
-      font-size: 0.75rem;
-      padding: 0.45rem 0.65rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--text);
-      cursor: pointer;
-    }
-    .tools-actions button:hover { border-color: var(--accent); }
+    .script-row code { display: block; margin-top: 4px; color: var(--accent); word-break: break-all; }
     .script-run {
-      float: right;
-      font-family: inherit;
-      font-size: 0.65rem;
-      padding: 0.2rem 0.45rem;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: #21262d;
-      color: var(--accent);
-      cursor: pointer;
+      float: right; font-family: 'Courier New', monospace; font-size: 10px; padding: 3px 8px;
+      border: 1px solid var(--border); background: #0d1117; color: var(--accent); cursor: pointer;
     }
-    .tools-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
-    .muted { color: var(--muted); font-size: 0.7rem; }
-    .log-area, .config-pre {
-      font-size: 0.62rem;
-      line-height: 1.35;
-      max-height: 140px;
-      overflow-y: auto;
-      background: #0d1117;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.5rem;
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .log-line.warn { color: var(--warn); }
-    .log-line.error { color: var(--danger); }
-    .tune-grid { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.7rem; margin-bottom: 0.75rem; }
-    .tune-grid label { display: flex; flex-direction: column; gap: 0.2rem; color: var(--muted); }
-    .tune-grid input[type=range] { width: 100%; accent-color: var(--accent); }
-    .tune-grid select { font-family: inherit; background: #21262d; color: var(--text); border: 1px solid var(--border); padding: 0.25rem; }
+
+    /* ── metric rows ── */
     .metric-row {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.72rem;
-      padding: 0.3rem 0;
-      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px; font-size: 11px;
+      padding: 5px 0; border-bottom: 1px solid var(--border);
     }
     .metric-row:last-child { border-bottom: none; }
     .metric-row .label { color: var(--muted); min-width: 90px; flex-shrink: 0; }
-    .metric-row .bar-track { flex: 1; height: 4px; background: var(--border); border-radius: 2px; }
-    .metric-row .bar-fill { height: 100%; border-radius: 2px; background: var(--accent); }
-    .metric-row .bar-fill.warn { background: var(--warn); }
+    .metric-row .bar-track { flex: 1; height: 3px; background: var(--border); }
+    .metric-row .bar-fill { height: 100%; background: var(--success); }
+    .metric-row .bar-fill.warn  { background: var(--warn); }
     .metric-row .bar-fill.error { background: var(--danger); }
     .metric-row .val { min-width: 72px; text-align: right; }
-    .metric-row.ok .val { color: var(--accent); }
-    .metric-row.warn .val { color: var(--warn); }
-    .metric-row.error .val { color: var(--danger); }
+    .metric-row.ok        .val { color: var(--success); }
+    .metric-row.warn      .val { color: var(--warn); }
+    .metric-row.error     .val { color: var(--danger); }
     .metric-row.emergency .val { color: var(--danger); animation: pulse 1s infinite; }
-    .metric-row.info .val { color: var(--text); }
-    .core-grid { display: flex; gap: 0.25rem; flex-wrap: wrap; margin: 0.3rem 0; }
-    .core-cell { font-size: 0.65rem; padding: 0.15rem 0.3rem; border-radius: 3px; background: #21262d; border: 1px solid var(--border); }
-    .core-cell.warn { border-color: var(--warn); color: var(--warn); }
-    .core-cell.error { border-color: var(--danger); color: var(--danger); }
+    .metric-row.info      .val { color: var(--text); }
+
+    /* ── core cells ── */
+    .core-grid { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0; }
+    .core-cell { font-size: 10px; padding: 2px 6px; background: #0d1117; border: 1px solid var(--border); }
+    .core-cell.warn  { border-color: var(--warn);   color: var(--warn); }
+    .core-cell.error { border-color: var(--danger);  color: var(--danger); }
+
+    /* ── diag section titles ── */
     .diag-section-title {
-      font-size: 0.65rem;
-      letter-spacing: 0.12em;
-      color: var(--muted);
-      margin: 0.75rem 0 0.4rem;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0.25rem;
+      font-size: 10px; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase;
+      margin: 12px 0 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;
     }
-    .temp-grid { display: flex; flex-direction: column; gap: 0.25rem; }
-    .temp-row { display: flex; justify-content: space-between; font-size: 0.7rem; }
+
+    /* ── temp grid ── */
+    .temp-grid { display: flex; flex-direction: column; gap: 4px; }
+    .temp-row { display: flex; justify-content: space-between; font-size: 11px; }
     .temp-row .temp-name { color: var(--muted); }
-    .temp-val.ok { color: var(--accent); }
-    .temp-val.warn { color: var(--warn); }
+    .temp-val.ok    { color: var(--success); }
+    .temp-val.warn  { color: var(--warn); }
     .temp-val.error { color: var(--danger); }
+
+    /* ── diag tab ── */
     #diag-auto-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
-    .chart-label { font-size: 0.65rem; color: var(--muted); margin: 0; letter-spacing: 0.08em; }
+    .chart-label { font-size: 10px; color: var(--muted); margin: 0; letter-spacing: 0.08em; text-transform: uppercase; }
     .chart-label-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin: 0.5rem 0 0.2rem;
-      gap: 0.4rem;
+      display: flex; justify-content: space-between; align-items: center; margin: 8px 0 4px; gap: 8px;
     }
     .btn-ask-ai {
-      font-family: var(--mono);
-      font-size: 0.62rem;
-      padding: 0.12rem 0.45rem;
-      border: 1px solid var(--accent);
-      border-radius: 4px;
-      background: #0d1f12;
-      color: var(--accent);
-      cursor: pointer;
-      white-space: nowrap;
+      font-family: 'Courier New', monospace; font-size: 10px; padding: 3px 8px;
+      border: 1px solid var(--accent); background: #000; color: var(--accent);
+      cursor: pointer; white-space: nowrap; letter-spacing: 0.04em;
     }
-    .btn-ask-ai:hover { background: #132a18; }
-    .chart-wrap { position: relative; height: 120px; }
-    .time-sel { display: flex; gap: 0.3rem; margin-bottom: 0.5rem; }
+    .chart-wrap { position: relative; height: 96px; }
+    .time-sel { display: flex; gap: 4px; margin-bottom: 8px; }
     .time-sel button {
-      font-family: var(--mono); font-size: 0.65rem; padding: 0.2rem 0.45rem;
-      border: 1px solid var(--border); border-radius: 4px;
-      background: #21262d; color: var(--muted); cursor: pointer;
+      font-family: 'Courier New', monospace; font-size: 10px; padding: 4px 8px;
+      border: 1px solid var(--border); background: #0d1117; color: var(--muted); cursor: pointer;
     }
     .time-sel button.active { background: var(--accent); color: #000; border-color: var(--accent); }
-    .db-info { font-size: 0.62rem; color: var(--muted); text-align: right; margin-top: 0.25rem; }
-    .chart-group { font-size: 0.63rem; letter-spacing: 0.1em; color: var(--accent); margin: 1rem 0 0.25rem; }
-    /* ── Chat tab ─────────────────────────────────────────────────── */
-    .chat-log {
-      max-height: 260px;
-      overflow-y: auto;
-      font-size: 0.68rem;
-      line-height: 1.6;
-      margin-bottom: 0.75rem;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.5rem;
-      background: #0d1117;
+    .db-info { font-size: 10px; color: var(--muted); text-align: right; margin-top: 4px; }
+    .chart-group { font-size: 10px; letter-spacing: 0.1em; color: var(--accent); text-transform: uppercase; margin: 16px 0 4px; }
+
+    /* ── chat tab ── */
+    .ai-banner {
+      background: #000; border: 1px solid var(--accent); padding: 12px 16px;
+      margin-bottom: 8px; display: flex; align-items: center;
+      justify-content: space-between; gap: 12px; width: 100%;
     }
-    .chat-msg { padding: 0.1rem 0; border-bottom: 1px solid #1a1f26; }
+    .ai-banner-title { font-size: 13px; color: var(--accent); letter-spacing: 0.1em; }
+    .ai-banner-sub   { font-size: 10px; color: var(--muted); margin-top: 3px; }
+    .ai-banner-badge {
+      font-size: 10px; color: var(--accent); border: 1px solid var(--accent);
+      padding: 3px 8px; letter-spacing: 0.08em; white-space: nowrap;
+    }
+    .chat-log {
+      max-height: 240px; overflow-y: auto; font-size: 11px; line-height: 1.6;
+      margin-bottom: 8px; border: 1px solid var(--border); padding: 8px; background: #000;
+    }
+    .chat-msg { padding: 2px 0; border-bottom: 1px solid #0a0a14; }
     .chat-msg:last-child { border-bottom: none; }
-    .chat-ts { color: var(--muted); margin-right: 0.4rem; font-size: 0.62rem; }
-    .chat-user .chat-who { color: var(--warn); font-weight: 600; }
-    .chat-rover .chat-who { color: var(--accent); font-weight: 600; }
-    .chat-error .chat-who { color: var(--danger); font-weight: 600; }
-    .chat-action { color: var(--muted); font-size: 0.62rem; margin-right: 0.25rem; }
-    .chat-row { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; align-items: stretch; }
+    .chat-ts  { color: var(--muted); margin-right: 6px; font-size: 10px; }
+    .chat-user  .chat-who { color: var(--warn);    font-weight: 700; }
+    .chat-rover .chat-who { color: var(--accent);  font-weight: 700; }
+    .chat-error .chat-who { color: var(--danger);  font-weight: 700; }
+    .chat-action { color: var(--muted); font-size: 10px; margin-right: 4px; }
+    .chat-row { display: flex; gap: 4px; margin-bottom: 8px; align-items: stretch; }
     .chat-row button {
-      font-family: var(--mono);
-      font-size: 0.75rem;
-      padding: 0.45rem 0.7rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--text);
-      cursor: pointer;
-      white-space: nowrap;
+      font-family: 'Courier New', monospace; font-size: 11px; padding: 8px 12px;
+      border: 1px solid var(--border); background: #0d1117; color: var(--text);
+      cursor: pointer; white-space: nowrap; min-height: 44px;
     }
     .chat-row button:hover:not(:disabled) { border-color: var(--accent); }
     .chat-row button:disabled { opacity: 0.45; cursor: not-allowed; }
     .chat-row button.agent-busy { border-color: var(--warn); color: var(--warn); }
     .chat-input {
-      flex: 1;
-      font-family: var(--mono);
-      font-size: 0.78rem;
-      padding: 0.45rem 0.6rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--text);
+      flex: 1; font-family: 'Courier New', monospace; font-size: 12px;
+      padding: 8px 10px; border: 1px solid var(--border);
+      background: #000; color: var(--text); min-height: 44px;
     }
     .chat-input:focus { outline: none; border-color: var(--accent); }
-    .chat-btns { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .chat-btns { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
     .chat-btns button {
-      font-family: var(--mono);
-      font-size: 0.75rem;
-      padding: 0.45rem 0.7rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #21262d;
-      color: var(--text);
-      cursor: pointer;
+      font-family: 'Courier New', monospace; font-size: 11px; padding: 8px 10px;
+      border: 1px solid var(--border); background: #0d1117; color: var(--text);
+      cursor: pointer; min-height: 40px;
     }
     .chat-btns button:hover { border-color: var(--accent); }
     #btn-voice.listening { background: var(--danger); color: #fff; border-color: var(--danger); }
-    .vlm-status { font-size: 0.65rem; color: var(--muted); margin-top: 0.5rem; }
-    /* ── Agent panel ──────────────────────────────────────────────── */
+    .vlm-status { font-size: 10px; color: var(--muted); margin-top: 8px; }
+
+    /* ── agent panel ── */
     .agent-log {
-      max-height: 320px;
-      overflow-y: auto;
-      font-size: 0.67rem;
-      line-height: 1.55;
-      margin-bottom: 0.75rem;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.5rem;
-      background: #0d1117;
+      max-height: 280px; overflow-y: auto; font-size: 11px; line-height: 1.5;
+      margin-bottom: 8px; border: 1px solid var(--border); padding: 8px; background: #000;
     }
-    .agent-msg { padding: 0.15rem 0; border-bottom: 1px solid #1a1f26; }
+    .agent-msg { padding: 2px 0; border-bottom: 1px solid #0a0a14; }
     .agent-msg:last-child { border-bottom: none; }
-    .agent-ts  { color: var(--muted); font-size: 0.6rem; margin-right: 0.4rem; }
-    .agent-user   .agent-who { color: var(--warn);   font-weight: 600; }
-    .agent-ai     .agent-who { color: #7ee787;        font-weight: 600; }
-    .agent-tool   .agent-who { color: var(--muted);  font-style: italic; }
-    .agent-error  .agent-who { color: var(--danger); font-weight: 600; }
-    .agent-result { color: var(--muted); font-size: 0.6rem; margin-left: 1.2rem; white-space: pre-wrap; word-break: break-all; }
+    .agent-ts           { color: var(--muted); font-size: 10px; margin-right: 6px; }
+    .agent-user  .agent-who { color: var(--warn);    font-weight: 700; }
+    .agent-ai    .agent-who { color: var(--success);  font-weight: 700; }
+    .agent-tool  .agent-who { color: var(--muted);   font-style: italic; }
+    .agent-error .agent-who { color: var(--danger);  font-weight: 700; }
+    .agent-result { color: var(--muted); font-size: 10px; margin-left: 18px; white-space: pre-wrap; word-break: break-all; }
     .confirm-bar {
-      display: none;
-      margin: 0.5rem 0;
-      padding: 0.5rem;
-      border: 1px solid var(--danger);
-      border-radius: 6px;
-      font-size: 0.7rem;
-      background: #1a0a0a;
+      display: none; margin: 8px 0; padding: 8px;
+      border: 1px solid var(--danger); font-size: 11px; background: #0a0000;
     }
     .confirm-bar.show { display: block; }
-    .confirm-bar .confirm-msg { color: var(--warn); margin-bottom: 0.4rem; }
+    .confirm-bar .confirm-msg { color: var(--warn); margin-bottom: 8px; }
     .confirm-bar button {
-      font-family: var(--mono); font-size: 0.7rem;
-      padding: 0.3rem 0.65rem;
-      border-radius: 5px; cursor: pointer;
-      border: 1px solid;
+      font-family: 'Courier New', monospace; font-size: 11px; padding: 6px 12px; cursor: pointer; border: 1px solid;
     }
-    .btn-confirm-yes { background: var(--danger); color: #fff; border-color: var(--danger); margin-right: 0.4rem; }
-    .btn-confirm-no  { background: #21262d; color: var(--text); border-color: var(--border); }
-    .agent-thinking { color: var(--muted); font-style: italic; font-size: 0.65rem; }
+    .btn-confirm-yes { background: var(--danger); color: #fff; border-color: var(--danger); margin-right: 8px; }
+    .btn-confirm-no  { background: #0d1117; color: var(--text); border-color: var(--border); }
+    .agent-thinking  { color: var(--muted); font-style: italic; font-size: 11px; }
     .btn-range {
-      background: var(--panel); border: 1px solid var(--border); color: var(--muted);
-      border-radius: 4px; padding: 0.2rem 0.55rem; font-family: var(--mono);
-      font-size: 0.72rem; cursor: pointer; letter-spacing: .04em;
+      background: #0d1117; border: 1px solid var(--border); color: var(--muted); padding: 3px 8px;
+      font-family: 'Courier New', monospace; font-size: 11px; cursor: pointer; letter-spacing: 0.04em;
     }
     .btn-range.active { border-color: var(--accent); color: var(--accent); }
-    #btn-global-voice.listening {
-      border-color: var(--danger); color: var(--danger); animation: pulse 1s infinite;
-    }
+    #btn-global-voice.listening { border-color: var(--danger); color: var(--danger); animation: pulse 1s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
   </style>
 </head>
 <body>
-  <h1>ROVER2</h1>
-  <p class="sub">WEBSOCKET · DRIVE · ARM · FOLLOW · TOOLS</p>
 
-  <!-- Global alert bar — shown when threshold alerts are active -->
-  <div id="alert-bar" style="display:none;width:min(420px,100%);margin-bottom:0.6rem;
-    background:#1a0e0e;border:1px solid var(--danger);border-radius:8px;
-    padding:0.6rem 1rem;font-size:0.78rem;">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-      <span style="color:var(--danger);font-weight:700;letter-spacing:.06em;">⚠ ALERT</span>
-      <button onclick="document.getElementById('alert-bar').style.display='none'"
-        style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;">✕</button>
+  <!-- ── Header ── -->
+  <header id="site-header">
+    <span id="header-title">ROVER2</span>
+    <div id="header-badges">
+      <span id="row-ws" class="status-row"><span>WSS</span><span id="st-ws">—</span></span>
+      <span id="row-serial" class="status-row"><span>SER</span><span id="st-serial">—</span></span>
+      <span class="status-row"><span>MOT</span><span id="st-motors">—</span></span>
     </div>
-    <div id="alert-msgs" style="color:var(--warn);margin-top:0.3rem;line-height:1.5;"></div>
-    <button type="button" onclick="alertAskAI()" style="margin-top:0.4rem;font-size:0.7rem;
-      background:#2a1212;border:1px solid var(--danger);color:var(--danger);
-      border-radius:4px;padding:0.2rem 0.6rem;cursor:pointer;">
-      ASK AI WHAT'S WRONG
-    </button>
+  </header>
+
+  <!-- ── Alert bar ── -->
+  <div id="alert-bar" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span style="color:var(--danger);letter-spacing:.06em;">&#9888; ALERT</span>
+      <button onclick="document.getElementById('alert-bar').style.display='none'"
+        style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;font-family:inherit;">&#x2715;</button>
+    </div>
+    <div id="alert-msgs" style="color:var(--warn);margin-top:6px;line-height:1.5;font-size:12px;"></div>
+    <button type="button" onclick="alertAskAI()"
+      style="margin-top:8px;font-family:'Courier New',monospace;font-size:11px;
+      background:#100000;border:1px solid var(--danger);color:var(--danger);
+      padding:4px 10px;cursor:pointer;letter-spacing:.04em;">ASK AI WHAT'S WRONG</button>
   </div>
 
-  <!-- Global voice bar -->
-  <div style="width:min(420px,100%);display:flex;align-items:center;gap:0.5rem;
-    margin-bottom:0.6rem;">
-    <button id="btn-global-voice" type="button" onclick="startGlobalVoice()"
-      style="flex:1;background:var(--panel);border:1px solid var(--border);
-      color:var(--muted);border-radius:6px;padding:0.45rem 0.6rem;
-      font-family:var(--mono);font-size:0.75rem;cursor:pointer;letter-spacing:.06em;">
-      🎤 SPEAK TO ROVER
-    </button>
-    <button id="btn-tts" type="button" onclick="toggleTTS()"
-      style="background:var(--panel);border:1px solid var(--border);
-      color:var(--muted);border-radius:6px;padding:0.45rem 0.65rem;
-      font-family:var(--mono);font-size:0.75rem;cursor:pointer;" title="Toggle voice replies">
-      🔇
-    </button>
+  <!-- ── Voice / TTS bar ── -->
+  <div id="voice-bar">
+    <button id="btn-global-voice" type="button" onclick="startGlobalVoice()">_ SPEAK TO ROVER</button>
+    <button id="btn-tts" type="button" onclick="toggleTTS()" title="Toggle voice replies">&#128263;</button>
   </div>
 
-  <div class="tabs">
+  <!-- ── Tab bar ── -->
+  <div id="tab-bar">
     <button type="button" id="tab-btn-control" class="active">CONTROL</button>
     <button type="button" id="tab-btn-tools">TOOLS</button>
     <button type="button" id="tab-btn-diag">DIAG</button>
     <button type="button" id="tab-btn-chat">CHAT</button>
   </div>
 
+  <!-- ════ CONTROL TAB ════ -->
   <div id="tab-control" class="tab-page active">
 
-  <div class="panel">
-    <div class="status-row" id="row-ws">
-      <span>WEBSOCKET</span><span id="st-ws">—</span>
+    <div class="panel">
+      <div class="panel-title">STATUS</div>
+      <div class="status-row" id="row-ultra"><span>ULTRASONIC</span><span id="st-ultra">—</span></div>
+      <div class="status-row" id="row-safety"><span>SAFETY</span><span id="st-safety">—</span></div>
+      <div class="status-row" id="row-tracking"><span>FOLLOW</span><span id="st-tracking">—</span></div>
+      <div class="status-row" id="row-source"><span>SOURCE</span><span id="st-source">—</span></div>
+      <div class="status-row" id="row-person"><span>PERSON</span><span id="st-person">—</span></div>
+      <div class="status-row" id="row-ble"><span>BLE BEACON</span><span id="st-ble">—</span></div>
+      <div class="status-row" id="row-cam-idle"><span>CAMERA</span><span id="st-cam-idle">—</span></div>
+      <div class="status-row"><span>UPTIME</span><span id="st-uptime">—</span></div>
     </div>
-    <div class="status-row" id="row-serial">
-      <span>SERIAL</span><span id="st-serial">—</span>
-    </div>
-    <div class="status-row">
-      <span>MOTORS</span><span id="st-motors">—</span>
-    </div>
-    <div class="status-row" id="row-ultra">
-      <span>ULTRASONIC</span><span id="st-ultra">—</span>
-    </div>
-    <div class="status-row" id="row-safety">
-      <span>SAFETY</span><span id="st-safety">—</span>
-    </div>
-    <div class="status-row" id="row-tracking">
-      <span>FOLLOW</span><span id="st-tracking">—</span>
-    </div>
-    <div class="status-row" id="row-source">
-      <span>SOURCE</span><span id="st-source">—</span>
-    </div>
-    <div class="status-row" id="row-person">
-      <span>PERSON</span><span id="st-person">—</span>
-    </div>
-    <div class="status-row" id="row-ble">
-      <span>BLE BEACON</span><span id="st-ble">—</span>
-    </div>
-    <div class="status-row" id="row-cam-idle">
-      <span>CAMERA</span><span id="st-cam-idle">—</span>
-    </div>
-    <div class="status-row">
-      <span>UPTIME</span><span id="st-uptime">—</span>
-    </div>
-  </div>
 
-  <div class="panel">
-    <p class="panel-title">EVENT LOG</p>
-    <div id="event-log" style="font-size:0.65rem;line-height:1.6;max-height:120px;overflow-y:auto;"></div>
-  </div>
+    <div class="panel">
+      <div class="panel-title">EVENT LOG</div>
+      <div id="event-log"></div>
+    </div>
 
-  <div class="panel">
-    <p class="camera-hint" id="camera-hint">LIVE CAMERA</p>
-    <div class="camera-wrap" style="position:relative;">
-      <img id="camera" src="" alt="Live camera" />
-      <div id="cam-idle-overlay" style="display:none;position:absolute;inset:0;
-        background:rgba(13,17,23,0.82);display:none;align-items:center;
-        justify-content:center;flex-direction:column;gap:0.4rem;cursor:pointer;"
-        onclick="wakeCamera()">
-        <span style="font-size:0.75rem;letter-spacing:0.12em;color:var(--muted);">CAM IDLE</span>
-        <span style="font-size:0.62rem;color:var(--muted);opacity:0.6;">tap to wake</span>
+    <div class="panel">
+      <div class="camera-hint" id="camera-hint">LIVE CAMERA</div>
+      <div class="camera-wrap">
+        <img id="camera" src="" alt="Live camera" />
+        <div id="cam-idle-overlay" style="display:none;" onclick="wakeCamera()">
+          <span style="font-size:12px;letter-spacing:0.12em;color:var(--muted);">CAM IDLE</span>
+          <span style="font-size:10px;color:var(--muted);opacity:0.6;">tap to wake</span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="panel">
-    <p class="panel-title">ARM LIFT · hold up/down</p>
-    <div class="arm-pad">
-      <button type="button" class="hold-up" id="btn-arm-up">▲ ARM UP</button>
-      <button type="button" class="hold-down" id="btn-arm-down">▼ ARM DOWN</button>
-      <button type="button" id="btn-arm-pulse-up">NUDGE UP</button>
-      <button type="button" id="btn-arm-pulse-down">NUDGE DOWN</button>
-    </div>
-  </div>
-
-  <div class="panel">
-    <p class="panel-title">DRIVE</p>
-    <div class="speed">
-      <label for="speed">SPEED</label>
-      <input type="range" id="speed" min="20" max="100" value="80" />
-      <span id="speed-val">80%</span>
-    </div>
-
-    <div class="dpad" id="dpad">
-      <div class="empty"></div>
-      <button data-dir="forward" type="button">FWD</button>
-      <div class="empty"></div>
-      <button data-dir="left" type="button">LEFT</button>
-      <button data-dir="stop" type="button">STOP</button>
-      <button data-dir="right" type="button">RIGHT</button>
-      <div class="empty"></div>
-      <button data-dir="back" type="button">BACK</button>
-      <div class="empty"></div>
-    </div>
-
-    <div class="mode-row">
-      <button type="button" id="btn-detect"       class="mode-btn">DETECT</button>
-      <button type="button" id="btn-mode-camera"  class="mode-btn">CAMERA</button>
-      <button type="button" id="btn-mode-fused"   class="mode-btn">FUSED</button>
-      <button type="button" id="btn-mode-ble"     class="mode-btn">BLE</button>
-    </div>
-    <div class="row">
-      <button type="button" id="btn-grip-open">GRIP OPEN</button>
-      <button type="button" id="btn-grip-close">GRIP CLOSE</button>
-      <button type="button" class="danger" id="btn-estop">E-STOP</button>
-    </div>
-  </div>
-
-
-  </div>
-
-  <div id="tab-tools" class="tab-page">
     <div class="panel">
-      <p class="panel-title">DIAGNOSTICS</p>
+      <div class="panel-title">ARM</div>
+      <div class="arm-pad">
+        <button type="button" class="hold-up"   id="btn-arm-up">&#9650; ARM UP</button>
+        <button type="button" class="hold-down" id="btn-arm-down">&#9660; ARM DOWN</button>
+        <button type="button" id="btn-arm-pulse-up">NUDGE UP</button>
+        <button type="button" id="btn-arm-pulse-down">NUDGE DOWN</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">DRIVE</div>
+      <div class="speed">
+        <label for="speed">SPEED</label>
+        <input type="range" id="speed" min="20" max="100" value="80" />
+        <span id="speed-val">80%</span>
+      </div>
+      <div class="dpad" id="dpad">
+        <div class="empty"></div>
+        <button data-dir="forward" type="button">FWD</button>
+        <div class="empty"></div>
+        <button data-dir="left" type="button">LEFT</button>
+        <button data-dir="stop" type="button">STOP</button>
+        <button data-dir="right" type="button">RIGHT</button>
+        <div class="empty"></div>
+        <button data-dir="back" type="button">BACK</button>
+        <div class="empty"></div>
+      </div>
+      <div class="panel-title" style="margin-top:4px;">FOLLOW MODE</div>
+      <div class="mode-row">
+        <button type="button" id="btn-detect"      class="mode-btn">DETECT</button>
+        <button type="button" id="btn-mode-camera" class="mode-btn">CAMERA</button>
+        <button type="button" id="btn-mode-fused"  class="mode-btn">FUSED</button>
+        <button type="button" id="btn-mode-ble"    class="mode-btn">BLE</button>
+      </div>
+      <div class="row">
+        <button type="button" id="btn-grip-open">GRIP OPEN</button>
+        <button type="button" id="btn-grip-close">GRIP CLOSE</button>
+        <button type="button" class="danger" id="btn-estop">E-STOP</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ════ TOOLS TAB ════ -->
+  <div id="tab-tools" class="tab-page">
+
+    <div class="panel">
+      <div class="panel-title">DIAGNOSTICS</div>
       <p class="muted" id="diag-ts">Not run yet</p>
       <div class="tools-actions">
         <button type="button" id="btn-diag-run">RUN DIAGNOSTICS</button>
@@ -658,21 +531,22 @@
         <button type="button" id="btn-restart-pi">RESTART PI</button>
       </div>
       <div class="diag-grid" id="diag-hardware"></div>
-      <p class="panel-title" style="margin-top:1rem">NETWORK</p>
+      <div class="panel-title" style="margin-top:16px;">NETWORK</div>
       <div class="diag-grid" id="diag-network"></div>
-      <p class="panel-title" style="margin-top:1rem">SOFTWARE</p>
+      <div class="panel-title" style="margin-top:16px;">SOFTWARE</div>
       <div class="diag-grid" id="diag-software"></div>
-      <p class="panel-title" style="margin-top:1rem">SYSTEM</p>
+      <div class="panel-title" style="margin-top:16px;">SYSTEM</div>
       <div class="diag-grid" id="diag-system"></div>
     </div>
+
     <div class="panel">
-      <p class="panel-title">SCRIPTS</p>
+      <div class="panel-title">SCRIPTS</div>
       <p class="muted">Dev: copy on PC. Pi: safe API buttons only.</p>
       <div id="script-list"></div>
     </div>
 
     <div class="panel">
-      <p class="panel-title">FOLLOW TUNING</p>
+      <div class="panel-title">FOLLOW TUNING</div>
       <p class="muted">Saved to config.yaml — applies immediately</p>
       <div class="tune-grid">
         <label>Turn speed <span id="t-turn-val"></span>
@@ -701,36 +575,38 @@
     </div>
 
     <div class="panel">
-      <p class="panel-title">LOGS</p>
+      <div class="panel-title">LOGS</div>
       <div class="tools-actions">
         <button type="button" id="btn-logs-refresh">REFRESH</button>
         <button type="button" id="btn-logs-clear">CLEAR</button>
       </div>
       <pre class="log-area" id="log-area">—</pre>
     </div>
+
     <div class="panel">
-      <p class="panel-title">CONFIG</p>
+      <div class="panel-title">CONFIG</div>
       <p class="muted" id="config-path">—</p>
       <div class="tools-actions">
         <button type="button" id="btn-config-refresh">REFRESH</button>
       </div>
       <pre class="config-pre" id="config-pre">—</pre>
     </div>
+
   </div>
 
+  <!-- ════ DIAG TAB ════ -->
   <div id="tab-diag" class="tab-page">
+
     <div class="panel">
-      <p class="panel-title">SYSTEM DIAGNOSTICS</p>
+      <div class="panel-title">SYSTEM DIAGNOSTICS</div>
       <div class="tools-actions">
         <button type="button" id="diag-refresh-btn">REFRESH</button>
         <button type="button" id="diag-auto-btn">AUTO 5s</button>
-        <button type="button" class="btn-ask-ai" onclick="diagAskAI()" style="padding:0.45rem 0.7rem;font-size:0.75rem;">
-          ASK AI
-        </button>
+        <button type="button" class="btn-ask-ai" onclick="diagAskAI()" style="padding:8px 12px;font-size:11px;min-height:40px;">ASK AI</button>
       </div>
       <p class="muted" id="full-diag-ts">Not loaded</p>
 
-      <p class="diag-section-title">METRICS · HISTORY</p>
+      <div class="diag-section-title">METRICS · HISTORY</div>
       <div class="time-sel" id="time-sel">
         <button class="active" data-m="15">15m</button>
         <button data-m="60">1h</button>
@@ -739,99 +615,59 @@
       </div>
       <p class="db-info" id="db-info"></p>
 
-      <p class="chart-group">SYSTEM</p>
-      <div class="chart-label-row">
-        <span class="chart-label">CPU %</span>
-        <button type="button" class="btn-ask-ai" onclick="chartAskAI('cpu')">ASK AI</button>
-      </div>
+      <div class="chart-group">SYSTEM</div>
+      <div class="chart-label-row"><span class="chart-label">CPU %</span><button type="button" class="btn-ask-ai" onclick="chartAskAI('cpu')">ASK AI</button></div>
       <div class="chart-wrap"><canvas id="ch-cpu"></canvas></div>
-      <div class="chart-label-row">
-        <span class="chart-label">RAM % / Swap %</span>
-        <button type="button" class="btn-ask-ai" onclick="chartAskAI('ram')">ASK AI</button>
-      </div>
+      <div class="chart-label-row"><span class="chart-label">RAM % / Swap %</span><button type="button" class="btn-ask-ai" onclick="chartAskAI('ram')">ASK AI</button></div>
       <div class="chart-wrap"><canvas id="ch-ram"></canvas></div>
-      <div class="chart-label-row">
-        <span class="chart-label">Temperature (°C)</span>
-        <button type="button" class="btn-ask-ai" onclick="chartAskAI('temp')">ASK AI</button>
-      </div>
+      <div class="chart-label-row"><span class="chart-label">Temperature (°C)</span><button type="button" class="btn-ask-ai" onclick="chartAskAI('temp')">ASK AI</button></div>
       <div class="chart-wrap"><canvas id="ch-temp"></canvas></div>
       <p class="chart-label">Disk %</p>
       <div class="chart-wrap"><canvas id="ch-disk"></canvas></div>
 
-      <p class="chart-group">PROCESS · rover2-api</p>
-      <p class="chart-label">CPU %</p>
-      <div class="chart-wrap"><canvas id="ch-proc-cpu"></canvas></div>
-      <p class="chart-label">Memory (MB)</p>
-      <div class="chart-wrap"><canvas id="ch-proc-mem"></canvas></div>
+      <div class="chart-group">PROCESS · rover2-api</div>
+      <p class="chart-label">CPU %</p><div class="chart-wrap"><canvas id="ch-proc-cpu"></canvas></div>
+      <p class="chart-label">Memory (MB)</p><div class="chart-wrap"><canvas id="ch-proc-mem"></canvas></div>
 
-      <p class="chart-group">NETWORK</p>
-      <p class="chart-label">eth0 TX / RX (KB/s)</p>
-      <div class="chart-wrap"><canvas id="ch-eth0"></canvas></div>
-      <p class="chart-label">wlan0 TX / RX (KB/s)</p>
-      <div class="chart-wrap"><canvas id="ch-wlan0"></canvas></div>
-      <p class="chart-label">Disk read / write (KB/s)</p>
-      <div class="chart-wrap"><canvas id="ch-disk-io"></canvas></div>
+      <div class="chart-group">NETWORK</div>
+      <p class="chart-label">eth0 TX / RX (KB/s)</p><div class="chart-wrap"><canvas id="ch-eth0"></canvas></div>
+      <p class="chart-label">wlan0 TX / RX (KB/s)</p><div class="chart-wrap"><canvas id="ch-wlan0"></canvas></div>
+      <p class="chart-label">Disk read / write (KB/s)</p><div class="chart-wrap"><canvas id="ch-disk-io"></canvas></div>
 
-      <p class="chart-group">ROBOT</p>
-      <p class="chart-label">Ultrasonic (cm)</p>
-      <div class="chart-wrap"><canvas id="ch-ultra"></canvas></div>
-      <p class="chart-label">BLE RSSI (dBm)</p>
-      <div class="chart-wrap"><canvas id="ch-ble"></canvas></div>
-      <p class="chart-label">Follow state (0=off 1=detect 2=camera 3=BLE)</p>
-      <div class="chart-wrap"><canvas id="ch-follow"></canvas></div>
-      <p class="chart-label">Person detected / Safety blocked</p>
-      <div class="chart-wrap"><canvas id="ch-events"></canvas></div>
+      <div class="chart-group">ROBOT</div>
+      <p class="chart-label">Ultrasonic (cm)</p><div class="chart-wrap"><canvas id="ch-ultra"></canvas></div>
+      <p class="chart-label">BLE RSSI (dBm)</p><div class="chart-wrap"><canvas id="ch-ble"></canvas></div>
+      <p class="chart-label">Follow state (0=off 1=detect 2=camera 3=BLE)</p><div class="chart-wrap"><canvas id="ch-follow"></canvas></div>
+      <p class="chart-label">Person detected / Safety blocked</p><div class="chart-wrap"><canvas id="ch-events"></canvas></div>
 
-      <p class="diag-section-title">SYSTEM</p>
-      <div id="fd-system"></div>
-
-      <p class="diag-section-title">TEMPERATURE</p>
-      <div class="temp-grid" id="fd-temps"></div>
-
-      <p class="diag-section-title">CPU CORES</p>
-      <div class="core-grid" id="fd-cores"></div>
-
-      <p class="diag-section-title">PROCESS · rover2-api</p>
-      <div id="fd-process"></div>
-
-      <p class="diag-section-title">HARDWARE</p>
-      <div id="fd-hardware"></div>
-
-      <p class="diag-section-title">NETWORK</p>
-      <div id="fd-network"></div>
-
-      <p class="diag-section-title">SERVICES</p>
-      <div id="fd-services"></div>
-
-      <p class="diag-section-title">ROBOT · LIVE</p>
-      <div id="fd-robot"></div>
+      <div class="diag-section-title">SYSTEM</div><div id="fd-system"></div>
+      <div class="diag-section-title">TEMPERATURE</div><div class="temp-grid" id="fd-temps"></div>
+      <div class="diag-section-title">CPU CORES</div><div class="core-grid" id="fd-cores"></div>
+      <div class="diag-section-title">PROCESS · rover2-api</div><div id="fd-process"></div>
+      <div class="diag-section-title">HARDWARE</div><div id="fd-hardware"></div>
+      <div class="diag-section-title">NETWORK</div><div id="fd-network"></div>
+      <div class="diag-section-title">SERVICES</div><div id="fd-services"></div>
+      <div class="diag-section-title">ROBOT · LIVE</div><div id="fd-robot"></div>
     </div>
 
     <div class="panel">
-      <p class="panel-title">SERVICES · THERMAL</p>
-      <div class="tools-actions">
-        <button type="button" id="services-refresh-btn">REFRESH</button>
-      </div>
+      <div class="panel-title">SERVICES · THERMAL</div>
+      <div class="tools-actions"><button type="button" id="services-refresh-btn">REFRESH</button></div>
       <p class="muted" id="services-ts">Not loaded</p>
-      <p class="diag-section-title">KEY SERVICES</p>
-      <div id="fd-svc-health"></div>
-      <p class="diag-section-title">OLLAMA · CAMERA · RESOURCES</p>
-      <div id="fd-svc-extra"></div>
-      <p class="diag-section-title">THERMAL</p>
-      <div id="fd-thermal"></div>
+      <div class="diag-section-title">KEY SERVICES</div><div id="fd-svc-health"></div>
+      <div class="diag-section-title">OLLAMA · CAMERA · RESOURCES</div><div id="fd-svc-extra"></div>
+      <div class="diag-section-title">THERMAL</div><div id="fd-thermal"></div>
     </div>
 
     <div class="panel">
-      <p class="panel-title">FAULT HISTORY</p>
-      <div class="tools-actions">
-        <button type="button" id="fault-clear-btn">CLEAR</button>
-      </div>
+      <div class="panel-title">FAULT HISTORY</div>
+      <div class="tools-actions"><button type="button" id="fault-clear-btn">CLEAR</button></div>
       <p class="muted" id="fault-ts">Not loaded</p>
       <div id="fd-faults" style="max-height:220px;overflow-y:auto;"></div>
     </div>
 
     <div class="panel">
-      <p class="panel-title">GUARD MODE</p>
+      <div class="panel-title">GUARD MODE</div>
       <div class="tools-actions">
         <button type="button" id="guard-arm-btn">ARM</button>
         <button type="button" id="guard-disarm-btn">DISARM</button>
@@ -840,55 +676,36 @@
       <p class="muted" id="guard-ts">Not loaded</p>
       <div class="diag-grid" id="guard-status-grid"></div>
     </div>
+
   </div>
 
+  <!-- ════ CHAT TAB ════ -->
   <div id="tab-chat" class="tab-page">
-    <div style="
-      background: linear-gradient(135deg, #0d1f12 0%, #0d1117 100%);
-      border: 1px solid var(--accent);
-      border-radius: 8px;
-      padding: 0.85rem 1.1rem;
-      width: min(420px, 100%);
-      margin-bottom: 1rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-    ">
+
+    <div class="ai-banner">
       <div>
-        <div style="font-size:0.9rem;font-weight:700;color:var(--accent);letter-spacing:0.12em;">
-          AI: ON-DEVICE &middot; NO CLOUD
-        </div>
-        <div style="font-size:0.65rem;color:var(--muted);margin-top:0.2rem;">
-          AI HAT+ 2: vision + LLM &middot; Pi = bridge only (MegaPi / tools)
-        </div>
+        <div class="ai-banner-title">AI: ON-DEVICE &middot; NO CLOUD</div>
+        <div class="ai-banner-sub">AI HAT+ 2: vision + LLM &middot; Pi = bridge only (MegaPi / tools)</div>
       </div>
-      <div style="
-        font-size:0.6rem;color:var(--accent);
-        border:1px solid var(--accent);
-        border-radius:4px;padding:0.2rem 0.45rem;
-        letter-spacing:0.08em;white-space:nowrap;
-      ">FULLY&nbsp;OFFLINE</div>
+      <div class="ai-banner-badge">FULLY&nbsp;OFFLINE</div>
     </div>
 
     <div class="panel">
-      <div class="status-row" id="row-vlm">
-        <span>VLM ENGINE</span><span id="st-vlm">—</span>
-      </div>
+      <div class="status-row" id="row-vlm"><span>VLM ENGINE</span><span id="st-vlm">—</span></div>
     </div>
 
-    <div class="panel" style="padding:0.75rem 1.25rem;">
-      <p class="panel-title">TRACKING MODE</p>
+    <div class="panel">
+      <div class="panel-title">TRACKING MODE</div>
       <div class="mode-row">
-        <button type="button" id="btn-detect-chat"       class="mode-btn">DETECT</button>
-        <button type="button" id="btn-mode-camera-chat"  class="mode-btn">CAMERA</button>
-        <button type="button" id="btn-mode-fused-chat"   class="mode-btn">FUSED</button>
-        <button type="button" id="btn-mode-ble-chat"     class="mode-btn">BLE</button>
+        <button type="button" id="btn-detect-chat"      class="mode-btn">DETECT</button>
+        <button type="button" id="btn-mode-camera-chat" class="mode-btn">CAMERA</button>
+        <button type="button" id="btn-mode-fused-chat"  class="mode-btn">FUSED</button>
+        <button type="button" id="btn-mode-ble-chat"    class="mode-btn">BLE</button>
       </div>
     </div>
 
     <div class="panel">
-      <p class="panel-title">CHAT · NL COMMANDS + SCENE DESCRIPTION</p>
+      <div class="panel-title">CHAT · NL COMMANDS + SCENE DESCRIPTION</div>
       <div id="chat-log" class="chat-log"></div>
       <div class="chat-row">
         <input id="chat-input" type="text" class="chat-input"
@@ -896,7 +713,7 @@
                onkeydown="if(event.key==='Enter')sendChat()" />
         <button id="btn-voice" type="button" class="chat-btns" onclick="startVoice()" title="Voice input">MIC</button>
       </div>
-      <div class="chat-btns" style="margin-bottom:0.5rem;">
+      <div class="chat-btns">
         <button type="button" onclick="sendChat()">SEND</button>
         <button type="button" onclick="describeScene()">DESCRIBE SCENE</button>
         <button type="button" onclick="chatSend('follow me')">FOLLOW ME</button>
@@ -906,7 +723,7 @@
     </div>
 
     <div class="panel">
-      <p class="panel-title">QUICK COMMANDS</p>
+      <div class="panel-title">QUICK COMMANDS</div>
       <div class="chat-btns">
         <button onclick="chatSend('forward')">FWD 2s</button>
         <button onclick="chatSend('backward')">BACK 2s</button>
@@ -920,32 +737,27 @@
     </div>
 
     <div class="panel" id="agent-panel">
-      <div class="status-row" id="row-agent">
-        <span>AI AGENT</span><span id="st-agent">—</span>
-      </div>
-      <p class="panel-title" style="margin-top:0.75rem">AGENT · MONITOR · CONFIG · Q&amp;A</p>
-      <p class="muted" style="font-size:0.65rem;margin-bottom:0.5rem;">
+      <div class="status-row" id="row-agent"><span>AI AGENT</span><span id="st-agent">—</span></div>
+      <div class="panel-title" style="margin-top:12px;">AGENT · MONITOR · CONFIG · Q&amp;A</div>
+      <p class="muted">
         Ask anything about ROVER2 hardware or software. The agent monitors live data,
-        changes config parameters (saved to config.yaml), and answers from tools.
-        First reply may take 1–2 minutes while the model loads.
+        changes config parameters, and answers from tools.
+        First reply may take 1–2 min while the model loads.
       </p>
       <div id="agent-log" class="agent-log"></div>
-
       <div class="confirm-bar" id="confirm-bar">
         <div class="confirm-msg" id="confirm-msg"></div>
         <button class="btn-confirm-yes" onclick="agentConfirm()">CONFIRM &amp; EXECUTE</button>
         <button class="btn-confirm-no"  onclick="agentDecline()">CANCEL</button>
       </div>
-
       <div class="chat-row">
         <input id="agent-input" type="text" class="chat-input"
                placeholder="Monitor CPU/temp, change turn_speed, explain BLE follow…"
                onkeydown="if(event.key==='Enter')sendAgent()" />
-        <button type="button" onclick="sendAgent()" id="btn-agent-send" title="Send to AI agent">ASK</button>
-        <button type="button" onclick="agentCancel()" id="btn-agent-cancel" style="display:none"
-                title="Cancel in-flight agent request">CANCEL</button>
+        <button type="button" onclick="sendAgent()" id="btn-agent-send">ASK</button>
+        <button type="button" onclick="agentCancel()" id="btn-agent-cancel" style="display:none">CANCEL</button>
       </div>
-      <div class="chat-btns" style="margin-top:0.4rem;">
+      <div class="chat-btns" style="margin-top:4px;">
         <button onclick="agentAsk('Why is the CPU usage high? List the top processes by CPU.')">HIGH CPU?</button>
         <button onclick="agentAsk('Check all temperatures. Are any components running too hot?')">TEMPS</button>
         <button onclick="agentAsk('Is person detection working? Check the body_tracker service and camera.')">DETECT ISSUE</button>
@@ -966,6 +778,7 @@
         <button onclick="agentAsk('Check for any recent crashes or kernel errors in system journal.')">CRASH LOGS</button>
       </div>
     </div>
+
   </div>
 
   <div class="toast" id="toast"></div>
@@ -1725,7 +1538,7 @@
 
     function cameraStreamUrl() {
       const proto = location.protocol === 'https:' ? 'https:' : 'http:';
-      return proto + '//' + location.hostname + ':8081/stream';
+      return 'https://' + location.hostname + ':8082/stream';
     }
 
     function formatUltrasonic(cm, ageS) {
