@@ -36,13 +36,22 @@ Hard rules applied to every change:
 
 ### Pi network
 
-| Interface | IP |
-|-----------|-----|
-| eth0 | **<ROVER_ETH_IP>** (preferred — use for deploy, UI, SSH) |
-| WiFi | <ROVER_WIFI_IP> |
-| Tailscale | <ROVER_TAILSCALE_IP> |
+| Interface | IP | Notes |
+|-----------|-----|-------|
+| eth0 | **<ROVER_ETH_IP>** | Preferred — use for deploy, UI, SSH |
+| wlan0 | <ROVER_WIFI_IP> | Home/office network (stays connected) |
+| wlan1 (AP) | **10.0.0.1** | ROVER2 AP — always-on, SSID: ROVER2 |
+| Tailscale | <ROVER_TAILSCALE_IP> | Remote access |
 
 **Dev machine has no route to <ROVER_WIFI_IP>** — deploy always via eth0 (rover-eth). Use WiFi IP only from a device on the same WiFi (phone, laptop on local network).
+
+**ROVER2 WiFi AP (wlan1 — RTL8812AU dongle):**
+- SSID: `ROVER2` · Password: `6nat0n6cNZQ5Q5` · Band: 2.4 GHz ch 6
+- Pi IP on AP network: `10.0.0.1` · DHCP range: `10.0.0.10–10.0.0.50`
+- Web UI from AP: **`https://10.0.0.1:8082/`**
+- DNS: `rover.local` → `10.0.0.1` (via dnsmasq on wlan1)
+- Services: `hostapd` + `dnsmasq` + `rover2-wlan1-ip.service` (static IP oneshot)
+- wlan0 and wlan1 run independently — AP does not affect home WiFi
 
 ### SSH
 
@@ -191,6 +200,9 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 | `rover-api` (v1) | 8080 | Stop when testing ROVER2 serial |
 | `hailo-ollama` | **8000** | Voice agent fast-path (qwen2.5-instruct:1.5b on AI HAT+); enabled by `deploy_pi.sh` |
 | `rover2-restore-wifi.service` | — | Boot: re-apply WiFi from `/boot/firmware/network-config` |
+| `hostapd.service` | — | ROVER2 WiFi AP on wlan1 (RTL8812AU), SSID: ROVER2, ch 6 |
+| `dnsmasq.service` | — | DHCP + DNS for AP network (10.0.0.10–50, rover.local) |
+| `rover2-wlan1-ip.service` | — | Sets static IP 10.0.0.1/24 on wlan1 before hostapd starts |
 | `rover2-virtual-usb-dongle.service` | — | Optional ~12% CPU keep-alive for Viking bank |
 
 ---
@@ -403,9 +415,11 @@ ssh ambassad0r@<ROVER_WIFI_IP> "curl -sk https://localhost:8082/api/status | pyt
 
 ## Web UI
 
-**https://<ROVER_WIFI_IP>:8082/** (WiFi) or **https://<ROVER_ETH_IP>:8082/** (eth)
+**https://<ROVER_WIFI_IP>:8082/** (WiFi) or **https://<ROVER_ETH_IP>:8082/** (eth) or **https://10.0.0.1:8082/** (ROVER2 AP)
 
 > **HTTPS only** — rover2-api runs with a self-signed TLS cert. Use `https://`. First visit: accept the cert warning (Advanced → Proceed). The UI auto-selects `wss://` for WebSocket when served over HTTPS.
+>
+> TLS cert SANs: `IP:10.0.0.1, IP:192.168.250.254, IP:192.168.70.11, IP:10.62.118.51, DNS:rover.local, DNS:rover` — renewed 2026-06-03 (added 10.0.0.1).
 
 **Hard-refresh after deploy:** `Ctrl+Shift+R`
 
