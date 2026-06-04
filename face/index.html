@@ -25,7 +25,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 #chat-bubble{max-width:340px;width:90%;min-height:36px;background:rgba(22,27,34,.9);
   border:1px solid #30363d;border-radius:12px;padding:10px 14px;font-size:13px;
   line-height:1.5;margin-bottom:8px;text-align:center;
-  display:none;white-space:pre-wrap}
+  display:none !important;white-space:pre-wrap}
 #chat-bubble.user{color:#58a6ff;border-color:#1f6feb}
 #chat-bubble.rover{color:#e6edf3;border-color:#3fb950}
 #btn-row{display:flex;gap:12px;margin-bottom:10px}
@@ -103,7 +103,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   background:rgba(10,20,40,.88);color:#e6edf3;
   font-family:'Courier New',Courier,monospace;font-size:13px;line-height:1.5;
   padding:10px 14px;border-radius:10px;border:1px solid rgba(100,160,255,.3);
-  z-index:50;word-break:break-word;pointer-events:none;
+  z-index:200;word-break:break-word;pointer-events:none;
   opacity:0;transition:opacity 150ms ease}
 #tts-bubble.visible{opacity:1}
 /* left-pointing tail */
@@ -1325,7 +1325,6 @@ async function _convLoop(sessionId, history) {
     if (reply) {
       history.push({role: 'assistant', content: reply});
       if (history.length > 12) history.splice(0, 2);
-      _showBubble('rover', reply);
       _ttsBubbleShow(reply);          // face overlay — visible while speaking
       await _ttsSpeakAsync(reply);
       _ttsBubbleHide();               // schedule 1.5 s fade after TTS ends
@@ -1425,7 +1424,6 @@ async function _sendVoice(blob, mimeType) {
     const d2 = await agentResp.json();
     const reply = (d2.reply || '').trim();
     if (!reply) { _voicePending = false; return; }
-    _showBubble('rover', reply);
 
     // 3. TTS — Web Speech API (primary) or Pi Piper TTS (legacy fallback)
     _dbg.last = 'speaking…'; _dbgUpdate();

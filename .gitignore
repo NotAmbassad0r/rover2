@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 venv/
 *.egg-info/
@@ -8,13 +9,20 @@ venv/
 .vscode/
 .claude/settings.local.json
 .claude/memory/
+node_modules/
+*.log
 
-# TLS private key — never commit
+# TLS private keys — never commit
 certs/rover.key
 *.key
-
-# Pi system env file (contains HA_TOKEN and other secrets)
-/etc/rover2.env
-*.deb
-rover.crt
 rover.key
+
+# Compiled / packaged binaries
+*.deb
+*.tar.gz
+
+# Stale cert copies at repo root
+rover.crt
+
+# Pi system env files (contain secrets — HA_TOKEN, etc.)
+/etc/rover2.env
