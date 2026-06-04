@@ -114,6 +114,12 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   from{transform:translateY(0)}
   to{transform:translateY(var(--tts-scroll-dist,0px))}
 }
+#idle-hint{
+  position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
+  font-family:'Courier New',Courier,monospace;font-size:11px;
+  letter-spacing:0.12em;color:rgba(230,237,243,0.35);
+  pointer-events:none;display:none;z-index:5;
+}
 </style>
 </head>
 <body>
@@ -211,6 +217,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   <span class="dot-pg" id="dot-pg-1"></span>
 </div>
 <div id="tts-bubble"><div id="speech-bubble-text"></div></div>
+<div id="idle-hint">tap to wake</div>
 
 <div id="dbg-panel" onclick="dbgToggle()">
   <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
@@ -1180,6 +1187,7 @@ async function _recordConvTurn() {
 
 async function _startConversation() {
   if (_conversation) return;
+  _resetIdleTimer();  // wake screen and restart dim countdown
   _conversation   = true;
   _convEndRequest = false;
   _convTurnCount  = 0;
@@ -1761,6 +1769,61 @@ if (navigator.mediaDevices) {
     await _startVoicePipeline();
   });
 }
+
+// ── Wake Lock ─────────────────────────────────────────────────────────────────
+// Keeps the A32 screen on while the face PWA is active.
+// Re-acquired on visibilitychange (wake lock is released when page is hidden).
+let _wakeLock = null;
+
+async function _acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    _wakeLock = await navigator.wakeLock.request('screen');
+    console.log('[WakeLock] acquired');
+    _wakeLock.addEventListener('release', () => console.log('[WakeLock] released'));
+  } catch (e) {
+    console.log('[WakeLock] not available:', e.message);
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) _acquireWakeLock();
+});
+// Also try on first touch (ensures gesture requirement is met on strict browsers)
+document.addEventListener('touchstart', _acquireWakeLock, { once: true });
+
+// ── Idle dim ──────────────────────────────────────────────────────────────────
+// After 60 s of no touch or voice activity, dim the canvas to save OLED power.
+// Any touch or conversation activity restores full brightness immediately.
+let _idleTimer = null;
+let _dimmed    = false;
+const _IDLE_MS = 60000;
+
+function _applyDim() {
+  _dimmed = true;
+  document.getElementById('face').style.opacity = '0.3';
+  const h = document.getElementById('idle-hint');
+  if (h) h.style.display = 'block';
+}
+
+function _restoreFromDim() {
+  if (!_dimmed) return;
+  _dimmed = false;
+  document.getElementById('face').style.opacity = '';
+  const h = document.getElementById('idle-hint');
+  if (h) h.style.display = 'none';
+}
+
+function _resetIdleTimer() {
+  _restoreFromDim();
+  clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(_applyDim, _IDLE_MS);
+}
+
+// Reset on any touch
+document.addEventListener('touchstart', _resetIdleTimer, { passive: true });
+// Start the 60 s countdown once the page has loaded
+window.addEventListener('load', _resetIdleTimer);
 
 // ── Voice pipeline init ──────────────────────────────────────────────────────
 // TTS: Web Speech API (local, on-device) for agent responses
