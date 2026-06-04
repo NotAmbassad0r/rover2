@@ -81,6 +81,8 @@ class BodyTracker:
         self._stop_event = threading.Event()
         self._hailo: _HailoInference | None = None
         self._person_detected = False
+        self._last_bbox: tuple | None = None   # (y0, x0, y1, x1) normalised 0-1
+        self._last_conf: float = 0.0
         self._person_tracked = False
         self._seen_streak = 0
         self._lost_streak = 0
@@ -199,6 +201,8 @@ class BodyTracker:
             "detect_only": self.detect_only,
             "hailo_ready": self._hailo_ready,
             "person_detected": self._person_detected,
+            "person_bbox": list(self._last_bbox) if self._last_bbox else None,
+            "person_conf": round(self._last_conf, 2),
             "person_tracked": self._person_tracked,
             "last_error": self._last_error,
             "camera_url": self._camera_url,
@@ -605,6 +609,12 @@ class BodyTracker:
             else:
                 logger.info("Detect score: no person boxes")
         self._update_person_presence(best is not None)
+        if best is not None:
+            self._last_bbox = (best[0], best[1], best[2], best[3])
+            self._last_conf = best[4]
+        else:
+            self._last_bbox = None
+            self._last_conf = 0.0
 
         # Fire external detection callback (e.g. guard mode) — must be non-blocking
         if best is not None:

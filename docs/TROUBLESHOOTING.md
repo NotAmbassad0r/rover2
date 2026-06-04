@@ -168,3 +168,99 @@ curl -sk https://localhost:8082/api/diagnostics/hailo | python3 -m json.tool
 # API status
 curl -sk https://localhost:8082/api/status | python3 -m json.tool
 ```
+
+---
+
+## WiFi Access Point (ROVER2)
+
+### Prerequisites
+- RTL8812AU USB dongle on wlan1 (`fc:22:1c:20:02:ff`)
+- `hostapd` and `dnsmasq` installed: `sudo apt install -y hostapd dnsmasq`
+- Config files in `scripts/ap/`
+
+### Manual setup (fresh Pi)
+```bash
+sudo cp scripts/ap/hostapd.conf /etc/hostapd/hostapd.conf
+sudo cp scripts/ap/rover2-ap.network /etc/systemd/network/10-rover2-ap.network
+sudo cp scripts/ap/rover2-ap-dnsmasq.conf /etc/dnsmasq.d/rover2-ap.conf
+sudo cp scripts/ap/rover2-ap-nm.conf /etc/NetworkManager/conf.d/rover2-ap.conf
+sudo cp scripts/ap/rover2-wlan1-ip.service /etc/systemd/system/rover2-wlan1-ip.service
+sudo sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+sudo systemctl unmask hostapd
+sudo systemctl enable hostapd dnsmasq rover2-wlan1-ip
+sudo systemctl daemon-reload
+sudo systemctl restart NetworkManager dnsmasq rover2-wlan1-ip hostapd
+```
+
+### Verify
+```bash
+systemctl is-active hostapd dnsmasq rover2-wlan1-ip
+ip addr show wlan1 | grep 10.0.0.1
+/usr/sbin/iw dev wlan1 info | grep -E 'type|ssid'
+```
+
+### Access
+Connect to **ROVER2** WiFi → **`https://10.0.0.1:8082/`**  
+Password: see `wpa_passphrase` in `scripts/ap/hostapd.conf`
+
+### Notes
+- wlan0 home WiFi continues to work simultaneously
+- Static IP assigned by `rover2-wlan1-ip.service` (oneshot, not dhcpcd — Pi uses NetworkManager)
+- NM excluded from managing wlan1 via `scripts/ap/rover2-ap-nm.conf`
+
+---
+
+## TLS Certificate Renewal
+
+The TLS cert covers all Pi IPs: `10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local`.
+
+### Renew (from central-computer)
+```bash
+cd ~/Documents/projects/rover2
+./scripts/renew-cert.sh
+```
+
+Requires:
+- `step-cli` installed on central-computer
+- homelabca reachable at `192.168.70.14:9000`
+
+Cert is valid 1 year. Script deploys to Pi and restarts rover2-api automatically.
+
+### Install CA root on new devices
+Fetch the homelabca root cert to trust it:
+```
+https://192.168.250.254:8082/static/homelabca.crt
+```
+Or from the Pi: `curl -sk https://192.168.70.14:9000/roots.pem`
+
+---
+
+## /etc/rover2.env (Pi system file — not in repo)
+
+rover2-api reads this via `EnvironmentFile=-/etc/rover2.env` in the systemd unit.
+
+**Required contents:**
+```
+HA_URL=http://192.168.225.10:8123
+HA_TOKEN=<home-assistant-long-lived-token>
+```
+
+**Create on Pi:**
+```bash
+sudo tee /etc/rover2.env << 'EOF'
+HA_URL=http://192.168.225.10:8123
+HA_TOKEN=your-token-here
+EOF
+sudo chmod 600 /etc/rover2.env
+sudo systemctl restart rover2-api
+```
+
+Without this file: `ha_available: false` in `/api/status`, all HA voice commands silently disabled.
+
+**Also see `/etc/rover.env`** (read by rover-camera, *not* rover2-api):
+```
+ROVER_TTS_RATE=0.85
+ROVER_TTS_PITCH=0.9
+ROVER_PI_IP=192.168.250.254
+ROVER_CAMERA_FPS=10
+```

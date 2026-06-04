@@ -8,3 +8,13 @@ venv/
 .vscode/
 .claude/settings.local.json
 .claude/memory/
+
+# TLS private key — never commit
+certs/rover.key
+*.key
+
+# Pi system env file (contains HA_TOKEN and other secrets)
+/etc/rover2.env
+*.deb
+rover.crt
+rover.key

@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-01 (Maintenance audit: docs/code consistency pass; TTS speech bubble v27)
+Last updated: 2026-06-03 (HA integration, AP setup, cert renewal, UI redesign, hailo/CPU fallback)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -256,6 +256,14 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Guard mode** — BLE-triggered arm/disarm (DISARMED → ARMED when beacon RSSI drops below threshold for 10s), Hailo person detection for intruder alert, Home Assistant webhook integration, TTS announcements; enabled=false by default in config.yaml
 - **Camera idle sleep** — when FOLLOW/DETECT both off and ultrasonic variance ≤8 cm for 90s, proxy stops pulling from rover-camera (zero camera bandwidth); wake triggers: ultrasonic delta >8 cm, tracking enable, stream client connect
 - **Thermal monitor** — on every `/api/services` call: read vcgencmd, auto-throttle CPU to 1.6 GHz at 80°C, restore to 1.8 GHz when cool; alerts published to WebSocket
+- **Home Assistant integration (2026-06-03)** — `pi/ha_client.py`: async HAClient (5s timeout, 13 entity name mappings); voice fast-path patterns for room temperatures and home status (`ha_get_temperatures`, `ha_get_status`); `ha_toggle` for switches/lights/media (dangerous, requires confirm). HA at `http://192.168.225.10:8123`; token in `/etc/rover2.env`. `ha_available` in `/api/status`.
+- **ROVER2 WiFi AP (2026-06-03)** — wlan1 RTL8812AU, SSID: ROVER2, 10.0.0.1, 2.4GHz ch 6. Config in `scripts/ap/`. TLS cert covers 10.0.0.1. AP and home WiFi (wlan0) run independently.
+- **TLS cert from homelabca (2026-06-03)** — self-signed cert replaced by homelabca-issued cert via step-ca at `192.168.70.14:9000`. Valid 1 year. SANs: `10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local`. Renewal: `./scripts/renew-cert.sh`.
+- **Web chat auto-fallback (2026-06-03)** — when hailo-ollama returns 500 or is unreachable, web chat (`run_turn()`) falls back to CPU Ollama (llama3.2:1b) automatically. `_hailo_up` flag tracks health per-call; auto-recovers when HAT reconnects. `/api/chat/status` shows actual active backend.
+- **Person detection overlay (2026-06-03)** — `canvas#detection-overlay` on camera feed; JARVIS corner accents; label with confidence % and distance. Clears on camera idle. Requires Hailo HAT for detections.
+- **Main web UI redesigned (2026-06-03)** — brutalist monospace (#4a9eda blue, Courier New, sharp corners). STATUS table now includes WEBSOCKET / SERIAL / MOTORS / FIRMWARE rows at top.
+- **Speech bubble scrolling (2026-06-03)** — face PWA TTS bubble: max-height 40vh, auto-scroll animation for long replies (60px/s), static when text fits, full text (no truncation).
+- **Network-agnostic face PWA (2026-06-03)** — `PI_HOST = window.location.hostname`; camera via HTTPS proxy (`:8082/stream`); works on home WiFi, AP, Tailscale without code changes.
 
 ---
 
@@ -531,16 +539,24 @@ Files on the Pi that are **not** in the Git repo and must be created manually on
 | `/opt/rover2/rover.key` + `rover.crt` | Self-signed TLS cert (SANs: 10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local). Regenerate with `openssl req -x509 ...` if lost. |
 | `/opt/rover2/voices/en_GB-cori-high.onnx` | Piper TTS voice model — downloaded once, excluded from rsync `--delete`. |
 | `/opt/rover2/whisper-models/` | faster-whisper tiny model — downloaded on first transcribe call. |
-| `/etc/rover.env` | Runtime environment variables for camera and TTS (see below). |
+| `/etc/rover.env` | Read by **rover-camera** (not rover2-api): ROVER_TTS_RATE, ROVER_TTS_PITCH, ROVER_PI_IP, ROVER_CAMERA_FPS=10 |
+| `/etc/rover2.env` | Read by **rover2-api** via `EnvironmentFile=-/etc/rover2.env` in systemd unit: HA_URL, HA_TOKEN (see below) |
 
-**`/etc/rover.env` — camera and TTS runtime config:**
+**`/etc/rover2.env` — rover2-api runtime secrets (create manually on fresh Pi):**
+```
+HA_URL=http://192.168.225.10:8123
+HA_TOKEN=<home-assistant-long-lived-token>
+```
+Without this: `ha_available: false`, all HA voice commands silently disabled.
+
+**`/etc/rover.env` — rover-camera runtime config (NOT read by rover2-api):**
 ```
 ROVER_TTS_RATE=0.85
 ROVER_TTS_PITCH=0.9
 ROVER_PI_IP=192.168.250.254
 ROVER_CAMERA_FPS=10
 ```
-Must be created manually on a fresh Pi setup. Not yet sourced by rover2-api (documented for reference — add to `EnvironmentFile=` in `rover2-api.service` when needed).
+Must be created manually on a fresh Pi setup.
 
 ---
 
@@ -566,6 +582,9 @@ Must be created manually on a fresh Pi setup. Not yet sourced by rover2-api (doc
 18. **MegaPi on AA batteries** — Brand new AAs may not provide enough current for arc turns at speed 210. If motors stall, use MegaPi mains or reduce turn_speed.
 19. **MINIMIC1 speaker muting** — Veles-X MINIMIC1 TRRS lavalier mic plugged into A32 causes Android to mute the main speaker (routes to non-existent earpiece). `setSinkId('speaker')` and silent-buffer AudioContext workarounds are ineffective on Android Chrome. Hardware fix (insulating tape / nail polish on the Ring 2 / microphone contact of the TRRS plug to make Android see it as a 3-pole jack) not yet applied. **Workaround: use built-in mic (unplug MINIMIC1).**
 20. **VLM blocked — HailoRT 5.2.0 upgrade required** — `Qwen2-VL-2B-Instruct.hef` requires HailoRT ≥ 5.2.0; current Pi install is on an earlier version. VLM endpoint returns error until runtime is upgraded. Body tracker (YOLO) unaffected.
+21. **Hailo HAT disconnected (2026-06-03)** — waiting for longer spacers to fit active cooling module underneath. CPU-only mode active (`_hailo_up=False`). hailo-ollama warmup will fail at startup until HAT is reconnected. Web chat falls back to llama3.2:1b (~20-30s/reply). Voice fast-path and direct-format tools still work at <1s.
+22. **Wake word unreliable on built-in A32 mic** — low RMS (~1.7%) causes missed wake events. Revisit with MINIMIC1 hardware fix (Ring 2 tape) or mic gain adjustment in face/index.html (`WAKE_RMS_THRESHOLD`).
+23. **Web chat slow without Hailo** — llama3.2:1b on CPU Ollama takes ~20-30s per reply. Auto-recovers to hailo-ollama (~3s) when HAT reconnects.
 
 ---
 
@@ -628,9 +647,14 @@ Must be created manually on a fresh Pi setup. Not yet sourced by rover2-api (doc
 - Service worker on `rover-face-v27`
 
 **Next session priorities:**
-- T1.4–T1.7 follow tests when MegaPi connected (turn accuracy, advance, obstacle steer)
-- MINIMIC1 Ring 2 hardware fix (tape/nail polish on TRRS plug, optional)
-- HailoRT 5.2.0 upgrade to unblock VLM (check Pi OS compatibility first)
+- **Reinstall Hailo HAT** (spacers arrived) → revert to hailo-ollama backend, test follow + VLM
+- T1.4–T1.7 follow tests when HAT reconnected (advance, hold, obstacle, BLE fallback)
+- HA voice: room clarification when query is ambiguous; more natural response style
+- Test `ha_toggle` via voice: "turn on the office light"
+- MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting
+- HailoRT 5.2.0 upgrade to unblock VLM (`docs/HAILORT_UPGRADE.md`)
+- Certificate auto-renewal via cron on central-computer
+- Wake word: tune `WAKE_RMS_THRESHOLD` if still unreliable after mic fix
 
 **Software options:**
 - "ME only" follow: BLE + camera must agree before following (prevents false positives in dense BLE environments)

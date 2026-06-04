@@ -514,7 +514,7 @@ _SPOKEN_TIMEOUT_S = 45.0   # 14s per round with minimal tool set; keep-alive pre
 _KEEPALIVE_INTERVAL_S = 240  # 4 minutes — keeps model loaded between spoken requests
 
 # Conversation routing — 3b for complex queries
-_CPU_3B_MODEL   = "llama3.2:3b"
+_CPU_3B_MODEL   = "llama3.2:1b"
 _CPU_3B_TIMEOUT_S = 90.0  # 3b is larger; 90s sufficient with loaded model
 
 # hailo-ollama supports /api/chat when message content has no newlines.
