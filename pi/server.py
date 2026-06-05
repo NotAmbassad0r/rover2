@@ -625,6 +625,9 @@ def create_app(
 
     @app.on_event("startup")
     async def _start_metrics() -> None:
+        if body_tracker is not None and body_tracker._detect_only_on_start:
+            body_tracker.set_detect_only(True)
+            logger.info("BodyTracker: detect-only enabled on start (config)")
         asyncio.create_task(_metrics_loop())
         if rover_agent is not None:
             asyncio.create_task(rover_agent.warmup())

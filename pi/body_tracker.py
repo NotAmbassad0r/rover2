@@ -66,6 +66,7 @@ class BodyTracker:
         self._forward_speed = int(cfg.get("forward_speed", 120))
         self._frame_interval_s = float(cfg.get("frame_interval_s", 0.10))
         self._hailo_warmup_s = float(cfg.get("hailo_warmup_s", 30.0))
+        self._detect_only_on_start = bool(cfg.get("detect_only_on_start", False))
         self._start_time = 0.0  # set in start()
 
         self._left_bound = 0.5 - self._centre_zone / 2
