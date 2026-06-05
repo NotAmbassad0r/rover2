@@ -623,24 +623,10 @@ class Watchdog:
             logger.debug("Watchdog: ollama idle check: %s", exc)
 
     async def _check_network(self) -> None:
-        # eth0 link state
-        try:
-            eth = await self._run_output(["ip", "link", "show", "eth0"])
-            if "state DOWN" in eth or "state UNKNOWN" in eth and "eth0" in eth:
-                key = "eth0_down"
-                if self._can_act_for(key):
-                    self._record_attempt(key)
-                    ok = await self._run_fix(["sudo", "ip", "link", "set", "eth0", "up"])
-                    self._log("WARNING", "eth0_down", "ip_link_set_up",
-                              "ok" if ok else "failed")
-                    self._emit_alert(key, "warning", "eth0 was DOWN — brought up",
-                                     action_taken="ip link set eth0 up")
-            else:
-                self._clear_alert("eth0_down")
-        except Exception as exc:
-            logger.debug("Watchdog: eth0 check: %s", exc)
+        # eth0 is the Pi's built-in Ethernet — NO-CARRIER means no cable plugged in.
+        # This is normal and expected; do not attempt to bring it up.
 
-        # wlan0 association
+        # wlan0 association (home WiFi — station mode)
         try:
             wlan = await self._run_output(["iwconfig", "wlan0"])
             if "Not-Associated" in wlan or "unassociated" in wlan.lower():
@@ -662,21 +648,33 @@ class Watchdog:
         except Exception as exc:
             logger.debug("Watchdog: wlan0 check: %s", exc)
 
-        # wlan1 AP mode
+        # wlan1 AP mode + IP — RTL8812AU hotspot (ROVER2, 10.0.0.1)
+        # Restart order: systemd-networkd (assigns IP) → hostapd (AP) → dnsmasq (DHCP)
         try:
-            wlan1 = await self._run_output(["iw", "dev", "wlan1", "info"])
-            if wlan1 and "type AP" not in wlan1:
+            wlan1_info = await self._run_output(["sudo", "iw", "dev", "wlan1", "info"])
+            wlan1_addr = await self._run_output(["ip", "addr", "show", "wlan1"])
+            ap_ok = "type AP" in wlan1_info and "ROVER2" in wlan1_info
+            ip_ok = "10.0.0.1" in wlan1_addr
+            if ap_ok and ip_ok:
+                self._clear_alert("wlan1_ap")
+            else:
+                self._issue_detected = True
                 key = "wlan1_ap"
                 if self._can_act_for(key):
                     self._record_attempt(key)
                     await self._run_fix(["sudo", "systemctl", "restart",
-                                         "rover2-wlan1-ip.service"])
+                                         "systemd-networkd"])
+                    await asyncio.sleep(2.0)
                     ok = await self._run_fix(["sudo", "systemctl", "restart", "hostapd"])
-                    self._log("WARNING", "wlan1_not_ap", "restart_hostapd",
+                    await asyncio.sleep(2.0)
+                    await self._run_fix(["sudo", "systemctl", "restart", "dnsmasq"])
+                    reason = "no IP (10.0.0.1 missing)" if ap_ok else "AP mode lost"
+                    self._log("WARNING", f"wlan1_{reason.replace(' ', '_')}",
+                              "restart_networkd_hostapd_dnsmasq",
                               "ok" if ok else "failed")
                     self._emit_alert(key, "warning",
-                                     "wlan1 lost AP mode — restarted hostapd",
-                                     action_taken="restart hostapd rover2-wlan1-ip")
+                                     f"wlan1 AP issue ({reason}) — restarted AP stack",
+                                     action_taken="restart networkd → hostapd → dnsmasq")
         except Exception as exc:
             logger.debug("Watchdog: wlan1 AP check: %s", exc)
 
@@ -715,6 +713,37 @@ class Watchdog:
                             "Watchdog: hailo module present but tracker not ready")
         except Exception as exc:
             logger.debug("Watchdog: hailo module check: %s", exc)
+
+    async def _check_wifi_driver(self) -> None:
+        """Verify rtw88_8812au (RTL8812AU wlan1 AP adapter) kernel module is loaded."""
+        try:
+            lsmod = await self._run_output(["lsmod"])
+            if "rtw88_8812au" in lsmod:
+                self._clear_alert("wifi_driver")
+                return
+            self._issue_detected = True
+            key = "wifi_driver"
+            if self._can_act_for(key):
+                self._record_attempt(key)
+                ok = await self._run_fix(["sudo", "modprobe", "rtw88_8812au"])
+                self._log("ERROR", "rtw88_8812au_missing", "modprobe_rtw88_8812au",
+                          "ok" if ok else "FAILED")
+                if ok:
+                    await asyncio.sleep(2.0)
+                    await self._run_fix(["sudo", "systemctl", "restart", "hostapd"])
+                    self._clear_alert(key)
+                else:
+                    self._emit_alert(key, "critical",
+                                     "RTL8812AU DRIVER NOT LOADED — modprobe rtw88_8812au "
+                                     "failed. Check USB connection.",
+                                     action_taken="modprobe rtw88_8812au (failed)")
+            else:
+                self._emit_alert(key, "critical",
+                                 "RTL8812AU DRIVER NOT LOADED — retries exhausted. "
+                                 "Check USB connection.",
+                                 action_taken="modprobe rtw88_8812au (exhausted)")
+        except Exception as exc:
+            logger.debug("Watchdog: wifi_driver check: %s", exc)
 
     async def _check_camera_frames(self) -> None:
         try:
@@ -1203,6 +1232,7 @@ class Watchdog:
             self._check_services,
             self._check_network,
             self._check_hailo_module,
+            self._check_wifi_driver,
             self._check_camera_frames,
             self._check_megapi_serial,
             self._check_robot_stuck,

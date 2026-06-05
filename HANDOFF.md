@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-05 (watchdog expanded to full autonomous health monitor; see config watchdog section for all knobs)
+Last updated: 2026-06-05 (RTL8812AU AP recovery; watchdog fixes: correct wlan1 stack restart + wifi driver check)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -50,7 +50,7 @@ Hard rules applied to every change:
 - Pi IP on AP network: `10.0.0.1` · DHCP range: `10.0.0.10–10.0.0.50`
 - Web UI from AP: **`https://10.0.0.1:8082/`**
 - DNS: `rover.local` → `10.0.0.1` (via dnsmasq on wlan1)
-- Services: `hostapd` + `dnsmasq` + `rover2-wlan1-ip.service` (static IP oneshot)
+- Services: `hostapd` + `dnsmasq` + `systemd-networkd` (`10-rover2-ap.network` assigns 10.0.0.1/24 with `ConfigureWithoutCarrier=yes`)
 - wlan0 and wlan1 run independently — AP does not affect home WiFi
 
 ### SSH
@@ -208,7 +208,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 | `rover2-restore-wifi.service` | — | Boot: re-apply WiFi from `/boot/firmware/network-config` |
 | `hostapd.service` | — | ROVER2 WiFi AP on wlan1 (RTL8812AU), SSID: ROVER2, ch 6 |
 | `dnsmasq.service` | — | DHCP + DNS for AP network (10.0.0.10–50, rover.local) |
-| `rover2-wlan1-ip.service` | — | Sets static IP 10.0.0.1/24 on wlan1 before hostapd starts |
+| `systemd-networkd` | — | Assigns 10.0.0.1/24 to wlan1 via `/etc/systemd/network/10-rover2-ap.network` (`ConfigureWithoutCarrier=yes`) |
 | `rover2-virtual-usb-dongle.service` | — | Optional ~12% CPU keep-alive for Viking bank |
 
 ---
@@ -613,6 +613,12 @@ Must be created manually on a fresh Pi setup.
 24. **Hailo PCIe driver not loaded after kernel upgrade (2026-06-05)** — after `apt upgrade` upgraded kernel to `6.18.33+rpt-rpi-2712`, the `hailo1x_pci` module was missing for the new kernel. Driver source at `/usr/src/hailort-pcie-driver/linux/pcie/` has `dkms.conf.in` + `Makefile`. Fix applied: `cd /usr/src/hailort-pcie-driver/linux/pcie && sudo make install_dkms` — copies source to `/usr/src/hailo1x_pci-5.1.1/`, generates `dkms.conf` (with `AUTOINSTALL=yes`), builds and installs module. DKMS now registered: `dkms status` shows `hailo1x_pci/5.1.1, 6.18.33+rpt-rpi-2712: installed`. **Prevention:** `AUTOINSTALL=yes` in `dkms.conf` means DKMS rebuilds automatically on future kernel upgrades. Alternatively pin the kernel: `sudo apt-mark hold raspberrypi-kernel`. **Recovery:** if driver is missing after an upgrade, run `sudo dkms autoinstall` or repeat the `make install_dkms` step above.
 22. **Wake word unreliable on built-in A32 mic** — low RMS (~1.7%) causes missed wake events. Revisit with MINIMIC1 hardware fix (Ring 2 tape) or mic gain adjustment in face/index.html (`WAKE_RMS_THRESHOLD`).
 23. **Web chat slow without Hailo** — llama3.2:1b on CPU Ollama takes ~20-30s per reply. Auto-recovers to hailo-ollama (~3s) when HAT reconnects.
+27. **RTL8812AU AP carrier loss after kernel upgrade (2026-06-05)** — after kernel `6.18.33+rpt-rpi-2712`, the wlan1 AP interface (RTL8812AU, `rtw88_8812au` in-kernel driver — NOT out-of-tree `88xxau` DKMS) lost carrier at runtime. Root cause: `/etc/systemd/network/10-rover2-ap.network` was missing `ConfigureWithoutCarrier=yes`, so systemd-networkd refused to apply the 10.0.0.1/24 address when carrier was absent. The AP ran but had no IP → dnsmasq `error binding DHCP socket to device wlan1`.
+   **Fix applied:** Added `ConfigureWithoutCarrier=yes` and `RequiredForOnline=no` to `10-rover2-ap.network`; added `ctrl_interface=/run/hostapd` to `hostapd.conf` (enables `hostapd_cli` for watchdog checks); restarted stack in order: `systemd-networkd` → `hostapd` → `dnsmasq`.
+   **DKMS note:** `rtw88_8812au` is an in-kernel driver (shipped with `6.18.33`). DKMS is NOT installed on this Pi and is NOT needed for the RTL8812AU. Do not run `dkms autoinstall` for this adapter.
+   **Watchdog:** `_check_wifi_driver()` monitors `rtw88_8812au` in `lsmod`, attempts `modprobe rtw88_8812au` if missing. `_check_network()` corrected: eth0 check removed (eth0 is built-in GbE with no cable — NO-CARRIER is normal); wlan1 check now verifies both `type AP` in `iw dev` AND `10.0.0.1` in `ip addr`, restarts stack in correct order if either is missing.
+   **Recovery:** `sudo systemctl restart systemd-networkd && sleep 2 && sudo systemctl restart hostapd && sleep 2 && sudo systemctl restart dnsmasq`
+
 26. **hailo-ollama and VLM are mutually exclusive on HailoRT 5.2.0** — The Hailo-10H firmware (5.2.0) only allows ONE GenAI session at a time: either the LLM session (port 12145, used by hailo-ollama) OR the VLM session (port 12147, used by VLM engine). When hailo-ollama is running, VLM gets `HAILO_COMMUNICATION_CLOSED(62)`. **Current decision:** hailo-ollama disabled (systemd override at `/etc/systemd/system/hailo-ollama.service.d/override.conf` sets `ExecStart=/bin/true`, `Restart=no`); VLM owns the Hailo chip for GenAI; voice agent falls back to CPU `llama3.2:1b` (~20-30s). **To restore hailo-ollama:** delete the override file and edit `rover2-api.service` to add back `Wants=hailo-ollama.service`. Resolution requires either: (a) Hailo firmware update that lifts the single-session GenAI limit, or (b) time-multiplexed session management in rover2-api (open/close GenAI session per request rather than holding it open permanently). Body tracker (VDMA inference, NOT GenAI) is unaffected by either session.
 
 ---
@@ -678,7 +684,7 @@ Must be created manually on a fresh Pi setup.
 
 **Backlog:** `docs/BACKLOG.md` — confirmed desirable work not yet scheduled (web GUI audit, TTS speed, GenAI session multiplexing)
 
-**Auto-handled by watchdog (2026-06-05):** service restarts (hostapd/dnsmasq/ssh/tailscaled), eth0 link recovery, wlan0 reconnect, wlan1 AP mode restore, Hailo PCIe module load, camera frame stall, MegaPi serial reconnect, robot stuck detection, stale safety block clear, ollama idle stop, CPU sustained high (ollama), thermal follow-disable (85°C) + TTS (90°C), disk low vacuum, disk critical metrics-disable, TLS cert expiry alert + auto-renew, boot-partition rw guard, env/binary file presence warnings.
+**Auto-handled by watchdog (2026-06-05):** service restarts (hostapd/dnsmasq/ssh/tailscaled), wlan0 reconnect, wlan1 AP stack restore (checks AP mode + 10.0.0.1 IP, restarts networkd→hostapd→dnsmasq), RTL8812AU driver reload (`rtw88_8812au`), Hailo PCIe module load, camera frame stall, MegaPi serial reconnect, robot stuck detection, stale safety block clear, ollama idle stop, CPU sustained high (ollama), thermal follow-disable (85°C) + TTS (90°C), disk low vacuum, disk critical metrics-disable, TLS cert expiry alert + auto-renew, boot-partition rw guard, env/binary file presence warnings. Note: eth0 is built-in GbE with no cable — NO-CARRIER is normal; watchdog no longer acts on eth0.
 
 **Next session priorities:**
 - **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)** — options: (a) time-multiplexed session open/close per request; (b) shared asyncio lock queuing requests; (c) wait for Hailo firmware lifting the single-session limit; (d) verify ROUND_ROBIN doesn't apply to GenAI sessions
