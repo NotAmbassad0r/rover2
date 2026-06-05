@@ -973,7 +973,7 @@ def _fmt_alert_diagnosis(alerts_data: Any, diag: Any, procs: Any) -> str:
         for p in plist[:8]:
             lines.append(
                 f"  {p.get('name', '?')} (pid {p.get('pid', '?')}): "
-                f"{p.get('cpu_percent', '?')}% CPU, {p.get('memory_mb', '?')} MB"
+                f"{p.get('cpu_pct', '?')}% CPU, {p.get('mem_mb', '?')} MB"
             )
     alert_list = alerts_data.get("alerts") or []
     lines.append(

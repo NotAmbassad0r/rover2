@@ -84,7 +84,7 @@ def build_solutions(
     top = processes[:3] if processes else []
     for p in top:
         name = (p.get("name") or "").lower()
-        pct = p.get("cpu_percent")
+        pct = p.get("cpu_pct")
         if isinstance(pct, (int, float)) and pct >= 25:
             if "ollama" in name:
                 steps.append("Top CPU is ollama — run: sudo systemctl stop ollama.service")
