@@ -147,13 +147,23 @@ memory_watchdog:
 
 watchdog:
   enabled: true
-  check_interval_s: 60     # idle check interval
+  interval_s: 30           # check interval (was check_interval_s: 60)
   memory_warn_mb: 420      # log warning only
   memory_critical_mb: 500  # action: restart ollama
   temp_warn_c: 78          # log warning only
-  temp_critical_c: 85      # action: disable tracking
-  action_window_s: 3600    # 1-hour window for max_actions counter
+  temp_critical_c: 85      # existing: action: disable tracking via API
+  action_window_s: 3600    # 1-hour window for global max_actions counter
   max_actions: 3           # after 3 actions: halt auto-fix, speak alert
+  # ── New expanded checks ──────────────────────────────────────────────────
+  ollama_idle_stop_minutes: 2   # stop ollama when CPU < 1% for this long
+  cpu_sustained_percent: 90     # CPU% that triggers sustained-high check
+  cpu_sustained_seconds: 60     # seconds above threshold before action
+  disk_warn_gb: 2               # free GB — vacuum journal + pip cache
+  disk_critical_gb: 0.5         # free GB — disable SQLite metrics writes
+  cert_warn_days: 30            # days until TLS cert expiry → alert
+  cert_critical_days: 7         # days until expiry → attempt renew
+  temp_follow_disable_c: 85     # °C → disable FOLLOW/DETECT via body_tracker
+  temp_critical_c: 90           # °C → speak TTS warning (overrides old temp_critical_c)
 
 firmware:
   hex_path: /tmp/rover2_firmware.hex

@@ -56,6 +56,11 @@ class SafetyMonitor:
     def set_safe_distance_cm(self, cm: int) -> None:
         self._safe_distance_cm = int(cm)
 
+    def clear_block(self) -> None:
+        """Manually clear a stale forward-blocked state (watchdog remediation only)."""
+        with self._lock:
+            self._forward_blocked = False
+
     @property
     def distance_cm(self) -> int | None:
         with self._lock:

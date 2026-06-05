@@ -191,6 +191,10 @@ class BodyTracker:
             return False
         return True
 
+    @property
+    def frames_inferred(self) -> int:
+        return self._frames_inferred
+
     def is_past_warmup(self) -> bool:
         """True once the Hailo warmup window has elapsed since start()."""
         if self._start_time == 0.0:

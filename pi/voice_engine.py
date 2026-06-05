@@ -23,6 +23,20 @@ logger = logging.getLogger(__name__)
 _VOICES_DIR = Path("/opt/rover2/voices")
 _PIPER_BIN = Path("/opt/rover2/piper/piper")
 
+# ── Voice activity flag — set by server.py at conversation start/end ──────────
+_voice_active: bool = False
+
+
+def is_active() -> bool:
+    """True while a voice conversation session is in progress."""
+    return _voice_active
+
+
+def set_active(active: bool) -> None:
+    global _voice_active
+    _voice_active = active
+
+
 # ── Runtime config (updated by configure() called from server.py) ─────────────
 _tts_cfg: dict = {
     "tts_voice_en": "en_GB-cori-high",

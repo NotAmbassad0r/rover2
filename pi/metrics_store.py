@@ -11,6 +11,24 @@ _DB_PATH = Path(__file__).parent / "data" / "metrics.db"
 DEFAULT_RETENTION_DAYS = 7
 
 _db: sqlite3.Connection | None = None
+_writes_enabled: bool = True
+
+
+def disable_writes() -> None:
+    """Stop SQLite writes (disk-critical remediation). Reads and queries continue."""
+    global _writes_enabled
+    _writes_enabled = False
+    import logging
+    logging.getLogger(__name__).warning("metrics_store: writes DISABLED (disk critical)")
+
+
+def enable_writes() -> None:
+    global _writes_enabled
+    _writes_enabled = True
+
+
+def writes_enabled() -> bool:
+    return _writes_enabled
 
 
 def _open() -> sqlite3.Connection:
@@ -38,6 +56,8 @@ def db() -> sqlite3.Connection:
 
 
 def write(points: dict[str, float | None], ts: int | None = None) -> None:
+    if not _writes_enabled:
+        return
     rows = [(ts or int(time.time()), k, v) for k, v in points.items() if v is not None]
     if not rows:
         return

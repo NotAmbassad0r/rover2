@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-05 (HailoRT 5.2.0 upgrade; VLM working; hailo-ollama disabled — see issue #26; backlog at docs/BACKLOG.md)
+Last updated: 2026-06-05 (watchdog expanded to full autonomous health monitor; see config watchdog section for all knobs)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -262,6 +262,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Guard mode** — BLE-triggered arm/disarm (DISARMED → ARMED when beacon RSSI drops below threshold for 10s), Hailo person detection for intruder alert, Home Assistant webhook integration, TTS announcements; enabled=false by default in config.yaml
 - **Camera idle sleep** — when FOLLOW/DETECT both off and ultrasonic variance ≤8 cm for 90s, proxy stops pulling from rover-camera (zero camera bandwidth); wake triggers: ultrasonic delta >8 cm, tracking enable, stream client connect
 - **Thermal monitor** — on every `/api/services` call: read vcgencmd, auto-throttle CPU to 1.6 GHz at 80°C, restore to 1.8 GHz when cool; alerts published to WebSocket
+- **Autonomous watchdog (2026-06-05)** — `pi/watchdog.py` expanded to full health monitor; 30s interval; 15 new check domains: services (hostapd/dnsmasq/ssh/tailscaled), network (eth0/wlan0/wlan1-AP), Hailo PCIe module, camera frame stall, MegaPi serial, robot stuck, person lost, stale safety block, memory (stop-ollama + rover2-api restart), CPU sustained high, thermal (follow-disable at 85°C, TTS at 90°C), disk (GB-based with journalctl vacuum + metrics-disable), TLS cert expiry, boot-partition rw guard, env/binary file presence. Per-check retry limit: 3 attempts / 10 min then persistent WS alert. Alerts broadcast to WebSocket `alerts` field. Auto-handled: rover2-api overheating, disk low, stale safety block, Hailo driver unloaded, MegaPi serial drop, robot stuck.
 - **Home Assistant integration (2026-06-03)** — `pi/ha_client.py`: async HAClient (5s timeout, 13 entity name mappings); voice fast-path patterns for room temperatures and home status (`ha_get_temperatures`, `ha_get_status`); `ha_toggle` for switches/lights/media (dangerous, requires confirm). HA at `http://192.168.225.10:8123`; token in `/etc/rover2.env`. `ha_available` in `/api/status`.
 - **ROVER2 WiFi AP (2026-06-03)** — wlan1 RTL8812AU, SSID: ROVER2, 10.0.0.1, 2.4GHz ch 6. Config in `scripts/ap/`. TLS cert covers 10.0.0.1. AP and home WiFi (wlan0) run independently.
 - **TLS cert from homelabca (2026-06-03)** — self-signed cert replaced by homelabca-issued cert via step-ca at `192.168.70.14:9000`. Valid 1 year. SANs: `10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local`. Renewal: `./scripts/renew-cert.sh`.
@@ -510,6 +511,18 @@ ble_tracker:
   beacon_uuid: "0000fcf1-0000-1000-8000-00805f9b34fb"   # Samsung Z Flip 6
   device_name: "-Lars's Z flip 6"
   device_mac: "F0:05:1B:0A:E0:4C"
+
+watchdog:
+  interval_s: 30                 # check interval (30s max)
+  ollama_idle_stop_minutes: 2    # stop ollama when CPU < 1% for this long
+  cpu_sustained_percent: 90      # threshold for sustained CPU alert
+  cpu_sustained_seconds: 60      # seconds above threshold before action
+  disk_warn_gb: 2                # free GB — vacuum journal + pip cache
+  disk_critical_gb: 0.5          # free GB — disable SQLite metrics writes
+  cert_warn_days: 30             # days until TLS cert expiry → alert
+  cert_critical_days: 7          # days until expiry → attempt renew
+  temp_follow_disable_c: 85      # °C → disable FOLLOW/DETECT via body_tracker
+  temp_critical_c: 90            # °C → TTS warning (if not in conversation)
 ```
 
 ---
@@ -663,7 +676,9 @@ Must be created manually on a fresh Pi setup.
 - Hooks into `_ttsSpeak()` and `_ttsSpeakAsync()` — shows at speak start, hides at onend/onerror
 - Service worker on `rover-face-v27`
 
-**Backlog:** `docs/BACKLOG.md` — confirmed desirable work not yet scheduled (web GUI audit, etc.)
+**Backlog:** `docs/BACKLOG.md` — confirmed desirable work not yet scheduled (web GUI audit, TTS speed, GenAI session multiplexing)
+
+**Auto-handled by watchdog (2026-06-05):** service restarts (hostapd/dnsmasq/ssh/tailscaled), eth0 link recovery, wlan0 reconnect, wlan1 AP mode restore, Hailo PCIe module load, camera frame stall, MegaPi serial reconnect, robot stuck detection, stale safety block clear, ollama idle stop, CPU sustained high (ollama), thermal follow-disable (85°C) + TTS (90°C), disk low vacuum, disk critical metrics-disable, TLS cert expiry alert + auto-renew, boot-partition rw guard, env/binary file presence warnings.
 
 **Next session priorities:**
 - **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)** — options: (a) time-multiplexed session open/close per request; (b) shared asyncio lock queuing requests; (c) wait for Hailo firmware lifting the single-session limit; (d) verify ROUND_ROBIN doesn't apply to GenAI sessions

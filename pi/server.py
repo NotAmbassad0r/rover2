@@ -197,7 +197,13 @@ def create_app(
         guard_controller.set_speak_fn(_guard_speak_fn)
 
     # Watchdog — self-healing monitor (asyncio task, no separate service)
-    watchdog = _Watchdog(config, audio_router=audio_router) if _WATCHDOG else None  # type: ignore[assignment]
+    watchdog = _Watchdog(  # type: ignore[assignment]
+        config,
+        audio_router=audio_router,
+        body_tracker=body_tracker,
+        safety_monitor=safety_monitor,
+        megapi=megapi,
+    ) if _WATCHDOG else None
 
     app = FastAPI(title="ROVER2", version="2.0.0")
     app.add_middleware(
@@ -532,6 +538,8 @@ def create_app(
                     all_alerts.append(_camera_alert)
                 if _ollama_alert:
                     all_alerts.append(_ollama_alert)
+                if watchdog is not None:
+                    all_alerts.extend(watchdog.get_persistent_alerts())
                 # Proactive speech event detection
                 nonlocal _prev_person_detected, _prev_tracking_active
                 nonlocal _prev_forward_blocked, _prev_thermal_level, _prev_camera_sleeping
@@ -1391,6 +1399,8 @@ def create_app(
         # Pause FOLLOW on first call in this conversation
         if not _conversation_active:
             _conversation_active = True
+            if _VOICE:
+                _voice_engine.set_active(True)
             if body_tracker is not None and body_tracker.enabled:
                 _tracking_was_enabled = True
                 body_tracker.set_enabled(False)
@@ -1407,6 +1417,8 @@ def create_app(
             await asyncio.sleep(60.0)
             if _conversation_active:
                 _conversation_active = False
+                if _VOICE:
+                    _voice_engine.set_active(False)
                 if _tracking_was_enabled and body_tracker is not None:
                     body_tracker.set_enabled(True)
                     _tracking_was_enabled = False
@@ -1432,6 +1444,8 @@ def create_app(
             if _conversation_timeout_task is not None and not _conversation_timeout_task.done():
                 _conversation_timeout_task.cancel()
             _conversation_active = False
+            if _VOICE:
+                _voice_engine.set_active(False)
             if _tracking_was_enabled and body_tracker is not None:
                 body_tracker.set_enabled(True)
                 _tracking_was_enabled = False
@@ -1462,6 +1476,8 @@ def create_app(
             _conversation_timeout_task.cancel()
 
         _conversation_active = False
+        if _VOICE:
+            _voice_engine.set_active(False)
         if _tracking_was_enabled and body_tracker is not None:
             body_tracker.set_enabled(True)
             _tracking_was_enabled = False
