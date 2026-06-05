@@ -50,3 +50,30 @@ already externalised; otherwise update the constants directly and consider movin
 them to config.yaml as part of this task.
 
 Priority: low
+
+---
+
+## AI / Voice
+
+### Re-enable hailo-ollama alongside VLM (GenAI session multiplexing)
+
+HailoRT 5.2.0 firmware only supports one GenAI session at a time. hailo-ollama
+(voice agent LLM fast-path, ~3s) and VLM (scene description) cannot run simultaneously.
+Current state: hailo-ollama disabled, voice agent falls back to CPU llama3.2:1b (~20-30s).
+
+Options to investigate:
+1. **Time-multiplexed sessions** — rover2-api opens a GenAI session per request and
+   closes it immediately after, rather than holding it open. Requires changes to
+   hailo-ollama and vlm_engine.py session lifecycle. Risk: session open/close overhead
+   may add latency.
+2. **Request queue with single session token** — a shared asyncio lock that hailo-ollama
+   and vlm_engine.py both acquire before opening a GenAI session. One runs at a time,
+   other waits. Simple but adds latency when both are requested concurrently.
+3. **Hailo firmware update** — monitor Hailo developer zone for 5.x firmware that lifts
+   the single-session limit. No code change needed if this lands.
+4. **Dedicated session per model at startup, shared via ROUND_ROBIN** — check if
+   ROUND_ROBIN scheduler used by body tracker applies to GenAI sessions in 5.2.0.
+   May not — body tracker uses VDMA not GenAI.
+
+Impact: voice agent response time 20-30s vs 3s. High priority for demo quality.
+Priority: high
