@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-05 (watchdog/AP state in web UI and face PWA; face info page; new API endpoints)
+Last updated: 2026-06-06 (hailo-ollama LLM benchmark; llama3.2:3b vs qwen2.5-instruct:1.5b; decision: keep qwen)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -631,7 +631,7 @@ Must be created manually on a fresh Pi setup.
    **Watchdog:** `_check_wifi_driver()` monitors `rtw88_8812au` in `lsmod`, attempts `modprobe rtw88_8812au` if missing. `_check_network()` corrected: eth0 check removed (eth0 is built-in GbE with no cable — NO-CARRIER is normal); wlan1 check now verifies both `type AP` in `iw dev` AND `10.0.0.1` in `ip addr`, restarts stack in correct order if either is missing.
    **Recovery:** `sudo systemctl restart systemd-networkd && sleep 2 && sudo systemctl restart hostapd && sleep 2 && sudo systemctl restart dnsmasq`
 
-26. **hailo-ollama and VLM are mutually exclusive on HailoRT 5.2.0** — The Hailo-10H firmware (5.2.0) only allows ONE GenAI session at a time: either the LLM session (port 12145, used by hailo-ollama) OR the VLM session (port 12147, used by VLM engine). When hailo-ollama is running, VLM gets `HAILO_COMMUNICATION_CLOSED(62)`. **Current decision:** hailo-ollama disabled (systemd override at `/etc/systemd/system/hailo-ollama.service.d/override.conf` sets `ExecStart=/bin/true`, `Restart=no`); VLM owns the Hailo chip for GenAI; voice agent falls back to CPU `llama3.2:1b` (~20-30s). **To restore hailo-ollama:** delete the override file and edit `rover2-api.service` to add back `Wants=hailo-ollama.service`. Resolution requires either: (a) Hailo firmware update that lifts the single-session GenAI limit, or (b) time-multiplexed session management in rover2-api (open/close GenAI session per request rather than holding it open permanently). Body tracker (VDMA inference, NOT GenAI) is unaffected by either session.
+26. **hailo-ollama and VLM are mutually exclusive on HailoRT 5.2.0** — The Hailo-10H firmware (5.2.0) only allows ONE GenAI session at a time: either the LLM session (hailo-ollama, port **8000**) OR the VLM session (VLM engine, Qwen2-VL-2B). When hailo-ollama is running, VLM gets `HAILO_COMMUNICATION_CLOSED(62)`. **Current decision:** hailo-ollama disabled (systemd override at `/etc/systemd/system/hailo-ollama.service.d/override.conf` sets `ExecStart=/bin/true`, `Restart=no`); VLM owns the Hailo chip for GenAI; voice agent falls back to CPU `llama3.2:1b` (~20-30s). **To benchmark hailo-ollama:** stop rover2-api, run `HAILO_OLLAMA_VDEVICE_GROUP_ID=rover2 HAILO_OLLAMA_GENERATION_TIMEOUT=120 /usr/local/bin/hailo-ollama serve`, test, then stop and restart rover2-api. Resolution requires either: (a) Hailo firmware update that lifts the single-session GenAI limit, or (b) time-multiplexed session management (open/close GenAI session per request). Body tracker (VDMA inference, NOT GenAI) is unaffected by either session. See benchmark results in "Next session" section above.
 
 ---
 
@@ -714,6 +714,28 @@ Must be created manually on a fresh Pi setup.
 - Face PWA: PAGE 3 info page (ROVER2 overview, capabilities, voice, architecture, live status from WS, built-by)
 - Face PWA: 4-page swipe layout (help ← face → ctrl → info); indicator dots updated; sw.js bumped to `rover-face-v34`
 - Watchdog: `last_cycle_iso`, `last_action`, `last_action_ts` properties added
+
+**hailo-ollama LLM benchmark (2026-06-06):** ✓ done — decision: **KEEP qwen2.5-instruct:1.5b**
+
+Benchmark method: hailo-ollama started manually (bypassing systemd override); rover2-api stopped to free Hailo GenAI session; both models tested on same hardware with same prompts.
+
+| Metric | qwen2.5-instruct:1.5b | llama3.2:3b | Notes |
+|--------|----------------------|-------------|-------|
+| Hot TPS | **6.3–6.4 t/s** | 2.5 t/s | Hot = model already loaded |
+| Avg TPS (incl. cold) | 4.5 t/s | 1.9 t/s | First run includes ~80s HEF load |
+| Hot voice latency | **1.6–3.3 s** (OK) | 18–26 s (TOO SLOW) | 20-token ROVER reply |
+| Tool intent (JSON) | 12% | 12% | Neither supports native tool_calls; both poor at JSON format |
+| Calls "sir" | 83% | **100%** | llama3.2:3b better persona adherence |
+| Short replies | 67% | **83%** | llama3.2:3b more concise |
+| Forbidden words | 0 | 0 | Neither said "certainly" / "absolutely" |
+| Context injection | weak | **better** | llama3.2:3b uses tool result more naturally |
+| qwen2-1.5b-FC-v1 | — | — | Not available in hailo format (HEF not found) |
+
+**Decision: KEEP qwen2.5-instruct:1.5b.** Task criteria: switch if latency <6s + precision ≥ current.
+llama3.2:3b hot latency 18–26 s definitively fails the <6 s threshold. Quality marginally better but irrelevant given speed.
+llama3.2:3b HEF deleted from hailo-ollama store to free ~3.4 GB. qwen2.5-instruct:1.5b remains.
+
+hailo-ollama note: GenAI session conflict with VLM confirmed. To run a benchmark again: stop rover2-api first, then start hailo-ollama directly (`HAILO_OLLAMA_VDEVICE_GROUP_ID=rover2 HAILO_OLLAMA_GENERATION_TIMEOUT=120 /usr/local/bin/hailo-ollama serve`). Port 8000 (not 12145 — old comment in issue #26 was wrong).
 
 **Next session priorities:**
 - **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
