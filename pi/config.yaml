@@ -55,7 +55,7 @@ body_tracker:
   target_bbox_width: 0.35
   turn_speed: 210
   forward_speed: 170
-  frame_interval_s: 0.25   # 4fps — reduces Hailo power draw on battery
+  frame_interval_s: 0.5    # 2fps inference — stream read at full rate but imdecode skipped between frames
   hailo_warmup_s: 30.0     # delay before loading Hailo model — lets CPU idle after boot
   ble_follow_enabled: false # BLE fallback off by default — enable via UI BLE button
   detect_only_on_start: true # watch for people on boot; rover does NOT follow until explicitly enabled

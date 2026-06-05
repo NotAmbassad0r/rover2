@@ -556,6 +556,7 @@ class BodyTracker:
 
                 now = time.monotonic()
                 if now - last_infer < self._frame_interval_s:
+                    buf = buf[-256:]  # discard buffered frames — avoids decode at full stream rate
                     continue
                 last_infer = now
 
