@@ -1,0 +1,13 @@
+[Unit]
+Description=ROVER2 AP boot-time state sync (enable/disable based on wlan0)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/bin/rover2-ap-sync.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

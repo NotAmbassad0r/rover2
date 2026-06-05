@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-05 (RTL8812AU AP recovery; watchdog fixes: correct wlan1 stack restart + wifi driver check)
+Last updated: 2026-06-05 (watchdog verified; RTL8812AU confirmed in-kernel; AP auto-toggle implemented and verified)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -40,7 +40,7 @@ Hard rules applied to every change:
 |-----------|-----|-------|
 | eth0 | **<ROVER_ETH_IP>** | Preferred — use for deploy, UI, SSH |
 | wlan0 | <ROVER_WIFI_IP> | Home/office network (stays connected) |
-| wlan1 (AP) | **10.0.0.1** | ROVER2 AP — always-on, SSID: ROVER2 |
+| wlan1 (AP) | **10.0.0.1** | ROVER2 AP — on when away from home; auto-off on home WiFi |
 | Tailscale | <ROVER_TAILSCALE_IP> | Remote access |
 
 **Dev machine has no route to <ROVER_WIFI_IP>** — deploy always via eth0 (rover-eth). Use WiFi IP only from a device on the same WiFi (phone, laptop on local network).
@@ -51,7 +51,9 @@ Hard rules applied to every change:
 - Web UI from AP: **`https://10.0.0.1:8082/`**
 - DNS: `rover.local` → `10.0.0.1` (via dnsmasq on wlan1)
 - Services: `hostapd` + `dnsmasq` + `systemd-networkd` (`10-rover2-ap.network` assigns 10.0.0.1/24 with `ConfigureWithoutCarrier=yes`)
-- wlan0 and wlan1 run independently — AP does not affect home WiFi
+- **Auto-toggle**: NM dispatcher (`scripts/ap/99-rover2-ap`) stops AP when wlan0 connects to home WiFi; starts AP when wlan0 disconnects. Saves ~0.5–1W on battery. Boot-time state synced by `rover2-ap-boot.service` (runs `scripts/ap/rover2-ap-sync.sh` 5s after NM ready).
+- Driver: `rtw88_8812au` (in-kernel, no DKMS — survives kernel upgrades automatically)
+- wlan0 and wlan1 are independent — AP does not affect home WiFi connection
 
 ### SSH
 
@@ -172,6 +174,9 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
     pi/config_runtime.py     Live patch application (apply_config_patch())
     pi/config_store.py       YAML validation, merge, and persistence for tuning endpoint
     pi/firmware_flash.py     OTA AVR firmware flash via avrdude (POST /api/firmware/flash)
+    pi/watchdog.py           Autonomous health monitor: services, network, Hailo, serial, memory,
+                             CPU, thermal, disk, TLS cert, boot partition, env files; auto-remediates
+                             where safe (30s cycle, per-check retry limit, wlan0-aware AP logic)
 
     ── ROVER Face PWA ────────────────────────────────────────────────────────────
     face/index.html     Samsung Galaxy A32 voxel face (canvas, 8 states, fullscreen portrait)
@@ -209,6 +214,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 | `hostapd.service` | — | ROVER2 WiFi AP on wlan1 (RTL8812AU), SSID: ROVER2, ch 6 |
 | `dnsmasq.service` | — | DHCP + DNS for AP network (10.0.0.10–50, rover.local) |
 | `systemd-networkd` | — | Assigns 10.0.0.1/24 to wlan1 via `/etc/systemd/network/10-rover2-ap.network` (`ConfigureWithoutCarrier=yes`) |
+| `rover2-ap-boot.service` | — | Boot-time AP state sync: stops AP if wlan0 connected, starts if not |
 | `rover2-virtual-usb-dongle.service` | — | Optional ~12% CPU keep-alive for Viking bank |
 
 ---
@@ -265,6 +271,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Autonomous watchdog (2026-06-05)** — `pi/watchdog.py` expanded to full health monitor; 30s interval; 15 new check domains: services (hostapd/dnsmasq/ssh/tailscaled), network (eth0/wlan0/wlan1-AP), Hailo PCIe module, camera frame stall, MegaPi serial, robot stuck, person lost, stale safety block, memory (stop-ollama + rover2-api restart), CPU sustained high, thermal (follow-disable at 85°C, TTS at 90°C), disk (GB-based with journalctl vacuum + metrics-disable), TLS cert expiry, boot-partition rw guard, env/binary file presence. Per-check retry limit: 3 attempts / 10 min then persistent WS alert. Alerts broadcast to WebSocket `alerts` field. Auto-handled: rover2-api overheating, disk low, stale safety block, Hailo driver unloaded, MegaPi serial drop, robot stuck.
 - **Home Assistant integration (2026-06-03)** — `pi/ha_client.py`: async HAClient (5s timeout, 13 entity name mappings); voice fast-path patterns for room temperatures and home status (`ha_get_temperatures`, `ha_get_status`); `ha_toggle` for switches/lights/media (dangerous, requires confirm). HA at `http://192.168.225.10:8123`; token in `/etc/rover2.env`. `ha_available` in `/api/status`.
 - **ROVER2 WiFi AP (2026-06-03)** — wlan1 RTL8812AU, SSID: ROVER2, 10.0.0.1, 2.4GHz ch 6. Config in `scripts/ap/`. TLS cert covers 10.0.0.1. AP and home WiFi (wlan0) run independently.
+- **AP auto-toggle (2026-06-05)** — NM dispatcher (`/etc/NetworkManager/dispatcher.d/99-rover2-ap`) stops hostapd+dnsmasq when wlan0 connects to home WiFi, starts when wlan0 disconnects. `rover2-ap-boot.service` syncs state at boot (5s delay after NM). Saves ~0.5–1W on battery. Watchdog updated to recognise wlan0-connected as intentional AP-off state (no false restart). Verified with NM simulation: AP up on disconnect, AP off on reconnect, logger confirms both transitions.
 - **TLS cert from homelabca (2026-06-03)** — self-signed cert replaced by homelabca-issued cert via step-ca at `192.168.70.14:9000`. Valid 1 year. SANs: `10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local`. Renewal: `./scripts/renew-cert.sh`.
 - **Web chat auto-fallback (2026-06-03)** — when hailo-ollama returns 500 or is unreachable, web chat (`run_turn()`) falls back to CPU Ollama (llama3.2:1b) automatically. `_hailo_up` flag tracks health per-call; auto-recovers when HAT reconnects. `/api/chat/status` shows actual active backend.
 - **Person detection overlay (2026-06-03)** — `canvas#detection-overlay` on camera feed; JARVIS corner accents; label with confidence % and distance. Clears on camera idle. Requires Hailo HAT for detections.
@@ -686,14 +693,18 @@ Must be created manually on a fresh Pi setup.
 
 **Auto-handled by watchdog (2026-06-05):** service restarts (hostapd/dnsmasq/ssh/tailscaled), wlan0 reconnect, wlan1 AP stack restore (checks AP mode + 10.0.0.1 IP, restarts networkd→hostapd→dnsmasq), RTL8812AU driver reload (`rtw88_8812au`), Hailo PCIe module load, camera frame stall, MegaPi serial reconnect, robot stuck detection, stale safety block clear, ollama idle stop, CPU sustained high (ollama), thermal follow-disable (85°C) + TTS (90°C), disk low vacuum, disk critical metrics-disable, TLS cert expiry alert + auto-renew, boot-partition rw guard, env/binary file presence warnings. Note: eth0 is built-in GbE with no cable — NO-CARRIER is normal; watchdog no longer acts on eth0.
 
+**Verified and closed this session (2026-06-05):**
+- ✓ Watchdog: all 15 check domains confirmed, disk alert test triggered and cleared, wlan0-aware AP exemption added, 2 watchdog cycles confirmed clean post-fix
+- ✓ RTL8812AU: in-kernel `rtw88_8812au` driver confirmed loaded; AP up on channel 6, 10.0.0.1 assigned; no DKMS needed (in-kernel, survives upgrades)
+- ✓ AP auto-toggle: NM dispatcher + boot service implemented; NM simulation passed (AP up on disconnect, AP down on reconnect); watchdog no longer fights dispatcher
+
 **Next session priorities:**
-- **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)** — options: (a) time-multiplexed session open/close per request; (b) shared asyncio lock queuing requests; (c) wait for Hailo firmware lifting the single-session limit; (d) verify ROUND_ROBIN doesn't apply to GenAI sessions
+- **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)**
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
+- MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting
 - HA voice: room clarification when query is ambiguous; more natural response style
 - Test `ha_toggle` via voice: "turn on the office light"
-- MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting
 - Certificate auto-renewal via cron on central-computer
-- Wake word: tune `WAKE_RMS_THRESHOLD` if still unreliable after mic fix
 
 **Software options:**
 - "ME only" follow: BLE + camera must agree before following (prevents false positives in dense BLE environments)
@@ -771,4 +782,5 @@ Then: U0 battery test when 5A cable arrives.
 | **Metrics collection** | Default 5 s interval. Do not decrease below 5 s. |
 | **WebSocket telemetry** | Default 400 ms. Do not push faster. |
 | **New features** | Before merging: check DIAG tab — cpu_percent, temperature. |
+| **WiFi AP** | Auto-off when on home WiFi (~0.5–1W saving); NM dispatcher + boot service manage state. |
 | **Memory** | rover2-api base RSS target: <150 MB (measured ~92 MB at idle). Watchdog thresholds: warn 280 MB, target 300 MB, critical 400 MB (whisper loads ~150 MB RSS on first transcribe). |

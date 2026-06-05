@@ -556,6 +556,12 @@ class Watchdog:
 
     # ── NEW checks ──────────────────────────────────────────────────────────
 
+    async def _wlan0_connected(self) -> bool:
+        """Return True if wlan0 is connected to home WiFi."""
+        out = await self._run_output(
+            ["nmcli", "-t", "-f", "DEVICE,STATE", "device"])
+        return "wlan0:connected" in out
+
     async def _check_services(self) -> None:
         # hailo-ollama excluded (disabled per issue #26)
         services = ["hostapd", "dnsmasq", "ssh", "tailscaled"]
@@ -566,6 +572,14 @@ class Watchdog:
                     self._clear_alert(f"svc_{svc}")
                     logger.debug("Watchdog: service %s OK", svc)
                     continue
+                # AP services are intentionally stopped when wlan0 is on home WiFi
+                # (NM dispatcher disables AP to save power — do not fight it)
+                if svc in ("hostapd", "dnsmasq"):
+                    if await self._wlan0_connected():
+                        self._clear_alert(f"svc_{svc}")
+                        logger.debug("Watchdog: %s inactive, wlan0 connected"
+                                     " — AP intentionally off", svc)
+                        continue
                 self._issue_detected = True
                 key = f"svc_{svc}"
                 if not self._can_act_for(key):
@@ -649,32 +663,38 @@ class Watchdog:
             logger.debug("Watchdog: wlan0 check: %s", exc)
 
         # wlan1 AP mode + IP — RTL8812AU hotspot (ROVER2, 10.0.0.1)
+        # AP is intentionally off when wlan0 is connected (NM dispatcher disables it).
+        # Only alert/fix when away from home (wlan0 not connected).
         # Restart order: systemd-networkd (assigns IP) → hostapd (AP) → dnsmasq (DHCP)
         try:
-            wlan1_info = await self._run_output(["sudo", "iw", "dev", "wlan1", "info"])
-            wlan1_addr = await self._run_output(["ip", "addr", "show", "wlan1"])
-            ap_ok = "type AP" in wlan1_info and "ROVER2" in wlan1_info
-            ip_ok = "10.0.0.1" in wlan1_addr
-            if ap_ok and ip_ok:
+            if await self._wlan0_connected():
                 self._clear_alert("wlan1_ap")
             else:
-                self._issue_detected = True
-                key = "wlan1_ap"
-                if self._can_act_for(key):
-                    self._record_attempt(key)
-                    await self._run_fix(["sudo", "systemctl", "restart",
-                                         "systemd-networkd"])
-                    await asyncio.sleep(2.0)
-                    ok = await self._run_fix(["sudo", "systemctl", "restart", "hostapd"])
-                    await asyncio.sleep(2.0)
-                    await self._run_fix(["sudo", "systemctl", "restart", "dnsmasq"])
-                    reason = "no IP (10.0.0.1 missing)" if ap_ok else "AP mode lost"
-                    self._log("WARNING", f"wlan1_{reason.replace(' ', '_')}",
-                              "restart_networkd_hostapd_dnsmasq",
-                              "ok" if ok else "failed")
-                    self._emit_alert(key, "warning",
-                                     f"wlan1 AP issue ({reason}) — restarted AP stack",
-                                     action_taken="restart networkd → hostapd → dnsmasq")
+                wlan1_info = await self._run_output(["sudo", "iw", "dev", "wlan1", "info"])
+                wlan1_addr = await self._run_output(["ip", "addr", "show", "wlan1"])
+                ap_ok = "type AP" in wlan1_info and "ROVER2" in wlan1_info
+                ip_ok = "10.0.0.1" in wlan1_addr
+                if ap_ok and ip_ok:
+                    self._clear_alert("wlan1_ap")
+                else:
+                    self._issue_detected = True
+                    key = "wlan1_ap"
+                    if self._can_act_for(key):
+                        self._record_attempt(key)
+                        await self._run_fix(["sudo", "systemctl", "restart",
+                                             "systemd-networkd"])
+                        await asyncio.sleep(2.0)
+                        ok = await self._run_fix(["sudo", "systemctl", "restart",
+                                                  "hostapd"])
+                        await asyncio.sleep(2.0)
+                        await self._run_fix(["sudo", "systemctl", "restart", "dnsmasq"])
+                        reason = "no IP (10.0.0.1 missing)" if ap_ok else "AP mode lost"
+                        self._log("WARNING", f"wlan1_{reason.replace(' ', '_')}",
+                                  "restart_networkd_hostapd_dnsmasq",
+                                  "ok" if ok else "failed")
+                        self._emit_alert(key, "warning",
+                                         f"wlan1 AP issue ({reason}) — restarted AP stack",
+                                         action_taken="restart networkd → hostapd → dnsmasq")
         except Exception as exc:
             logger.debug("Watchdog: wlan1 AP check: %s", exc)
 

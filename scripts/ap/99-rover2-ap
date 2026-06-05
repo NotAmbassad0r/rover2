@@ -1,0 +1,31 @@
+#!/bin/bash
+# NetworkManager dispatcher: auto-toggle ROVER2 WiFi AP (hostapd/dnsmasq on wlan1).
+# Install: sudo cp 99-rover2-ap /etc/NetworkManager/dispatcher.d/
+#          sudo chmod 755 /etc/NetworkManager/dispatcher.d/99-rover2-ap
+#
+# - wlan0 UP        -> AP off: home WiFi provides connectivity, save ~0.5-1W
+# - wlan0 DOWN      -> AP on:  ROVER2 SSID available when away from home
+# - wlan0 pre-down  -> AP on:  start AP early so it is ready immediately
+
+IFACE="$1"
+ACTION="$2"
+
+[ "$IFACE" != "wlan0" ] && exit 0
+
+case "$ACTION" in
+    up)
+        if systemctl is-active --quiet hostapd; then
+            logger -t rover2-ap "wlan0 up -- disabling AP (hostapd + dnsmasq)"
+            systemctl stop hostapd
+            systemctl stop dnsmasq
+        fi
+        ;;
+    down|pre-down)
+        if ! systemctl is-active --quiet hostapd; then
+            logger -t rover2-ap "wlan0 $ACTION -- enabling AP (hostapd + dnsmasq)"
+            systemctl start hostapd
+            sleep 1
+            systemctl restart dnsmasq
+        fi
+        ;;
+esac

@@ -1,7 +1,11 @@
 [Match]
 Name=wlan1
 
+[Link]
+RequiredForOnline=no
+
 [Network]
 Address=10.0.0.1/24
 DHCPServer=no
 IPForward=no
+ConfigureWithoutCarrier=yes
