@@ -834,32 +834,55 @@ function _ensureVoices() {
 
 // Build a SpeechSynthesisUtterance with British English voice + standard params.
 // Always create a fresh object — Android Chrome sometimes silently drops reused ones.
+// Female voice names to exclude — Android Chrome on A32 includes several of these
+const _TTS_FEMALE_NAMES = [
+  'female','Female','woman','Woman','girl','Girl',
+  'Samantha','Karen','Moira','Tessa','Fiona','Veena',
+  'Victoria','Allison','Ava','Susan','Zoe','Kate','Emma',
+  'Amy','Joanna','Salli','Kimberly','Kendra','Ivy',
+];
+let _ttsVoicesLogged = false;
+
+function _isMaleVoice(v) {
+  const n = v.name;
+  if (_TTS_FEMALE_NAMES.some(f => n.includes(f))) return false;
+  return true;
+}
+
 function _makeTtsUtterance(text) {
   const u = new SpeechSynthesisUtterance(text);
   const voices = window.speechSynthesis.getVoices();
-  // Priority 1: Daniel — Google's British male voice
+
+  // Log all available voices once so we can diagnose selection on A32
+  if (!_ttsVoicesLogged && voices.length > 0) {
+    _ttsVoicesLogged = true;
+    console.log('[TTS] available voices:', voices.map(v => v.name + ' ' + v.lang));
+  }
+
+  // Priority 1: Daniel (British male, present on many Android Chrome builds)
   let voice = voices.find(v => v.name.includes('Daniel'));
-  // Priority 2: any en-GB voice not labelled female
-  if (!voice) {
-    voice = voices.find(v =>
-      v.lang && v.lang.startsWith('en-GB') &&
-      !v.name.includes('Female') && !v.name.includes('female')
-    );
-  }
-  // Priority 3: en-US male voice (David, Mark, Alex, or non-female)
-  if (!voice) {
-    voice = voices.find(v =>
-      v.lang && v.lang.startsWith('en-US') &&
-      !v.name.includes('Female') && !v.name.includes('female') &&
-      (v.name.includes('Male') || v.name.includes('male') ||
-       v.name.includes('David') || v.name.includes('Mark') || v.name.includes('Alex'))
-    );
-  }
+
+  // Priority 2: any voice with 'Male'/'male' in the name
+  if (!voice)
+    voice = voices.find(v => v.name.includes('Male') || v.name.includes('male'));
+
+  // Priority 3: en-GB voice not in female blocklist
+  if (!voice)
+    voice = voices.find(v => v.lang && v.lang.startsWith('en-GB') && _isMaleVoice(v));
+
+  // Priority 4: en-US voice not in female blocklist
+  if (!voice)
+    voice = voices.find(v => v.lang && v.lang.startsWith('en-US') && _isMaleVoice(v));
+
+  // Priority 5: any English voice not in female blocklist
+  if (!voice)
+    voice = voices.find(v => v.lang && v.lang.startsWith('en') && _isMaleVoice(v));
+
   if (voice) {
     u.voice = voice;
-    console.log('[TTS] voice selected:', voice.name, '(' + voice.lang + ')');
+    console.log('[TTS] selected:', voice.name, voice.lang);
   } else {
-    console.log('[TTS] no preferred male voice found — using browser default');
+    console.log('[TTS] no male voice found — using browser default');
   }
   u.lang   = 'en-GB';
   u.rate   = 0.88;

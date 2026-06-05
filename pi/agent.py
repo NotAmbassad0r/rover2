@@ -576,6 +576,10 @@ _SPOKEN_FAST_PATTERNS: list[tuple[str, str, dict]] = [
     (r"what.{0,10}'?s on|lights? on|switches? on|home status|what.{0,10}lights?|"
      r"anything on at home|what.{0,10}running at home",
      "ha_get_status", {}),
+    # Self-introduction — instant canned reply, no LLM
+    (r"introduce yourself|tell them about yourself|who are you\b|what are you\b|"
+     r"tell us about yourself|introduce rover",
+     "introduce_rover", {}),
 ]
 
 
@@ -805,6 +809,14 @@ _ACTION_CANNED: dict[str, list[str]] = {
     "control_follow_mode:camera": [
         "Camera follow active, sir.",
         "Eyes on you. Camera follow engaged, sir.",
+    ],
+    "introduce_rover": [
+        "Good morning. I am ROVER — a fully autonomous mobile assistant. "
+        "I run entirely offline on a Raspberry Pi 5 with a dedicated AI processor, "
+        "which means no cloud, no internet dependency, and no subscription fees. "
+        "I can follow you around, answer questions, control smart devices, and "
+        "monitor my own health — fixing most problems before you notice them. "
+        "I was built by Lars. He did a rather good job, if I do say so myself.",
     ],
 }
 
@@ -1986,6 +1998,8 @@ class RoverAgent:
             if name == "reboot_pi":
                 return await self._post("/api/maintenance/restart-pi", {})
             # ── New spoken-agent tools ──────────────────────────────────────
+            if name == "introduce_rover":
+                return {"ok": True}   # canned response handled by _ACTION_CANNED
             if name == "wave_arm":
                 return await self._post("/api/arm/wave", {})
             if name == "get_full_diagnostics":
