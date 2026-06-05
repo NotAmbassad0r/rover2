@@ -27,3 +27,26 @@ Format: ## Category / ### Item / bullet details / Priority line.
 - Ensure UI works on both desktop browser and mobile (Android Chrome)
 
 Priority: medium — after watchdog expansion and HailoRT 5.2.0 upgrade
+
+---
+
+## Voice
+
+### Increase TTS speech speed slightly
+
+Both TTS paths speak slightly too slowly. Increase speed on both:
+
+- Web Speech API (agent replies via A32): `rate` is currently 0.88 in face/index.html
+  (_makeTtsUtterance) — increase to ~0.95
+- Piper TTS (proactive events via voice_engine.py): `length_scale` is currently 1.05
+  in voice_engine.py — decrease to ~0.92 (lower = faster in Piper)
+
+Test both after change:
+- Web Speech: trigger a voice conversation, listen to agent reply speed
+- Piper: trigger a proactive event (e.g. person found) or POST /api/voice/speak
+
+Tune further if still too slow or becomes too fast. Values are in config.yaml if
+already externalised; otherwise update the constants directly and consider moving
+them to config.yaml as part of this task.
+
+Priority: low
