@@ -144,5 +144,15 @@ memory_watchdog:
   warn_cooldown_s: 1800    # alert at most every 30 min at warn level
   critical_cooldown_s: 300 # alert every 5 min at critical level
 
+watchdog:
+  enabled: true
+  check_interval_s: 60     # idle check interval
+  memory_warn_mb: 420      # log warning only
+  memory_critical_mb: 500  # action: restart ollama
+  temp_warn_c: 78          # log warning only
+  temp_critical_c: 85      # action: disable tracking
+  action_window_s: 3600    # 1-hour window for max_actions counter
+  max_actions: 3           # after 3 actions: halt auto-fix, speak alert
+
 firmware:
   hex_path: /tmp/rover2_firmware.hex

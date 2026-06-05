@@ -669,6 +669,16 @@
       <div class="diag-grid" id="guard-status-grid"></div>
     </div>
 
+    <div class="panel">
+      <div class="panel-title">WATCHDOG</div>
+      <div class="diag-grid" id="watchdog-status-grid"></div>
+      <div class="tools-actions" style="margin-top:8px;">
+        <button type="button" id="watchdog-log-btn">VIEW LOG</button>
+        <button type="button" id="watchdog-reset-btn">RESET ACTIONS</button>
+      </div>
+      <pre class="log-area" id="watchdog-log" style="display:none;margin-top:8px;"></pre>
+    </div>
+
   </div>
 
   <!-- ════ CHAT TAB ════ -->
@@ -917,7 +927,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1261,7 +1271,7 @@
         _diagAutoTimer = null;
         this.classList.remove('active');
       } else {
-        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); }, 5000);
+        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); }, 5000);
         this.classList.add('active');
         loadFullDiagnostics();
       }
@@ -1482,6 +1492,60 @@
     // Refresh guard status alongside DIAG auto-refresh
     const _origDiagRefresh = typeof loadFullDiag === 'function' ? loadFullDiag : null;
     loadGuardStatus().catch(() => {});
+
+    // ── Watchdog panel ────────────────────────────────────────────────────────
+    let _watchdogLogVisible = false;
+
+    async function loadWatchdogStatus() {
+      try {
+        const r = await fetch(apiBase() + '/api/status');
+        const d = await r.json();
+        const grid = document.getElementById('watchdog-status-grid');
+        if (!grid) return;
+        const actions  = d.watchdog_actions ?? '—';
+        const ok       = d.watchdog_ok;
+        const stateStr = ok == null ? '—' : (ok ? 'OK' : 'LIMIT REACHED');
+        const stateCol = ok == null ? '' : (ok ? 'var(--success)' : 'var(--danger)');
+        grid.innerHTML = [
+          ['STATUS',  `<span style="color:${stateCol};font-weight:700">${stateStr}</span>`],
+          ['ACTIONS', `${actions} / 3 this hour`],
+        ].map(([k, v]) =>
+          `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
+        ).join('');
+      } catch (_) {}
+    }
+
+    async function loadWatchdogLog() {
+      const el = document.getElementById('watchdog-log');
+      if (!el) return;
+      try {
+        const r = await fetch(apiBase() + '/api/watchdog/log');
+        const d = await r.json();
+        el.textContent = (d.lines || []).join('\n') || '(empty)';
+      } catch (e) {
+        el.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    document.getElementById('watchdog-log-btn').onclick = async () => {
+      const el = document.getElementById('watchdog-log');
+      _watchdogLogVisible = !_watchdogLogVisible;
+      el.style.display = _watchdogLogVisible ? 'block' : 'none';
+      document.getElementById('watchdog-log-btn').textContent =
+        _watchdogLogVisible ? 'HIDE LOG' : 'VIEW LOG';
+      if (_watchdogLogVisible) await loadWatchdogLog();
+    };
+
+    document.getElementById('watchdog-reset-btn').onclick = async () => {
+      try {
+        const r = await fetch(apiBase() + '/api/watchdog/reset', { method: 'POST' });
+        const d = await r.json();
+        toast(d.status === 'ok' ? 'Watchdog reset' : (d.detail || 'Reset failed'));
+        await loadWatchdogStatus();
+      } catch (e) { toast('Reset error: ' + e.message); }
+    };
+
+    loadWatchdogStatus().catch(() => {});
 
     // ─────────────────────────────────────────────────────────────────────────
 

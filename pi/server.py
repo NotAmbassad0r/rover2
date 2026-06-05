@@ -63,6 +63,12 @@ except ImportError:
     _GUARD = False
 
 try:
+    from watchdog import Watchdog as _Watchdog
+    _WATCHDOG = True
+except ImportError:
+    _WATCHDOG = False
+
+try:
     from audio_router import AudioRouter as _AudioRouter
     _AUDIO_ROUTER = True
 except ImportError:
@@ -189,6 +195,9 @@ def create_app(
         def _guard_speak_fn(event_key: str) -> None:
             _voice_engine.speak_event(event_key, audio_router=audio_router)
         guard_controller.set_speak_fn(_guard_speak_fn)
+
+    # Watchdog — self-healing monitor (asyncio task, no separate service)
+    watchdog = _Watchdog(config, audio_router=audio_router) if _WATCHDOG else None  # type: ignore[assignment]
 
     app = FastAPI(title="ROVER2", version="2.0.0")
     app.add_middleware(
@@ -630,6 +639,8 @@ def create_app(
             asyncio.create_task(_boot_speech_task())
         if guard_controller is not None:
             await guard_controller.start()
+        if watchdog is not None:
+            watchdog.start()
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
@@ -637,6 +648,8 @@ def create_app(
             await audio_router.stop()
         if guard_controller is not None:
             await guard_controller.stop()
+        if watchdog is not None:
+            watchdog.stop()
 
     @app.websocket("/ws")
     async def websocket_control(websocket: WebSocket) -> None:
@@ -1757,7 +1770,30 @@ def create_app(
         payload["ws_client_count"] = hub.client_count
         payload["audio_mode"] = audio_router.get_mode() if audio_router else None
         payload["ha_available"] = rover_agent.ha_available if rover_agent is not None else False
+        if watchdog is not None:
+            payload["watchdog_actions"] = watchdog.actions_used
+            payload["watchdog_ok"]      = watchdog.ok
         return JSONResponse(payload)
+
+    @app.get("/api/watchdog/log")
+    async def watchdog_log() -> JSONResponse:
+        """Return last 50 lines of watchdog.log."""
+        from watchdog import _LOG_PATH as _WD_LOG
+        try:
+            if _WD_LOG.exists():
+                lines = _WD_LOG.read_text(errors="replace").splitlines()
+                return JSONResponse({"lines": lines[-50:], "total_lines": len(lines)})
+        except Exception as exc:
+            return JSONResponse({"lines": [], "error": str(exc)})
+        return JSONResponse({"lines": [], "total_lines": 0})
+
+    @app.post("/api/watchdog/reset")
+    async def watchdog_reset() -> JSONResponse:
+        """Reset the watchdog action counter and limit-reached flag."""
+        if watchdog is None:
+            raise HTTPException(status_code=503, detail="watchdog not running")
+        watchdog.reset_actions()
+        return JSONResponse({"status": "ok", "actions_used": watchdog.actions_used})
 
     @app.post("/api/tracking")
     async def tracking(request: Request) -> JSONResponse:
