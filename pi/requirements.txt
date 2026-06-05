@@ -9,3 +9,4 @@ opencv-python-headless>=4.8.0
 bleak>=0.21.0
 python-multipart>=0.0.9
 faster-whisper>=1.0.0
+PyTurboJPEG>=1.8,<2.0

@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-03 (HA integration, AP setup, cert renewal, UI redesign, hailo/CPU fallback)
+Last updated: 2026-06-05 (body_tracker CPU optimisation: TurboJPEG 320×240, 1fps, stream-skip sleep)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -98,8 +98,8 @@ NM credentials: WiFi keyfile at `/etc/NetworkManager/system-connections/GUCZ-744
 | 3 | Camera / Hailo person follow (FOLLOW toggle) | **Done — verified on robot** |
 | 4 | BLE beacon fallback follow (Z Flip 6 via fcf1 UUID) | **Done — verified** |
 | 5 | Web TOOLS + DIAG + CHAT + METRICS + AI Agent + VLM + Alerts | **Done** |
-| test1 | Follow mobility (M1: untethered WiFi + battery) | **Pending** — blocked on USB cable (5A cable ordered) |
-| v1.0.0 | M1 pass → merge dev→main | Pending M1 |
+| test1 | Follow mobility (M1: untethered WiFi + battery) | **Done — verified untethered 2026-06-05** |
+| v1.0.0 | M1 pass → merge dev→main | **Done — tagged 2026-06-05** |
 
 ---
 
@@ -120,7 +120,9 @@ Root cause confirmed via PMIC ADC (`vcgencmd pmic_read_adc`):
 - `arm_freq=1800` in `/boot/firmware/config.txt` (was `arm_boost=1` @ 2400MHz) — saves ~2W
 - Lazy Hailo init — model loads only when DETECT/FOLLOW first enabled, not at service start
 - 30s warmup delay before Hailo load (CPU settles post-boot)
-- `frame_interval_s: 0.25` (4fps) — reduces sustained Hailo draw
+- `frame_interval_s: 1.0` (1fps) — reduces sustained Hailo draw (was 0.25 / 4fps)
+- TurboJPEG decode at 1/2 scale (320×240) — replaces cv2.imdecode; eliminates cvtColor
+- Stream-skip sleep: wait for remainder of interval instead of spinning on the camera stream
 - `EXT5V_V` and `VDD_CORE_A` logged to journal at `[pre/post-hailo-load]` for diagnosis
 
 ---
@@ -333,7 +335,7 @@ A32 voice pipeline (fully local — no cloud)
 **Camera follow** (primary):
 - Hailo YOLOv8m NMS output — detection-major format `(80, 100, 5)` — see `body_tracker_parse.py`
 - Person centred: HOLD; left of centre: LEFT turn; right: RIGHT turn; too far: FWD
-- `turn_speed: 210`, `forward_speed: 170`, `confidence: 0.40`, `centre_zone: 0.30`, `frame_interval_s: 0.25`
+- `turn_speed: 210`, `forward_speed: 170`, `confidence: 0.40`, `centre_zone: 0.30`, `frame_interval_s: 1.0`
 
 **Lazy Hailo init + warmup:**
 - Hailo model loads only on first DETECT/FOLLOW enable (not at service start)
@@ -491,7 +493,7 @@ websocket:
 body_tracker:
   turn_speed: 210              # raised for hard floor (was 100)
   forward_speed: 170           # raised (was 120)
-  frame_interval_s: 0.25       # 4fps — reduces Hailo power draw on battery
+  frame_interval_s: 1.0        # 1fps — CPU optimisation (was 0.25 / 4fps)
   hailo_warmup_s: 30.0         # delay before Hailo loads — lets CPU idle after boot
   confidence: 0.40
   centre_zone: 0.30
@@ -562,6 +564,14 @@ Must be created manually on a fresh Pi setup.
 
 ## Known issues / notes
 
+25. **body_tracker CPU optimisation applied (2026-06-05)** — three changes reduced detect-only CPU from 90–110% to ~16–22%:
+   - **TurboJPEG 1/2-scale decode**: `PyTurboJPEG>=1.8,<2.0` installed in venv (requires libjpeg-turbo 2.x on Pi; 2.0 requires libjpeg-turbo 3.x). Decodes 640×480 JPEG directly to 320×240 RGB in one step — eliminates `cv2.imdecode`, `np.frombuffer`, and `cvtColor`. ∼4× faster per decode.
+   - **frame_interval_s: 1.0** (was 0.25/4fps → 0.5/2fps → now 1.0/1fps): fewer Hailo inference calls per second.
+   - **Stream-skip sleep**: the MJPEG camera generator (camera.py) has no rate limiting — body_tracker was spin-reading and discarding frames at full socket speed (~80% CPU just from the read loop). Fixed by sleeping for `(remaining_interval − 100 ms)` in the skip path and resetting the buffer, limiting tight-loop reading to the final 100 ms before each decode.
+   - **Idle CPU (tracking OFF)**: ~0–2% ✓
+   - **Detect-only CPU (1fps, TurboJPEG 320×240)**: ~16–22% ✓ (measured 2026-06-05 on Pi 5 @ 1800 MHz)
+   - Note: `scaling_factor=(1, 2)` assumes 640×480 camera source; if camera resolution ever changes, verify the scaling produces a sensible decoded size.
+
 1. **USB cable 15W ceiling** — Viking bank + standard USB-C cable = 5V/3A = 15W. Pi+Hailo needs ~18–20W. Cutoff after ~46s inference. **Fix: 5A/100W e-marked cable ordered.** Until then, use mains.
 2. **cmdline.txt corruption on hard power cut** — FAT32 boot partition, no journaling. Fixed by mounting boot partition read-only. If it happens again, connect SSD to laptop and restore cmdline.txt manually (PARTUUID=a6f9ddfb-02).
 3. **NM state corruption on hard power cut** — WiFi won't connect. Fix: connect SSD, `rm /var/lib/NetworkManager/NetworkManager.state timestamps seen-bssids`, reboot.
@@ -602,7 +612,8 @@ Must be created manually on a fresh Pi setup.
 | T2 — Drive / arm / safety | Not formally signed off |
 | T3 — BLE fallback | BLE auto-activates confirmed; UI toggle confirmed |
 | T4 — Sign-off | Pending |
-| U0 — Untethered (battery) | **Blocked** — 5A cable pending |
+| U0 — Untethered (battery) | **PASS** — Viking bank + 5A cable, ~16–22% CPU detect-only (2026-06-05) |
+| M1 — Follow mobility | **PASS** — untethered WiFi + battery, full follow sequence (2026-06-05) |
 
 ```bash
 ./scripts/run_local_tests.sh              # dev PC — unit tests
@@ -615,12 +626,12 @@ Must be created manually on a fresh Pi setup.
 
 > **Standing goal:** reduce Pi resource usage as much as possible before and after every feature.
 
-**Immediate (when 5A cable arrives):**
-- U0: boot Pi on bank, let it stabilise 60s, enable DETECT then FOLLOW — should survive
-- If stable: walk around room, log M1 mobility test results in TEST_RESULTS.md
-- Tag v0.5.0 after U0 passes; merge dev→main + tag v1.0.0 after M1 passes
+**Completed (2026-06-05):** ✓
+- U0: Pi + Hailo sustained on Viking bank with 5A e-marked cable — PASS
+- M1: untethered WiFi + battery follow — PASS
+- v1.0.0 tagged and merged to main
 
-**In the meantime (mains, WiFi):**
+**Remaining formal tests (mains, WiFi):**
 - Complete T1.3–T1.7 formal sign-off (follow, turn, advance, obstacle steer)
 - Complete T2 (D-pad, stop, gripper, arm, ultrasonic, forward block)
 - Complete T3 (BLE beacon seen, handoff, reacquire)
@@ -672,6 +683,7 @@ body_tracker:
   centre_zone: 0.30      # higher (0.40) for looser centering
   confidence: 0.40       # lower (0.30) if person not detected reliably
   hailo_warmup_s: 30.0   # reduce after 5A cable — less need to wait
+  frame_interval_s: 1.0  # 1fps; raise to 0.5 (2fps) if follow feels sluggish (costs ~+15% CPU)
 ```
 
 ### Suggested Claude Code prompt

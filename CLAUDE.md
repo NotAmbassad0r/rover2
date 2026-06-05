@@ -56,7 +56,7 @@ drive:
 body_tracker:
   turn_speed: 210
   forward_speed: 170
-  frame_interval_s: 0.25   # 4 fps — power cap
+  frame_interval_s: 1.0    # 1fps — CPU optimisation (was 0.25 / 4fps)
   hailo_warmup_s: 30.0     # lazy init delay
 websocket:
   heartbeat_timeout_s: 10.0
@@ -79,7 +79,7 @@ The UI auto-upgrades WebSocket to `wss://` when served over HTTPS.
 
 Viking PN-964PD bank + 3A USB-C cable = 15W ceiling. Pi 5 + Hailo needs 18-20W.
 **Real fix**: 5A/100W e-marked cable ordered. Until it arrives, Hailo loads lazily (30s warmup).
-Mitigations in place: lazy init, 4fps, CPU cap 1800MHz, `arm_freq=1800` in `/boot/firmware/config.txt`.
+Mitigations in place: lazy init, 1fps (TurboJPEG 320×240 decode), CPU cap 1800MHz, `arm_freq=1800` in `/boot/firmware/config.txt`.
 
 ## Boot partition
 

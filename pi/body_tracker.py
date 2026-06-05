@@ -10,6 +10,7 @@ from collections import deque
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
+from turbojpeg import TJPF_RGB, TurboJPEG
 
 from body_tracker_parse import parse_best_person
 from follow_nav import ble_should_turn_in_place, steer_around_obstacle
@@ -92,6 +93,8 @@ class BodyTracker:
         self._running = False
         self._hailo_ready = False
         self._last_error: str | None = None
+
+        self._tjpeg = TurboJPEG()
 
         self._safety: SafetyMonitor | None = safety
         self._avoid_default = str(cfg.get("avoid_default", "left"))
@@ -526,8 +529,6 @@ class BodyTracker:
         self._running = False
 
     def _stream_loop(self) -> None:
-        import cv2
-
         logger.info("BodyTracker: connecting to %s", self._camera_url)
         req = urllib.request.urlopen(self._camera_url, timeout=10)
         buf = b""
@@ -556,12 +557,21 @@ class BodyTracker:
 
                 now = time.monotonic()
                 if now - last_infer < self._frame_interval_s:
-                    buf = buf[-256:]  # discard buffered frames — avoids decode at full stream rate
+                    # Sleep for most of the remaining interval instead of spin-reading.
+                    # Camera generator is unthrottled; without this the loop saturates the CPU
+                    # reading and discarding frames at socket speed.
+                    remaining = self._frame_interval_s - (now - last_infer)
+                    self._stop_event.wait(max(0.0, remaining - 0.10))
+                    buf = b""  # clear stale data accumulated during sleep
                     continue
                 last_infer = now
 
-                frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-                if frame is None:
+                try:
+                    # Decode JPEG at 1/2 scale → 320×240 (camera is 640×480).
+                    # TurboJPEG DCT-domain scaling: ~4× faster than cv2.imdecode at full res.
+                    # Decode directly to RGB — eliminates the subsequent cvtColor step.
+                    frame = self._tjpeg.decode(jpg, pixel_format=TJPF_RGB, scaling_factor=(1, 2))
+                except Exception:
                     continue
                 self._process_frame(frame)
         finally:
@@ -581,8 +591,7 @@ class BodyTracker:
         if not active:
             return
 
-        resized = cv2.resize(frame, (640, 640))
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.uint8)
+        rgb = cv2.resize(frame, (640, 640)).astype(np.uint8)
         nms_out = self._hailo.infer(rgb)
         if nms_out is None:
             logger.warning("Hailo infer returned None")
