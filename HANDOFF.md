@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-05 (HailoRT 5.2.0 upgrade; VLM working; hailo-ollama disabled — see issue #26)
+Last updated: 2026-06-05 (HailoRT 5.2.0 upgrade; VLM working; hailo-ollama disabled — see issue #26; backlog at docs/BACKLOG.md)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -660,6 +660,8 @@ Must be created manually on a fresh Pi setup.
 - TTS speech bubble on right side at ~63% height, left-pointing tail, 150ms fade-in / 400ms fade-out
 - Hooks into `_ttsSpeak()` and `_ttsSpeakAsync()` — shows at speak start, hides at onend/onerror
 - Service worker on `rover-face-v27`
+
+**Backlog:** `docs/BACKLOG.md` — confirmed desirable work not yet scheduled (web GUI audit, etc.)
 
 **Next session priorities:**
 - **Resolve hailo-ollama/VLM mutual exclusion (issue #26)** — investigate if HailoRT 5.3.0 fixes concurrent GenAI sessions, or consider hailo-ollama multimodal model (single service for LLM+VLM)
