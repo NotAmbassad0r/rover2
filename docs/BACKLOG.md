@@ -80,6 +80,27 @@ Priority: high
 
 ---
 
+### Upgrade LLM from llama3.2:1b to Llama 3 8B
+
+Current CPU fallback is llama3.2:1b (1B parameters, ~20-30s, mediocre quality).
+Llama 3 8B would give significantly better instruction following, more natural conversation,
+and better tool use — at the cost of longer response time on CPU (~60-90s) and higher RAM.
+
+Prerequisites:
+- Verify available RAM headroom: rover2-api RSS target <150 MB; Pi 5 has 8 GB total
+- Confirm Ollama can pull and serve Llama 3 8B: `ollama pull llama3:8b`
+- Benchmark response time: acceptable if <90s for non-time-critical queries (diagnostics, questions)
+- The hailo-ollama fast-path (issue #26) would make 8B viable even for voice if re-enabled
+
+Options:
+1. **CPU-only 8B** — pull llama3:8b, update voice_engine/agent to use it; accept longer latency
+2. **Quantised 8B** — use `llama3:8b-instruct-q4_0` (~4.7 GB) for better quality/speed tradeoff
+3. **Wait for hailo-ollama (issue #26)** — 8B on Hailo would be <5s; better to fix GenAI sessions first
+
+Priority: medium
+
+---
+
 ## Resource Optimisation
 
 ### Full resource audit — CPU, memory, battery, temperature
