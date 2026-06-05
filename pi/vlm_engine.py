@@ -1,7 +1,9 @@
 """VLM — Qwen2-VL-2B-Instruct on Hailo-10H via hailo_platform.genai.
 
-Lazy-loaded on first describe() call. Shares the Hailo chip with
-body_tracker via the same group_id + ROUND_ROBIN scheduler.
+Background-preloaded 40 s after startup (after body_tracker warmup).
+Describe calls block if preload is still in progress.
+hailo-ollama MUST be stopped — the Hailo-10H firmware only allows one
+GenAI session at a time (LLM port 12145 or VLM port 12147, not both).
 """
 from __future__ import annotations
 
@@ -41,6 +43,18 @@ class VLMEngine:
         self._available = False
         self._loaded = False
         self._load_error = ""
+
+        if self._enabled:
+            threading.Thread(target=self._background_preload, daemon=True,
+                             name="vlm-preload").start()
+
+    def _background_preload(self) -> None:
+        import time
+        time.sleep(40.0)  # wait for body_tracker warmup (30 s) + model load (~6 s)
+        logger.info("VLMEngine: preloading in background…")
+        with self._lock:
+            if not self._loaded:
+                self._load()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -131,8 +145,8 @@ class VLMEngine:
             from PIL import Image  # type: ignore[import]
 
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            expected = getattr(self._vlm, "input_frame_shape", None)
-            h, w = (expected[0], expected[1]) if expected and len(expected) >= 2 else (336, 336)
+            shape = self._vlm.input_frame_shape()
+            h, w = shape[0], shape[1]
             img = img.resize((w, h))
             frame = np.array(img, dtype=np.uint8)
 
@@ -151,7 +165,8 @@ class VLMEngine:
                     timeout_ms=30_000,
                 )
             logger.info("VLMEngine: %d chars generated", len(response))
-            return response.strip() or None
+            cleaned = response.replace("<|im_end|>", "").strip()
+            return cleaned or None
         except Exception as exc:
             logger.warning("VLMEngine: inference failed: %s", exc)
             return None

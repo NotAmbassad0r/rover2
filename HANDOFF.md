@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-05 (body_tracker CPU optimisation: TurboJPEG 320×240, 1fps, stream-skip sleep)
+Last updated: 2026-06-05 (HailoRT 5.2.0 upgrade; VLM working; hailo-ollama disabled — see issue #26)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -186,7 +186,9 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
     ── Hailo AI HAT+ 2 ───────────────────────────────────────────────────────
     YOLOv8m_h10.hef     Body tracker (FOLLOW / DETECT)  group_id=rover2
     Qwen2-VL-2B.hef     VLM scene description           group_id=rover2
-    ← ROUND_ROBIN scheduler: both models share the chip without mode-switching
+    ← ROUND_ROBIN scheduler: YOLO + VLM share the chip without mode-switching
+    ← NOTE: hailo-ollama (GenAI LLM) and VLM (GenAI VLM) are mutually exclusive
+      on HailoRT 5.2.0 — firmware only allows one GenAI session at a time (issue #26)
 
     ── Ollama (system service on Pi) ─────────────────────────────────────────
     llama3.2:1b         Agent LLM (tool-use capable; gemma2:2b does NOT support tools)
@@ -200,7 +202,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 | `rover-camera.service` | **8081** | MJPEG (v1 stack; shared) |
 | `ollama.service` | **11434** | Local LLM — llama3.2:1b for agent CPU fallback |
 | `rover-api` (v1) | 8080 | Stop when testing ROVER2 serial |
-| `hailo-ollama` | **8000** | Voice agent fast-path (qwen2.5-instruct:1.5b on AI HAT+); enabled by `deploy_pi.sh` |
+| `hailo-ollama` | **8000** | **DISABLED** — see issue #26 (VLM mutual exclusion on 5.2.0 firmware) |
 | `rover2-restore-wifi.service` | — | Boot: re-apply WiFi from `/boot/firmware/network-config` |
 | `hostapd.service` | — | ROVER2 WiFi AP on wlan1 (RTL8812AU), SSID: ROVER2, ch 6 |
 | `dnsmasq.service` | — | DHCP + DNS for AP network (10.0.0.10–50, rover.local) |
@@ -578,7 +580,7 @@ Must be created manually on a fresh Pi setup.
 4. **BLE false positives** — Samsung UUID `fcf1` is common. In a dense apartment many devices advertise it. Disable BLE (UI button) if false positives cause unwanted motion during camera testing.
 5. **Hailo first-enable delay** — Hailo loads on first DETECT/FOLLOW enable with 30s post-boot warmup. First enable after boot may take a few seconds before inference starts.
 6. **llama3.2:1b for agent** — gemma2:2b does NOT support tool-use in Ollama. Do not switch.
-7. **hailo-ollama** — now **enabled** by `deploy_pi.sh` for the voice agent fast-path (qwen2.5-instruct:1.5b, port 8000). The earlier "permanently disabled" note is obsolete — the chip-sharing conflict was resolved via `group_id=rover2` + ROUND_ROBIN scheduler shared with body_tracker and VLM.
+7. **hailo-ollama** — currently **DISABLED** (see issue #26). The HailoRT 5.2.0 firmware only supports one GenAI session at a time; hailo-ollama (LLM port 12145) and VLM (port 12147) are mutually exclusive. `deploy_pi.sh` setup_ai_on_hailo.sh script still exists but must NOT be run until issue #26 is resolved. Voice agent uses CPU llama3.2:1b fallback.
 8. **Pi TCP/443 blocked at gateway** — pip fails for external packages. deploy_pi.sh sideloads wheels.
 9. **BLE MAC randomisation** — Android 10+ randomises BLE MAC every ~15 min. Always match by UUID.
 10. **Browser cache** — Hard-refresh (`Ctrl+Shift+R`) after every deploy.
@@ -591,11 +593,12 @@ Must be created manually on a fresh Pi setup.
 17. **Left/right direction was inverted** — Fixed 2026-05-26 by swapping direction_map in config.yaml: `left: [1,0]`, `right: [0,-1]`. Root cause: PORT1B is wired to the physical right motor, so firmware's "left motor" is actually the right wheel. D-pad, follow, BLE turns, and obstacle avoidance all fixed by this single config change.
 18. **MegaPi on AA batteries** — Brand new AAs may not provide enough current for arc turns at speed 210. If motors stall, use MegaPi mains or reduce turn_speed.
 19. **MINIMIC1 speaker muting** — Veles-X MINIMIC1 TRRS lavalier mic plugged into A32 causes Android to mute the main speaker (routes to non-existent earpiece). `setSinkId('speaker')` and silent-buffer AudioContext workarounds are ineffective on Android Chrome. Hardware fix (insulating tape / nail polish on the Ring 2 / microphone contact of the TRRS plug to make Android see it as a 3-pole jack) not yet applied. **Workaround: use built-in mic (unplug MINIMIC1).**
-20. **VLM blocked — HailoRT 5.2.0 upgrade required** — `Qwen2-VL-2B-Instruct.hef` requires HailoRT ≥ 5.2.0; current Pi install is on an earlier version. VLM endpoint returns error until runtime is upgraded. Body tracker (YOLO) unaffected.
+20. ~~**VLM blocked — HailoRT 5.2.0 upgrade required**~~ — **resolved 2026-06-05**: HailoRT upgraded to 5.2.0 (source build from `hailo-ai/hailort` v5.2.0). Full stack: `libhailort.so.5.2.0`, `hailo_platform` Python bindings, PCIe driver rebuilt from `hailo-ai/hailort-drivers` v5.2.0, Hailo-10H firmware 5.2.0 flashed. VLM (`Qwen2-VL-2B-Instruct.hef`) now loads and returns scene descriptions. Body tracker unaffected — confirmed `tracking_hailo_ready: true`. See issue #26 for the hailo-ollama/VLM mutual exclusion constraint discovered during upgrade.
 21. ~~Hailo HAT disconnected~~ — **resolved 2026-06-05**: HAT was always physically connected; driver was simply not built for the new kernel (`6.18.33`). Fixed by DKMS (see issue #24). `tracking_available: true`, agent backend `hailo` with `qwen2.5-instruct:1.5b` confirmed working.
 24. **Hailo PCIe driver not loaded after kernel upgrade (2026-06-05)** — after `apt upgrade` upgraded kernel to `6.18.33+rpt-rpi-2712`, the `hailo1x_pci` module was missing for the new kernel. Driver source at `/usr/src/hailort-pcie-driver/linux/pcie/` has `dkms.conf.in` + `Makefile`. Fix applied: `cd /usr/src/hailort-pcie-driver/linux/pcie && sudo make install_dkms` — copies source to `/usr/src/hailo1x_pci-5.1.1/`, generates `dkms.conf` (with `AUTOINSTALL=yes`), builds and installs module. DKMS now registered: `dkms status` shows `hailo1x_pci/5.1.1, 6.18.33+rpt-rpi-2712: installed`. **Prevention:** `AUTOINSTALL=yes` in `dkms.conf` means DKMS rebuilds automatically on future kernel upgrades. Alternatively pin the kernel: `sudo apt-mark hold raspberrypi-kernel`. **Recovery:** if driver is missing after an upgrade, run `sudo dkms autoinstall` or repeat the `make install_dkms` step above.
 22. **Wake word unreliable on built-in A32 mic** — low RMS (~1.7%) causes missed wake events. Revisit with MINIMIC1 hardware fix (Ring 2 tape) or mic gain adjustment in face/index.html (`WAKE_RMS_THRESHOLD`).
 23. **Web chat slow without Hailo** — llama3.2:1b on CPU Ollama takes ~20-30s per reply. Auto-recovers to hailo-ollama (~3s) when HAT reconnects.
+26. **hailo-ollama and VLM are mutually exclusive on HailoRT 5.2.0** — The Hailo-10H firmware (5.2.0) only allows ONE GenAI session at a time: either the LLM session (port 12145, used by hailo-ollama) OR the VLM session (port 12147, used by VLM engine). When hailo-ollama is running, VLM gets `HAILO_COMMUNICATION_CLOSED(62)`. **Current decision:** hailo-ollama disabled (systemd override at `/etc/systemd/system/hailo-ollama.service.d/override.conf` sets `ExecStart=/bin/true`, `Restart=no`); VLM owns the Hailo chip for GenAI; voice agent falls back to CPU `llama3.2:1b` (~20-30s). **To restore hailo-ollama:** delete the override file and edit `rover2-api.service` to add back `Wants=hailo-ollama.service`. May be fixed in a future HailoRT version if the firmware gains concurrent session support. Body tracker (VDMA inference, NOT GenAI) is unaffected by either session.
 
 ---
 
@@ -659,12 +662,11 @@ Must be created manually on a fresh Pi setup.
 - Service worker on `rover-face-v27`
 
 **Next session priorities:**
-- **Reinstall Hailo HAT** (spacers arrived) → revert to hailo-ollama backend, test follow + VLM
-- T1.4–T1.7 follow tests when HAT reconnected (advance, hold, obstacle, BLE fallback)
+- **Resolve hailo-ollama/VLM mutual exclusion (issue #26)** — investigate if HailoRT 5.3.0 fixes concurrent GenAI sessions, or consider hailo-ollama multimodal model (single service for LLM+VLM)
+- T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
 - HA voice: room clarification when query is ambiguous; more natural response style
 - Test `ha_toggle` via voice: "turn on the office light"
 - MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting
-- HailoRT 5.2.0 upgrade to unblock VLM (`docs/HAILORT_UPGRADE.md`)
 - Certificate auto-renewal via cron on central-computer
 - Wake word: tune `WAKE_RMS_THRESHOLD` if still unreliable after mic fix
 
@@ -726,7 +728,7 @@ Then: U0 battery test when 5A cable arrives.
 - Do **not** set global `PYTHONPATH` to system site-packages on rover2-api
 - Port **8082** for ROVER2; do not change v1 **8080** without coordination
 - Only one of `rover-api` / `rover2-api` may use `/dev/ttyUSB0`
-- `hailo-ollama` must be **running** when `agent.backend=hailo` (default) — chip-sharing conflict resolved via `group_id=rover2` + ROUND_ROBIN; do not disable it while ROVER2 is in use with backend=hailo
+- `hailo-ollama` is currently **DISABLED** (see issue #26) — VLM and hailo-ollama cannot coexist on HailoRT 5.2.0 firmware; voice agent uses CPU `llama3.2:1b` fallback instead
 - Agent CPU fallback model must be `llama3.2:1b` — gemma2:2b does not support tool calls in Ollama
 - Boot partition is read-only — remount rw before editing `/boot/firmware/` files
 

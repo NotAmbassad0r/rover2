@@ -1,7 +1,7 @@
 [Unit]
 Description=ROVER2 Pi API (motors, gripper, ultrasonic, web D-pad)
-After=network.target ollama.service hailo-ollama.service
-Wants=network.target ollama.service hailo-ollama.service
+After=network.target ollama.service
+Wants=network.target ollama.service
 Conflicts=hailo-tappas-playground.service
 
 [Service]
