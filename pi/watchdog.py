@@ -114,6 +114,10 @@ class Watchdog:
         # Env/binary warnings (emit once per session to avoid noise)
         self._env_warned: set[str] = set()
 
+        # Cycle / action timestamps (for UI status rows and /api/watchdog/status)
+        self._last_cycle_ts: float = 0.0
+        self._last_action_ts: float = 0.0
+
         _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -156,6 +160,20 @@ class Watchdog:
         """Return current watchdog alerts for WebSocket broadcast."""
         return list(self._persistent_alerts)
 
+    @property
+    def last_cycle_iso(self) -> str:
+        if not self._last_cycle_ts:
+            return ""
+        return datetime.datetime.fromtimestamp(self._last_cycle_ts).isoformat(timespec="seconds")
+
+    @property
+    def last_action(self) -> str:
+        return self._last_action_desc
+
+    @property
+    def last_action_ts(self) -> float:
+        return self._last_action_ts
+
     # ── Internal helpers — global action window ─────────────────────────────
 
     def _prune_window(self) -> None:
@@ -169,6 +187,7 @@ class Watchdog:
         return len(self._actions) < self._max_actions
 
     def _record_action(self) -> None:
+        self._last_action_ts = time.time()
         self._actions.append(time.monotonic())
         self._prune_window()
         if len(self._actions) >= self._max_actions:
@@ -445,6 +464,7 @@ class Watchdog:
     async def _monitor_loop(self) -> None:
         await asyncio.sleep(30.0)   # let services settle on boot
         while True:
+            self._last_cycle_ts = time.time()
             try:
                 await self._check_all()
             except asyncio.CancelledError:

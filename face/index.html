@@ -47,8 +47,8 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 .dbg-key{color:#8b949e;min-width:34px;flex-shrink:0}
 /* ── Swipe pager ─────────────────────────────────────────────────────────── */
 #swipe-viewport{position:fixed;top:0;left:0;width:100vw;height:100vh;overflow:hidden;z-index:0}
-#page-strip{display:flex;width:300vw;height:100vh;transition:transform 200ms ease;will-change:transform;transform:translateX(-33.333%)}
-#page-face,#page-ctrl,#page-help{width:100vw;height:100vh;flex-shrink:0;position:relative;overflow:hidden}
+#page-strip{display:flex;width:400vw;height:100vh;transition:transform 200ms ease;will-change:transform;transform:translateX(-25%)}
+#page-face,#page-ctrl,#page-help,#page-info{width:100vw;height:100vh;flex-shrink:0;position:relative;overflow:hidden}
 /* Control panel page */
 #page-ctrl{overflow-y:auto;overflow-x:hidden;background:#0d1117;display:flex;
   flex-direction:column;align-items:stretch;padding:10px 12px;gap:10px;
@@ -77,6 +77,22 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 .btn-arm.held,.btn-grip.held{background:rgba(88,166,255,.18);border-color:#58a6ff}
 /* ── Help page ───────────────────────────────────────────────────────────── */
 #page-help{overflow-y:auto;overflow-x:hidden;background:#0d1117}
+/* ── Info page (PAGE 3) ──────────────────────────────────────────────────── */
+#page-info{overflow-y:auto;overflow-x:hidden;background:#0d1117}
+.info-inner{padding:18px 16px;padding-bottom:calc(env(safe-area-inset-bottom,16px) + 20px)}
+.info-title{font-size:22px;letter-spacing:.18em;color:#58a6ff;text-align:center;
+  margin-bottom:4px;font-weight:700}
+.info-sub{font-size:10px;color:#8b949e;text-align:center;letter-spacing:.1em;margin-bottom:20px}
+.info-section{margin-bottom:16px}
+.info-heading{font-size:9px;color:#3fb950;letter-spacing:.16em;
+  border-bottom:1px solid rgba(63,185,80,.2);padding-bottom:3px;margin-bottom:8px}
+.info-row{display:flex;justify-content:space-between;padding:3px 0;font-size:11px}
+.info-key{color:#8b949e;flex-shrink:0;margin-right:8px}
+.info-val{color:#e6edf3;text-align:right;word-break:break-all}
+.info-val.ok{color:#3fb950}.info-val.warn{color:#d29922}.info-val.err{color:#f85149}
+.info-cap{font-size:11px;color:#8b949e;line-height:1.6}
+.info-footer{font-size:10px;color:#3fb950;text-align:center;
+  margin-top:18px;letter-spacing:.08em;opacity:.7}
 .help-inner{padding:20px 16px;padding-bottom:calc(env(safe-area-inset-bottom,16px) + 20px)}
 .help-wake{font-size:15px;color:#e6edf3;letter-spacing:.06em;text-align:center;
   padding:13px 10px;border:1px solid rgba(88,166,255,.28);border-radius:10px;
@@ -209,12 +225,71 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
         </div>
       </div>
     </div>
+    <div id="page-info">
+      <div class="info-inner">
+        <div class="info-title">ROVER2</div>
+        <div class="info-sub">AI ROBOT — RASPBERRY PI 5 + HAILO AI HAT+</div>
+
+        <div class="info-section">
+          <div class="info-heading">WHAT I AM</div>
+          <div class="info-cap">Autonomous robot with Hailo-8L NPU for on-device AI vision and voice. No cloud. Fully offline.</div>
+        </div>
+
+        <div class="info-section">
+          <div class="info-heading">CAPABILITIES</div>
+          <div class="info-row"><span class="info-key">Vision</span><span class="info-val">Person detection &amp; follow (Hailo NPU)</span></div>
+          <div class="info-row"><span class="info-key">Voice STT</span><span class="info-val">Whisper tiny int8 — local, offline</span></div>
+          <div class="info-row"><span class="info-key">Voice TTS</span><span class="info-val">Web Speech API (A32) + Piper (Pi)</span></div>
+          <div class="info-row"><span class="info-key">LLM</span><span class="info-val">Qwen2.5 1.5B via Ollama (CPU)</span></div>
+          <div class="info-row"><span class="info-key">Drive</span><span class="info-val">MegaPi — 4WD arc turns</span></div>
+          <div class="info-row"><span class="info-key">Arm</span><span class="info-val">Lift servo + gripper</span></div>
+          <div class="info-row"><span class="info-key">BLE</span><span class="info-val">Galaxy Z Flip 6 beacon follow</span></div>
+          <div class="info-row"><span class="info-key">Guard</span><span class="info-val">Motion detect + HA webhook</span></div>
+        </div>
+
+        <div class="info-section">
+          <div class="info-heading">VOICE — SAY ROVER TO ACTIVATE</div>
+          <div class="info-row"><span class="info-key">follow me</span><span class="info-val">person follow</span></div>
+          <div class="info-row"><span class="info-key">how are you</span><span class="info-val">system status</span></div>
+          <div class="info-row"><span class="info-key">what do you see</span><span class="info-val">scene description</span></div>
+          <div class="info-row"><span class="info-key">forward / stop / left…</span><span class="info-val">drive 2 s</span></div>
+        </div>
+
+        <div class="info-section">
+          <div class="info-heading">ARCHITECTURE</div>
+          <div class="info-row"><span class="info-key">SBC</span><span class="info-val">Raspberry Pi 5 8 GB</span></div>
+          <div class="info-row"><span class="info-key">NPU</span><span class="info-val">Hailo-8L AI HAT+ (13 TOPS)</span></div>
+          <div class="info-row"><span class="info-key">MCU</span><span class="info-val">MegaPi (ATmega2560)</span></div>
+          <div class="info-row"><span class="info-key">Display</span><span class="info-val">Samsung Galaxy A32 (face PWA)</span></div>
+          <div class="info-row"><span class="info-key">WiFi AP</span><span class="info-val">RTL8812AU — ROVER2 SSID</span></div>
+          <div class="info-row"><span class="info-key">Service</span><span class="info-val">rover2-api FastAPI HTTPS :8082</span></div>
+        </div>
+
+        <div class="info-section">
+          <div class="info-heading">LIVE STATUS</div>
+          <div class="info-row"><span class="info-key">Uptime</span><span class="info-val" id="info-uptime">—</span></div>
+          <div class="info-row"><span class="info-key">Follow</span><span class="info-val" id="info-follow">—</span></div>
+          <div class="info-row"><span class="info-key">Person</span><span class="info-val" id="info-person">—</span></div>
+          <div class="info-row"><span class="info-key">Watchdog</span><span class="info-val" id="info-wdog">—</span></div>
+          <div class="info-row"><span class="info-key">AP Mode</span><span class="info-val" id="info-ap">—</span></div>
+          <div class="info-row"><span class="info-key">Alerts</span><span class="info-val" id="info-alerts">—</span></div>
+        </div>
+
+        <div class="info-section">
+          <div class="info-heading">BUILT BY</div>
+          <div class="info-cap">NotAmbassad0r — 2025-2026<br>github.com/NotAmbassad0r/rover2</div>
+        </div>
+
+        <div class="info-footer">swipe right to return</div>
+      </div>
+    </div>
   </div>
 </div>
 <div id="page-dots">
   <span class="dot-pg" id="dot-pg--1"></span>
   <span class="dot-pg" id="dot-pg-0"></span>
   <span class="dot-pg" id="dot-pg-1"></span>
+  <span class="dot-pg" id="dot-pg-2"></span>
 </div>
 <div id="tts-bubble"><div id="speech-bubble-text"></div></div>
 <div id="idle-hint">tap to wake</div>
@@ -227,6 +302,8 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   <div class="dbg-row"><span class="dbg-key">LAST</span><span id="dbg-last">—</span></div>
   <div class="dbg-row"><span class="dbg-key">ROUTED</span><span id="dbg-routed">—</span></div>
   <div class="dbg-row"><span class="dbg-key">WSS</span><span id="dbg-wss">disconnected</span></div>
+  <div class="dbg-row"><span class="dbg-key">WDOG</span><span id="dbg-wdog">—</span></div>
+  <div class="dbg-row"><span class="dbg-key">AP</span><span id="dbg-ap">—</span></div>
 </div>
 
 <div id="ui">
@@ -580,6 +657,60 @@ function _applyTelemetry(d) {
   }
   document.getElementById('alert-bar').textContent = _alertMsg;
   _ctrlUpdateState(d);
+
+  // Debug overlay — WDOG and AP rows
+  const wdogEl = document.getElementById('dbg-wdog');
+  const apEl   = document.getElementById('dbg-ap');
+  if (wdogEl) {
+    if (d.watchdog_last_action) {
+      wdogEl.textContent = d.watchdog_last_action;
+      wdogEl.style.color = '#d29922';
+    } else if (d.watchdog_last_cycle) {
+      wdogEl.textContent = 'OK ' + (d.watchdog_last_cycle || '');
+      wdogEl.style.color = '#3fb950';
+    } else {
+      wdogEl.textContent = '—';
+      wdogEl.style.color = '';
+    }
+  }
+  if (apEl) {
+    const ap = d.ap_state;
+    if (ap === 'home')  { apEl.textContent = 'HOME'; apEl.style.color = '#3fb950'; }
+    else if (ap === 'away')  { apEl.textContent = 'AWAY'; apEl.style.color = '#d29922'; }
+    else if (ap === 'error') { apEl.textContent = 'ERR'; apEl.style.color = '#f85149'; }
+    else { apEl.textContent = ap || '—'; apEl.style.color = ''; }
+  }
+
+  // SELF-HEALED: watchdog acted within last 60 s and system is now IDLE
+  const _wdTs = d.watchdog_last_action_ts || 0;
+  _lastWatchdogActionTs = _wdTs > 0 ? _wdTs : _lastWatchdogActionTs;
+
+  // Info page live data
+  const _setInfo = (id, txt, cls) => {
+    const e = document.getElementById(id);
+    if (!e) return;
+    e.textContent = txt;
+    e.className = 'info-val' + (cls ? ' ' + cls : '');
+  };
+  if (d.uptime_s != null) {
+    const h = Math.floor(d.uptime_s / 3600), m = Math.floor((d.uptime_s % 3600) / 60);
+    _setInfo('info-uptime', (h ? h + 'h ' : '') + m + 'm');
+  }
+  const fm = d.follow_mode || 'fused';
+  _setInfo('info-follow', d.tracking_enabled ? fm.toUpperCase()
+         : d.tracking_detect_only ? 'DETECT' : 'OFF',
+    d.tracking_enabled ? 'ok' : '');
+  _setInfo('info-person', d.person_detected ? 'DETECTED' : 'not seen',
+    d.person_detected ? 'ok' : '');
+  _setInfo('info-wdog', d.watchdog_last_action || (d.watchdog_last_cycle ? 'OK' : '—'),
+    d.watchdog_last_action ? 'warn' : 'ok');
+  _setInfo('info-ap', d.ap_state === 'home' ? 'HOME (AP off)'
+         : d.ap_state === 'away' ? 'AWAY (AP up)'
+         : d.ap_state || '—',
+    d.ap_state === 'error' ? 'err' : d.ap_state === 'away' ? 'ok' : '');
+  const alertCount = (d.alerts || []).length;
+  _setInfo('info-alerts', alertCount ? alertCount + ' active' : 'none',
+    alertCount ? 'warn' : 'ok');
 }
 
 function _connectWS() {
@@ -715,12 +846,23 @@ let _convLoopActive  = false;   // prevents concurrent _convLoop invocations
 // ── Canvas status text ────────────────────────────────────────────────────────
 let _statusText = '';   // rendered on canvas bottom-centre; '' = hidden
 let _voiceState = 'idle';  // 'idle' | 'listening' | 'thinking' | 'speaking'
+let _lastWatchdogActionTs = 0;  // epoch seconds of last watchdog action
+let _selfHealedUntil = 0;       // show SELF-HEALED until this Date.now() ms
 
 function _updateStatusText() {
   // Voice states take priority over robot states
   if (_voiceState === 'listening') { _statusText = 'LISTENING...'; return; }
   if (_voiceState === 'thinking')  { _statusText = 'THINKING...';  return; }
   if (_voiceState === 'speaking')  { _statusText = 'SPEAKING';     return; }
+  // SELF-HEALED: lowest priority, shown 5 s when watchdog acted within last 60 s and IDLE
+  if (faceState === STATE.IDLE) {
+    const nowSec = Date.now() / 1000;
+    if (_lastWatchdogActionTs > 0 && nowSec - _lastWatchdogActionTs < 60) {
+      if (_selfHealedUntil === 0) _selfHealedUntil = Date.now() + 5000;
+    }
+    if (Date.now() < _selfHealedUntil) { _statusText = 'SELF-HEALED'; return; }
+    if (Date.now() >= _selfHealedUntil) _selfHealedUntil = 0;
+  }
   // Robot / face states
   switch (faceState) {
     case STATE.FOLLOW:   _statusText = 'FOLLOWING';         break;
@@ -1589,21 +1731,19 @@ let _currentPage = 0;
 
 function _gotoPage(page) {
   _currentPage = page;
-  // 3-page strip: -1=help (left), 0=face (centre), 1=controls (right)
-  // Percentage-based: reliable on Android Chrome (vw units in JS transforms are not)
+  // 4-page strip: -1=help, 0=face, 1=controls, 2=info
+  // 25% steps, percentage-based for reliable Android Chrome behaviour
   const tx = page === -1 ? 'translateX(0%)'
-           : page ===  0 ? 'translateX(-33.333%)'
-           :               'translateX(-66.667%)';
+           : page ===  0 ? 'translateX(-25%)'
+           : page ===  1 ? 'translateX(-50%)'
+           :               'translateX(-75%)';
   document.getElementById('page-strip').style.transform = tx;
   // Fixed overlays — only visible on PAGE 0 (face)
   const onFace = page === 0;
-  // Canvas sits at z-index:2 — hide it on pages 1/-1 so controls/help are not obscured.
-  // Also pause the render loop (zero CPU when canvas is off-screen).
   canvas.style.display = onFace ? '' : 'none';
   _canvasVisible = onFace;
   document.getElementById('dbg-panel').style.display = onFace ? '' : 'none';
   document.getElementById('ui').style.display        = onFace ? '' : 'none';
-  // Hide TTS bubble when navigating away from face
   if (!onFace) { clearTimeout(_ttsBubbleTimer); clearTimeout(_ttsBubbleFadeTimer); const b = document.getElementById('tts-bubble'); if (b) b.classList.remove('visible'); }
   // MJPEG — load only on PAGE 1 (saves bandwidth)
   const cam = document.getElementById('cam-feed');
@@ -1616,7 +1756,7 @@ function _gotoPage(page) {
 }
 
 function _updatePageDots() {
-  [-1, 0, 1].forEach(p => {
+  [-1, 0, 1, 2].forEach(p => {
     const el = document.getElementById('dot-pg-' + p);
     if (el) el.classList.toggle('active', p === _currentPage);
   });
@@ -1672,9 +1812,11 @@ function _ctrlSetMode(mode) {
     if (dx < 0) {  // swipe left
       if (_currentPage === -1) _gotoPage(0);
       else if (_currentPage === 0) _gotoPage(1);
+      else if (_currentPage === 1) _gotoPage(2);
     } else {  // swipe right
       if (_currentPage === 0) _gotoPage(-1);
       else if (_currentPage === 1) _gotoPage(0);
+      else if (_currentPage === 2) _gotoPage(1);
     }
   }, { passive: true });
 })();

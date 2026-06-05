@@ -443,6 +443,8 @@
       <div class="status-row" id="row-ble"><span>BLE BEACON</span><span id="st-ble">—</span></div>
       <div class="status-row" id="row-cam-idle"><span>CAMERA</span><span id="st-cam-idle">—</span></div>
       <div class="status-row"><span>UPTIME</span><span id="st-uptime">—</span></div>
+      <div class="status-row" id="row-watchdog"><span>WATCHDOG</span><span id="st-watchdog">—</span></div>
+      <div class="status-row" id="row-ap"><span>AP MODE</span><span id="st-ap">—</span></div>
     </div>
 
     <div class="panel">
@@ -1252,6 +1254,23 @@
         renderFullDiag(await r.json());
       } catch (e) { toast('Diag error: ' + e.message); }
       await loadCharts();
+      // Append WLAN1 AP + rtw88_8812au rows to NETWORK section
+      try {
+        const nr = await fetch(apiBase() + '/api/network/status');
+        const nd = await nr.json();
+        const el = document.getElementById('fd-network');
+        if (el) {
+          const apTxt = nd.wlan0_connected ? 'down (home WiFi active)'
+                      : nd.wlan1_ap_active ? `up — ch${nd.wlan1_channel ?? '?'}`
+                      : 'down (away, AP not active)';
+          const apCls = nd.wlan0_connected ? 'ok' : nd.wlan1_ap_active ? 'ok' : 'warn';
+          const drvCls = nd.rtw88_8812au_loaded ? 'ok' : 'error';
+          el.insertAdjacentHTML('beforeend',
+            `<div class="metric-row ${apCls}"><span class="label">wlan1 AP</span><span class="val">${apTxt}</span></div>` +
+            `<div class="metric-row ${drvCls}"><span class="label">rtw88_8812au</span><span class="val">${nd.rtw88_8812au_loaded ? 'loaded' : 'NOT LOADED'}</span></div>`
+          );
+        }
+      } catch (_) {}
     }
 
     async function runFullDiagnostics() {
@@ -1498,18 +1517,29 @@
 
     async function loadWatchdogStatus() {
       try {
-        const r = await fetch(apiBase() + '/api/status');
+        const r = await fetch(apiBase() + '/api/watchdog/status');
         const d = await r.json();
         const grid = document.getElementById('watchdog-status-grid');
         if (!grid) return;
-        const actions  = d.watchdog_actions ?? '—';
-        const ok       = d.watchdog_ok;
-        const stateStr = ok == null ? '—' : (ok ? 'OK' : 'LIMIT REACHED');
-        const stateCol = ok == null ? '' : (ok ? 'var(--success)' : 'var(--danger)');
-        grid.innerHTML = [
-          ['STATUS',  `<span style="color:${stateCol};font-weight:700">${stateStr}</span>`],
-          ['ACTIONS', `${actions} / 3 this hour`],
-        ].map(([k, v]) =>
+        const ok       = d.status === 'ok';
+        const stateStr = d.status === 'disabled' ? 'DISABLED'
+                       : ok ? 'OK' : 'LIMIT REACHED';
+        const stateCol = d.status === 'disabled' ? 'var(--muted)'
+                       : ok ? 'var(--accent)' : 'var(--danger)';
+        const lastAct  = d.last_action || '—';
+        const lastActTs = d.last_action_ts
+          ? new Date(d.last_action_ts * 1000).toLocaleTimeString()
+          : '—';
+        const lastCyc  = d.last_cycle || '—';
+        const rows = [
+          ['STATUS',      `<span style="color:${stateCol};font-weight:700">${stateStr}</span>`],
+          ['ACTIONS',     `${d.actions_used ?? 0} / ${d.max_actions ?? 3} this hour`],
+          ['LAST CYCLE',  lastCyc],
+          ['LAST ACTION', lastAct],
+          ['ACTION AT',   lastActTs],
+          ['ALERTS',      `${(d.persistent_alerts || []).length} active`],
+        ];
+        grid.innerHTML = rows.map(([k, v]) =>
           `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
         ).join('');
       } catch (_) {}
@@ -1730,6 +1760,50 @@
         cameraSleeping = !!d.camera_sleeping;
         _applyCameraSleep(cameraSleeping);
       }
+
+      // WATCHDOG row
+      const wdRow = document.getElementById('row-watchdog');
+      const wdEl  = document.getElementById('st-watchdog');
+      if (wdRow && wdEl) {
+        if (d.watchdog_last_action) {
+          wdEl.textContent = d.watchdog_last_action;
+          wdEl.style.color = 'var(--warn)';
+          wdRow.className  = 'status-row warn';
+        } else if (d.watchdog_last_cycle) {
+          wdEl.textContent = 'OK';
+          wdEl.style.color = 'var(--accent)';
+          wdRow.className  = 'status-row';
+        } else {
+          wdEl.textContent = '—';
+          wdEl.style.color = '';
+          wdRow.className  = 'status-row';
+        }
+      }
+
+      // AP MODE row
+      const apRow = document.getElementById('row-ap');
+      const apEl  = document.getElementById('st-ap');
+      if (apRow && apEl) {
+        const ap = d.ap_state;
+        if (ap === 'home') {
+          apEl.textContent = 'AUTO — down (home WiFi)';
+          apEl.style.color = 'var(--muted)';
+          apRow.className  = 'status-row';
+        } else if (ap === 'away') {
+          apEl.textContent = 'AUTO — up (away from home)';
+          apEl.style.color = 'var(--accent)';
+          apRow.className  = 'status-row';
+        } else if (ap === 'error') {
+          apEl.textContent = 'ERROR';
+          apEl.style.color = 'var(--danger)';
+          apRow.className  = 'status-row err';
+        } else if (ap) {
+          apEl.textContent = ap;
+          apEl.style.color = '';
+          apRow.className  = 'status-row';
+        }
+      }
+
       drawDetectionOverlay(d);
     }
 
@@ -2439,14 +2513,14 @@
         return;
       }
       bar.style.display = 'block';
-      msgs.innerHTML = alerts.map(a =>
-        `<div>${a.severity === 'crit' ? '🔴' : '🟡'} ${a.msg}</div>`
-      ).join('');
-      // Toast on new alert
+      const shown = alerts.slice(-3);
+      msgs.innerHTML = shown.map(a => {
+        const col = a.severity === 'crit' ? 'var(--danger)' : 'var(--warn)';
+        return `<div style="color:${col}">[${(a.severity || 'warn').toUpperCase()}] ${a.msg}</div>`;
+      }).join('');
       if (alerts.length > _lastAlertCount) {
         const newest = alerts[alerts.length - 1];
-        toast('⚠ ' + newest.msg, 5000);
-        speak('Alert: ' + newest.msg);
+        toast('ALERT: ' + newest.msg);
       }
       _lastAlertCount = alerts.length;
     }

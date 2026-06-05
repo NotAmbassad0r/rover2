@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-05 (watchdog verified; RTL8812AU confirmed in-kernel; AP auto-toggle implemented and verified)
+Last updated: 2026-06-05 (watchdog/AP state in web UI and face PWA; face info page; new API endpoints)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -478,7 +478,12 @@ Endpoint: `wss://<ROVER_WIFI_IP>:8082/ws`
 **Client → server:** `drive`, `stop`, `grip`, `arm`, `arm_pulse`, `tracking`, `ping`
 **Server → client:** `telemetry`, `ack`, `pong`, `error`
 
-Telemetry fields include: `tracking_enabled`, `tracking_detect_only`, `tracking_hailo_ready`, `person_detected`, `ble_active`, `ble_follow_enabled`, `ble_available`, `ble_seen`, `ble_rssi`, `alerts`.
+Telemetry fields include: `tracking_enabled`, `tracking_detect_only`, `tracking_hailo_ready`, `person_detected`, `ble_active`, `ble_follow_enabled`, `ble_available`, `ble_seen`, `ble_rssi`, `alerts`, `ap_state`, `watchdog_last_action`, `watchdog_last_action_ts`, `watchdog_last_cycle`.
+
+New REST endpoints (2026-06-05):
+- `GET /api/watchdog/status` — detailed watchdog state (last_cycle, last_action, last_action_ts, persistent_alerts, actions_used)
+- `GET /api/network/status` — AP state (wlan0_connected, wlan1_ap_active, wlan1_channel, rtw88_8812au_loaded)
+- `POST /api/watchdog/test-alert` — inject a test alert into the next telemetry push (dev/debug only)
 
 Tracking API: `POST /api/tracking`
 - `{"enabled": true}` — enable FOLLOW
@@ -698,7 +703,20 @@ Must be created manually on a fresh Pi setup.
 - ✓ RTL8812AU: in-kernel `rtw88_8812au` driver confirmed loaded; AP up on channel 6, 10.0.0.1 assigned; no DKMS needed (in-kernel, survives upgrades)
 - ✓ AP auto-toggle: NM dispatcher + boot service implemented; NM simulation passed (AP up on disconnect, AP down on reconnect); watchdog no longer fights dispatcher
 
+**Web UI + Face PWA (2026-06-05):** ✓ done
+- CONTROL tab STATUS: WATCHDOG row (last action or OK) + AP MODE row (home/away/error)
+- DIAG tab WATCHDOG panel: now shows last cycle, last action, action timestamp, alert count
+- DIAG tab NETWORK section: WLAN1 AP state + rtw88_8812au driver loaded/not status (from `/api/network/status`)
+- Alert bar: last 3 only, CSS severity colour coding (no emoji), correct toast (no TTS)
+- New REST endpoints: `GET /api/watchdog/status`, `GET /api/network/status`, `POST /api/watchdog/test-alert`
+- WebSocket telemetry extra (5 s tick, not 400 ms): `ap_state`, `watchdog_last_action`, `watchdog_last_action_ts`, `watchdog_last_cycle`
+- Face PWA: WDOG + AP rows in debug overlay; SELF-HEALED canvas status (5 s, when watchdog acted <60 s ago and IDLE)
+- Face PWA: PAGE 3 info page (ROVER2 overview, capabilities, voice, architecture, live status from WS, built-by)
+- Face PWA: 4-page swipe layout (help ← face → ctrl → info); indicator dots updated; sw.js bumped to `rover-face-v34`
+- Watchdog: `last_cycle_iso`, `last_action`, `last_action_ts` properties added
+
 **Next session priorities:**
+- **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
 - **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)**
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
 - MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting

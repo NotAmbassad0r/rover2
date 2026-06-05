@@ -270,6 +270,11 @@ def create_app(
     _cpu_high_since: float | None = None
     _thermal_alert: dict | None = None  # set by /api/services on-demand evaluation
 
+    # AP state — cached 10 s (subprocess-based, never run every 400 ms)
+    _ap_state_cache: str = ""
+    _ap_state_cache_ts: float = 0.0
+    _AP_STATE_TTL_S: float = 10.0
+
     # Proactive speech transition tracking
     _prev_person_detected: bool = False
     _prev_tracking_active: bool = False
@@ -411,6 +416,7 @@ def create_app(
                 nonlocal _ultra_reconnect_at
                 nonlocal _hailo_fault_since, _hailo_recovery_count, _hailo_recovery_at
                 nonlocal _mem_warn_ts
+                nonlocal _ap_state_cache, _ap_state_cache_ts
                 new_alerts: list[dict] = []
                 seen_metrics: set[str] = set()
                 for metric, threshold, severity, tmpl in _THRESHOLDS:
@@ -575,11 +581,44 @@ def create_app(
                             _voice_engine.speak_event("CAMERA_SLEEPING", {}, audio_router)
                         _prev_camera_sleeping = _cs
 
+                # AP state — cached 10 s (nmcli + systemctl subprocesses)
+                _now_ap = time.monotonic()
+                if _now_ap - _ap_state_cache_ts >= _AP_STATE_TTL_S:
+                    try:
+                        _proc = await asyncio.create_subprocess_exec(
+                            "nmcli", "-t", "-f", "DEVICE,STATE", "device",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        _out, _ = await asyncio.wait_for(_proc.communicate(), timeout=5.0)
+                        if b"wlan0:connected" in _out:
+                            _ap_state_cache = "home"
+                        else:
+                            _proc2 = await asyncio.create_subprocess_exec(
+                                "systemctl", "is-active", "hostapd",
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.DEVNULL,
+                            )
+                            _out2, _ = await asyncio.wait_for(_proc2.communicate(), timeout=5.0)
+                            _ap_state_cache = "away" if _out2.strip() == b"active" else "error"
+                        _ap_state_cache_ts = _now_ap
+                    except Exception:
+                        _ap_state_cache = "error"
+
+                # Watchdog telemetry fields
+                _wd_last_action = watchdog.last_action if watchdog is not None else ""
+                _wd_last_action_ts = watchdog.last_action_ts if watchdog is not None else 0.0
+                _wd_last_cycle = watchdog.last_cycle_iso if watchdog is not None else ""
+
                 hub.set_telemetry_extra({
                     "alerts": all_alerts,
                     "ws_client_count": hub.client_count,
                     "audio_mode": audio_router.get_mode() if audio_router else None,
                     "conversation_active": _conversation_active,
+                    "ap_state": _ap_state_cache,
+                    "watchdog_last_action": _wd_last_action,
+                    "watchdog_last_action_ts": _wd_last_action_ts,
+                    "watchdog_last_cycle": _wd_last_cycle,
                 })
                 # ───────────────────────────────────────────────────────────
 
@@ -1813,6 +1852,87 @@ def create_app(
             raise HTTPException(status_code=503, detail="watchdog not running")
         watchdog.reset_actions()
         return JSONResponse({"status": "ok", "actions_used": watchdog.actions_used})
+
+    @app.get("/api/watchdog/status")
+    async def watchdog_status_detail() -> JSONResponse:
+        """Detailed watchdog state — last cycle, last action, persistent alerts."""
+        if watchdog is None:
+            return JSONResponse({
+                "status": "disabled", "actions_used": 0, "max_actions": 3,
+                "last_cycle": "", "last_action": "", "last_action_ts": 0,
+                "persistent_alerts": [],
+            })
+        return JSONResponse({
+            "status": "ok" if watchdog.ok else "limit_reached",
+            "actions_used": watchdog.actions_used,
+            "max_actions": watchdog._max_actions,
+            "last_cycle": watchdog.last_cycle_iso,
+            "last_action": watchdog.last_action,
+            "last_action_ts": watchdog.last_action_ts,
+            "persistent_alerts": watchdog.get_persistent_alerts(),
+        })
+
+    @app.get("/api/network/status")
+    async def network_status() -> JSONResponse:
+        """AP state, WLAN1 channel, rtw88_8812au driver, wlan0 connectivity."""
+        results: dict[str, Any] = {
+            "wlan0_connected": False, "wlan1_ap_active": False,
+            "wlan1_channel": None, "rtw88_8812au_loaded": False,
+        }
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nmcli", "-t", "-f", "DEVICE,STATE", "device",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            results["wlan0_connected"] = b"wlan0:connected" in out
+        except Exception:
+            pass
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "sudo", "iw", "dev", "wlan1", "info",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            text = out.decode(errors="replace")
+            results["wlan1_ap_active"] = "type AP" in text
+            for line in text.splitlines():
+                if "channel" in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            results["wlan1_channel"] = int(parts[1])
+                        except ValueError:
+                            pass
+                    break
+        except Exception:
+            pass
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "lsmod",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            results["rtw88_8812au_loaded"] = b"rtw88_8812au" in out
+        except Exception:
+            pass
+        return JSONResponse(results)
+
+    @app.post("/api/watchdog/test-alert")
+    async def watchdog_test_alert() -> JSONResponse:
+        """Broadcast a test alert via WebSocket telemetry_extra (dev/debug only)."""
+        test_alert = {
+            "metric": "watchdog_test", "value": 1,
+            "severity": "warn", "ts": int(time.time()),
+            "msg": "TEST — watchdog alert pipeline OK",
+            "source": "watchdog",
+        }
+        extra = dict(hub._telemetry_extra)
+        existing = list(extra.get("alerts", []))
+        existing.append(test_alert)
+        extra["alerts"] = existing
+        hub.set_telemetry_extra(extra)
+        return JSONResponse({"status": "ok", "alert": test_alert})
 
     @app.post("/api/tracking")
     async def tracking(request: Request) -> JSONResponse:
