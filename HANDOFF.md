@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-06 (hailo-ollama LLM benchmark; llama3.2:3b vs qwen2.5-instruct:1.5b; decision: keep qwen)
+Last updated: 2026-06-06 (CPU fallback LLM benchmark; llama3.2:1b vs gemma3:1b / qwen2.5:3b; decision: keep llama3.2:1b; root cause: 38-tool context too large for Pi 5)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -737,7 +737,37 @@ llama3.2:3b HEF deleted from hailo-ollama store to free ~3.4 GB. qwen2.5-instruc
 
 hailo-ollama note: GenAI session conflict with VLM confirmed. To run a benchmark again: stop rover2-api first, then start hailo-ollama directly (`HAILO_OLLAMA_VDEVICE_GROUP_ID=rover2 HAILO_OLLAMA_GENERATION_TIMEOUT=120 /usr/local/bin/hailo-ollama serve`). Port 8000 (not 12145 — old comment in issue #26 was wrong).
 
+---
+
+**CPU fallback LLM benchmark (2026-06-06):** ✓ done — decision: **KEEP llama3.2:1b**
+
+Benchmark method: stop rover2-api (prevents llama3.2:3b keepalive pings from interfering with ollama scheduler); restart ollama clean; pull candidates; gate test + latency test; stop ollama; restart rover2-api. Verbatim agent.py tool definitions and `_SYSTEM_PROMPT` used (HA-enabled, 38 tools).
+
+**Root cause finding:** the 38-tool + `_SYSTEM_PROMPT` context is ~3000–5000 tokens. All sub-4B models process this in >60 s on Pi 5 (no GPU), making the gate test time out at 120 s. This is a production limitation: `_call_model_cpu` (web chat CPU fallback) may silently time out in production (ollama_timeout_s: 180 s) on the first query.
+
+| Model | Gate (38 tools, 120s) | Pull | Latency notes | Decision |
+|-------|----------------------|------|---------------|----------|
+| llama3.2:1b (baseline) | FAIL (timeout) | already present | 26.6s cold/3 tools; 60s warm/38-tool-minimal | **KEEP** |
+| gemma3:1b | FAIL (HTTP 400 — no tool_calls API) | OK → removed | — | SKIP |
+| gemma3:2b | FAIL (pull error) | FAILED | — | SKIP |
+| qwen2.5:3b | FAIL (timeout) | OK → removed | 107.9s cold/3 tools; 181s warm/38-tool-minimal → ~400s with full defs | SKIP |
+
+Targeted latency measurement (TIMEOUT=300s, minimal tool defs with short descriptions, model warm):
+- `llama3.2:1b`: 3-tool cold = **26.6s**, 38-tool warm = **60.0s** (minimal defs → ~120–150s with full production defs)
+- `qwen2.5:3b`: 3-tool cold = **107.9s**, 38-tool warm = **181.2s** (minimal) → exceeds 180s production timeout
+
+**Decision: KEEP llama3.2:1b.** No candidate improves on latency or precision for the 38-tool web chat CPU fallback path. qwen2.5:3b is 3× slower per token and exceeds production timeout even for minimal tool context.
+
+**Secondary finding:** `_SPOKEN_TOOLS` (10-tool subset, pi/agent.py line 484) is **dead code** — the spoken CPU fallback (`_cpu_spoken_no_tools`) sends NO tools at all. Tool_calls are only used by `_call_model_cpu` (web chat fallback, 38 tools).
+
+**Follow-up action needed (not done here):** Reduce `_call_model_cpu` tool context from 38 to ~10–15 essential tools to make CPU fallback practical. Estimated warm latency with 10 tools: ~20–25s (within 180s timeout with headroom). Remove `_SPOKEN_TOOLS` dead code.
+
+Removed from ollama: `gemma3:1b`, `qwen2.5:3b`. Retained: `llama3.2:1b`, `llama3.2:3b`, `deepseek-r1:1.5b`, `gemma2:2b`.
+
+---
+
 **Next session priorities:**
+- **Reduce `_call_model_cpu` tool context** (pi/agent.py) from 38 to ~10–15 essential tools: fixes production CPU fallback latency (~120s → ~20–25s); also remove `_SPOKEN_TOOLS` dead code (line 484, never referenced)
 - **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
 - **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)**
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
