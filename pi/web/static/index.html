@@ -414,7 +414,7 @@
 
   <!-- ── Voice / TTS bar ── -->
   <div id="voice-bar">
-    <button id="btn-global-voice" type="button" onclick="startGlobalVoice()">_ SPEAK TO ROVER</button>
+    <button id="btn-global-voice" type="button" onclick="startGlobalVoice()">🎤 SPEAK TO ROVER</button>
     <button id="btn-tts" type="button" onclick="toggleTTS()" title="Toggle voice replies">&#128263;</button>
   </div>
 
@@ -1593,7 +1593,7 @@
         if (!grid) return;
         const sr = d.hailo_tool_success_rate != null
           ? (d.hailo_tool_success_rate * 100).toFixed(1) + '%' : '—';
-        grid.innerHTML = [
+        const rows = [
           ['BACKEND',    d.last_backend ?? '—'],
           ['LAST TOOL',  d.last_tool    ?? '—'],
           ['LAST TS',    d.last_tool_ts ?? '—'],
@@ -1601,7 +1601,14 @@
           ['FALLBACK',   d.hailo_tool_fallback_count ?? 0],
           ['SUCCESS %',  sr],
           ['TOOL-CALL',  d.hailo_tool_calling_enabled ? 'enabled' : 'disabled'],
-        ].map(([k, v]) => `<span class="diag-label">${k}</span><span class="diag-val">${v}</span>`).join('');
+        ];
+        if (d.vlm_cooldown_remaining_s > 0)
+          rows.push(['VLM COOLDOWN', d.vlm_cooldown_remaining_s.toFixed(1) + 's']);
+        if (d.vlm_last_describe_wait_s > 0)
+          rows.push(['VLM LAST WAIT', d.vlm_last_describe_wait_s.toFixed(1) + 's']);
+        grid.innerHTML = rows.map(([k, v]) =>
+          `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
+        ).join('');
       } catch (e) { /* silently ignore if agent not configured */ }
     }
 
@@ -1655,7 +1662,7 @@
 
     function cameraStreamUrl() {
       const proto = location.protocol === 'https:' ? 'https:' : 'http:';
-      return 'https://' + location.hostname + ':8082/stream';
+      return proto + '//' + location.hostname + ':8082/stream';
     }
 
     function formatUltrasonic(cm, ageS) {
@@ -1862,9 +1869,7 @@
     }
 
     function wakeCamera() {
-      // User tapped the idle overlay — POST a wake to the REST endpoint
-      fetch('/api/camera/wake', { method: 'POST' }).catch(() => {});
-      // Optimistically update the UI immediately
+      fetch(apiBase() + '/api/camera/wake', { method: 'POST' }).catch(() => {});
       cameraSleeping = false;
       _applyCameraSleep(false);
     }
@@ -1901,7 +1906,7 @@
     }
 
     function setBleFollow(enabled) {
-      fetch('/api/tracking', {
+      fetch(apiBase() + '/api/tracking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ble_follow_enabled: enabled }),
@@ -1913,8 +1918,7 @@
     }
 
     function setFollowMode(mode) {
-      // POST /api/tracking {follow_mode} — starts follow in requested mode
-      fetch('/api/tracking', {
+      fetch(apiBase() + '/api/tracking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ follow_mode: mode }),
@@ -2242,7 +2246,10 @@
           el.textContent = vlm.status || '—';
           el.style.color = 'var(--danger)';
         }
-        det.textContent = vlm.detail || vlm.hef || '';
+        let detText = vlm.detail || vlm.hef || '';
+        if (vlm.cooldown_remaining_s > 0)
+          detText += (detText ? '  ' : '') + 'cooldown: ' + vlm.cooldown_remaining_s.toFixed(0) + 's';
+        det.textContent = detText;
       } catch (_) {}
       await loadAgentStatus();
     }
@@ -2713,7 +2720,8 @@
 
       // Label: PERSON  conf%  distance
       const conf = Math.round((d.person_conf || 0) * 100);
-      const dist = d.safe_distance_cm > 0 ? d.safe_distance_cm + ' cm' : '—';
+      const dist = (d.ultrasonic_cm != null && d.ultrasonic_age_s != null && d.ultrasonic_age_s < 2)
+        ? d.ultrasonic_cm + ' cm' : '—';
       const label = 'PERSON  ' + conf + '%  ' + dist;
 
       ctx.font      = 'bold 11px "Courier New", monospace';
