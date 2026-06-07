@@ -723,6 +723,15 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-title">HOME ASSISTANT</div>
+      <div class="diag-grid" id="ha-status-grid"></div>
+      <div id="ha-entities-section" style="margin-top:4px;"></div>
+      <div class="tools-actions" style="margin-top:8px;">
+        <button type="button" id="ha-refresh-btn">REFRESH</button>
+      </div>
+    </div>
+
   </div>
 
   <!-- ════ CHAT TAB ════ -->
@@ -971,7 +980,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); loadHAStatus(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1332,7 +1341,7 @@
         _diagAutoTimer = null;
         this.classList.remove('active');
       } else {
-        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); }, 5000);
+        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); loadHAStatus(); }, 5000);
         this.classList.add('active');
         loadFullDiagnostics();
       }
@@ -1837,6 +1846,71 @@
     document.getElementById('follow-pipeline-refresh-btn').onclick = () => loadFollowPipeline();
     loadFollowPipeline().catch(() => {});
     setInterval(loadFollowPipeline, 5000);
+
+    async function loadHAStatus() {
+      try {
+        const r = await fetch(apiBase() + '/api/ha/status');
+        const d = await r.json();
+        const grid = document.getElementById('ha-status-grid');
+        const entSection = document.getElementById('ha-entities-section');
+        if (!grid) return;
+        if (!d.configured) {
+          grid.innerHTML = '<div class="diag-row"><span class="label">STATUS</span>' +
+            '<span class="val" style="color:var(--muted)">not configured (HA_URL + HA_TOKEN not set)</span></div>';
+          if (entSection) entSection.innerHTML = '';
+          return;
+        }
+        const connCol = d.connected ? 'var(--success)' : 'var(--error,#f55)';
+        const connStr = d.connected ? 'CONNECTED' : 'DISCONNECTED';
+        const statusRows = [['STATUS', `<span style="color:${connCol}">${connStr}</span>`]];
+        if (d.last_command) {
+          const lc = d.last_command;
+          const ts = new Date(lc.ts * 1000).toLocaleTimeString();
+          const okMark = lc.ok ? '✓' : '✗';
+          statusRows.push(['LAST CMD', `${okMark} toggle ${lc.entity_id.split('.')[1].replace(/_/g,' ')} @ ${ts}`]);
+        }
+        (d.temperatures || []).forEach(t => {
+          statusRows.push([t.name.toUpperCase(), t.temperature.toFixed(1) + ' ' + t.unit]);
+        });
+        grid.innerHTML = statusRows.map(([k, v]) =>
+          `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
+        ).join('');
+        if (entSection) {
+          if (!d.connected || !(d.toggleables || []).length) { entSection.innerHTML = ''; return; }
+          const domOrd = {light: 0, switch: 1, media_player: 2};
+          const sorted = [...d.toggleables].sort((a, b) => (domOrd[a.domain] ?? 9) - (domOrd[b.domain] ?? 9));
+          entSection.innerHTML = sorted.map(e => {
+            const isOn = e.state === 'on' || e.state === 'playing';
+            const btnCol = isOn ? 'var(--success)' : 'var(--muted)';
+            const safeName = e.name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const safeId = e.entity_id.replace(/'/g, "\\'");
+            return `<div class="diag-row" style="align-items:center;">` +
+              `<span class="label" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</span>` +
+              `<button type="button" style="padding:2px 8px;font-size:10px;min-height:0;` +
+              `color:${btnCol};border-color:${btnCol};flex-shrink:0;"` +
+              ` onclick="haToggle('${safeId}','${safeName}')">${isOn ? 'ON' : 'OFF'}</button>` +
+              `</div>`;
+          }).join('');
+        }
+      } catch (_) {}
+    }
+
+    async function haToggle(entityId, name) {
+      if (!confirm('Toggle ' + name + '?')) return;
+      try {
+        const r = await fetch(apiBase() + '/api/ha/toggle', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({entity_id: entityId}),
+        });
+        if (r.ok) { await loadHAStatus(); }
+        else { toast('HA toggle failed (' + r.status + ')'); }
+      } catch (e) { toast('HA toggle error'); }
+    }
+
+    document.getElementById('ha-refresh-btn').onclick = () => loadHAStatus();
+    loadHAStatus().catch(() => {});
+    setInterval(loadHAStatus, 5000);
 
     // ─────────────────────────────────────────────────────────────────────────
 

@@ -249,6 +249,8 @@ def create_app(
     # Transient service alerts — set by /api/services, included in next WS push
     _camera_alert: dict | None = None
     _ollama_alert: dict | None = None
+    # HA last-command state (mutable container so endpoints don't need nonlocal)
+    _ha_state: dict = {"last_command": None}
 
     _metrics_cfg = config.get("metrics", {})
     _METRICS_INTERVAL_S = float(_metrics_cfg.get("interval_s", 5.0))
@@ -2158,6 +2160,56 @@ def create_app(
         if body_tracker is None:
             return JSONResponse({"available": False})
         return JSONResponse(body_tracker.get_state())
+
+    @app.get("/api/ha/status")
+    async def ha_status_endpoint() -> JSONResponse:
+        """Home Assistant entities + connection state for the DIAG tab."""
+        if rover_agent is None or not rover_agent.ha_available:
+            return JSONResponse({
+                "configured": False, "connected": False,
+                "toggleables": [], "temperatures": [],
+                "last_command": _ha_state["last_command"],
+            })
+        ha = rover_agent._ha_client
+        connected = await ha.ping()
+        if not connected:
+            return JSONResponse({
+                "configured": True, "connected": False,
+                "toggleables": [], "temperatures": [],
+                "last_command": _ha_state["last_command"],
+            })
+        toggleables, temperatures = await asyncio.gather(
+            ha.get_toggleable_entities(),
+            ha.get_temperature_sensors(),
+        )
+        return JSONResponse({
+            "configured": True, "connected": True,
+            "toggleables": toggleables,
+            "temperatures": temperatures,
+            "last_command": _ha_state["last_command"],
+        })
+
+    @app.post("/api/ha/toggle")
+    async def ha_toggle_endpoint(request: Request) -> JSONResponse:
+        """Toggle a Home Assistant entity by entity_id."""
+        if rover_agent is None or not rover_agent.ha_available:
+            raise HTTPException(status_code=503, detail="HA not configured")
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+        entity_id = body.get("entity_id", "")
+        if not entity_id:
+            raise HTTPException(status_code=400, detail="entity_id required")
+        ha = rover_agent._ha_client
+        ok = await ha.toggle(entity_id)
+        _ha_state["last_command"] = {
+            "entity_id": entity_id,
+            "action": "toggle",
+            "ok": ok,
+            "ts": int(time.time()),
+        }
+        return JSONResponse({"ok": ok, "entity_id": entity_id})
 
     @app.get("/api/guard/status")
     async def guard_status() -> JSONResponse:
