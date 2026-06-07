@@ -307,3 +307,219 @@ before the 180s production timeout.
 **Also:** remove `_SPOKEN_TOOLS` dead code from pi/agent.py line 484 in same PR.
 
 Priority: high — prerequisite for structured output tool-calling on hailo-ollama
+
+---
+
+## Watchdog / System Maintenance
+
+### Weekly software update check and safe auto-install
+
+Add a weekly maintenance task to the watchdog that checks for available
+updates and installs only what is safe to auto-apply. Everything else
+is surfaced as an alert for manual review.
+
+#### What runs weekly (Sunday 03:00 via asyncio scheduled task)
+
+**Phase 1 — fetch update list (always safe, zero risk)**
+```
+sudo apt-get update
+apt list --upgradable 2>/dev/null
+```
+Parse output and categorise every pending update:
+
+| Category | Examples | Auto-install safe? |
+|----------|----------|--------------------|
+| Hailo packages | hailort, hailo-all, hailo-ai/* | NO — requires procedure |
+| Kernel packages | linux-image-*, linux-headers-* | NO — DKMS rebuild risk |
+| Python system packages | python3-*, pip packages | NO — pinned deps |
+| DKMS modules | any dkms package | NO — manual rebuild needed |
+| rover2 dependencies | turbojpeg, libcamera-* | NO — test first |
+| Security-only patches | openssl, openssh-server, curl | YES — if not in above |
+| General system packages | nano, git, rsync, htop, etc | YES — low risk |
+
+**Phase 2 — alert on available updates (always)**
+Emit WebSocket alert with full categorised update list:
+```
+severity: "info"
+message: "Weekly update check: N updates available (X safe to auto-install,
+          Y require manual review)"
+action_taken: "none" or "installed X packages"
+details: {
+  "safe_to_install": ["package1=version", ...],
+  "manual_review": ["hailort=5.3.0", "linux-image-6.18.34", ...],
+  "held_back": ["package=version (reason)"]
+}
+```
+Always show manual_review list prominently — these are the ones that matter.
+
+**Phase 3 — auto-install safe packages (if any)**
+Only if safe_to_install list is non-empty AND:
+- rover2-api is idle (no active voice or follow session)
+- CPU < 50% (not in the middle of something)
+- Disk > 2 GB free
+
+```
+sudo apt-get install -y --only-upgrade <safe_packages>
+```
+
+After install:
+- Verify rover2-api still responds: `curl -sk https://localhost:8082/api/status`
+- If unhealthy → log critical, emit alert "POST-UPGRADE HEALTH CHECK FAILED"
+- Log all installed packages with versions to journal with `[watchdog-update]` prefix
+
+**Phase 4 — pip check (never install, always alert only)**
+```
+pip list --outdated 2>/dev/null | grep -v "^Package"
+```
+Alert with any outdated pip packages — never auto-upgrade pip packages.
+Reason: requirements.txt has pinned versions for a reason (PyTurboJPEG<2.0,
+hailo_platform==5.2.0, etc). Pip upgrades require manual testing.
+
+**Phase 5 — Hailo-specific update check**
+Check for HailoRT updates separately from general apt packages:
+```
+apt-cache policy hailort
+# compare installed vs candidate version
+```
+If a newer HailoRT version is available:
+- Do NOT auto-install — always manual per HAILORT_UPGRADE.md
+- Emit a prominent alert:
+  ```
+  severity: "warning"
+  message: "HailoRT update available: X.X.X → Y.Y.Y —
+            check release notes for issue #26 fix (single GenAI session
+            limit). If resolved: follow HAILORT_UPGRADE.md to upgrade."
+  ```
+- Include Hailo release notes URL in alert details:
+  `https://community.hailo.ai/c/release-notes`
+
+**Phase 6 — known issue package tracking**
+For each known issue in HANDOFF.md that is blocked on a package update,
+check whether the relevant package has a new version available and alert
+prominently if so. Known issues to watch:
+
+- **Issue #26:** hailort — single GenAI session limit
+  Watch for: hailort >= 5.3.0 or any version above current
+  Alert: "HailoRT update available — may resolve issue #26 (GenAI
+          single-session limit). Check release notes before upgrading."
+
+- **Issue #24:** linux-image — kernel upgrade knocks out DKMS modules
+  Watch for: any linux-image-* update available
+  Alert: "Kernel update available: X → Y — do NOT auto-install.
+          After manual upgrade, verify DKMS rebuild:
+          `sudo dkms autoinstall && lsmod | grep hailo`"
+
+- **hailo_model_zoo_genai:** watch for new LLM models becoming available
+  Check: `curl -s http://localhost:8000/hailo/v1/list | python3 -m json.tool`
+  Compare model list against last known list stored in
+  `/opt/rover2/last_hailo_models.json`
+  If new models detected:
+  Alert: "New Hailo LLM models available: \<model_names\> —
+          consider upgrading hailo_model_zoo_genai for better LLM quality"
+  Update `/opt/rover2/last_hailo_models.json` after alerting
+
+Same principle applies to any future known issues added to HANDOFF.md —
+if a package update corresponds to a known issue, flag it prominently
+rather than listing it as a generic available update.
+
+---
+
+#### Packages to permanently hold (never auto-upgrade)
+
+Create `/etc/apt/preferences.d/rover2-hold` during initial setup
+(not on every watchdog cycle — check if file exists first):
+```
+Package: hailort
+Pin: version *
+Pin-Priority: -1
+Package: hailo-all
+Pin: version *
+Pin-Priority: -1
+Package: linux-image-*
+Pin: version *
+Pin-Priority: -1
+Package: linux-headers-*
+Pin: version *
+Pin-Priority: -1
+```
+These packages will not appear in `apt upgrade` output at all.
+Hailo upgrades follow HAILORT_UPGRADE.md procedure only.
+Kernel upgrades are manual only — DKMS rebuild verification required.
+
+---
+
+#### Config (pi/config.yaml)
+```yaml
+watchdog:
+  update_check:
+    enabled: true
+    schedule: "sunday_03:00"
+    auto_install_safe: true   # set false to alert-only, never install
+    notify_manual_review: true
+    known_issue_tracking: true
+```
+
+---
+
+#### Web UI additions (DIAG tab, watchdog section)
+Add the following rows to the existing watchdog section in the DIAG tab:
+- Last update check: \<timestamp\> or "never"
+- Safe packages installed: \<count\> (\<date\>) or "none"
+- Pending manual review: \<count\> — expandable list on click
+- HailoRT: \<installed version\> / \<available version\> or "up to date"
+- New Hailo models: \<count\> or "none"
+- Next scheduled check: \<date\>
+
+---
+
+#### Implementation notes
+
+**Scheduling:**
+Use asyncio inside the watchdog loop — no cron, no systemd timer:
+- On watchdog start, calculate seconds until next Sunday 03:00 local time
+- `asyncio.sleep()` for that duration
+- Run check, then sleep 7 days
+- If Pi reboots mid-week, next boot recalculates time to next Sunday 03:00
+
+**Safety rules (non-negotiable):**
+- Never run `apt-get upgrade` (upgrades everything)
+- Always use `apt-get install --only-upgrade <specific packages>`
+- Never touch hailort, linux-image-*, linux-headers-*, python3-* automatically
+- Always verify rover2-api health after any install
+- Never install during active voice or follow session
+- Never install if CPU > 50% or disk < 2 GB
+
+**Logging:**
+All update check actions log to journal with `[watchdog-update]` prefix:
+```
+[watchdog-update] Weekly check started
+[watchdog-update] 3 safe packages found: curl=8.x, openssl=3.x, git=2.x
+[watchdog-update] 2 manual review items: hailort=5.3.0, linux-image-6.19
+[watchdog-update] HailoRT update available: 5.2.0 → 5.3.0
+[watchdog-update] Installed: curl=8.x openssl=3.x — rover2-api health OK
+[watchdog-update] Next check: 2026-06-14 03:00
+```
+
+**State persistence:**
+Store last check results in `/opt/rover2/last_update_check.json`:
+```json
+{
+  "last_check_ts": "<ISO>",
+  "safe_installed": ["pkg=version", ...],
+  "manual_review": ["pkg=version", ...],
+  "hailo_update_available": "<version or null>",
+  "next_check_ts": "<ISO>"
+}
+```
+Read on rover2-api startup to populate DIAG tab immediately without
+waiting for first weekly cycle.
+
+**Watchdog must NEVER:**
+- Reboot the Pi after updates
+- Upgrade hailort automatically
+- Upgrade kernel automatically
+- Upgrade pip packages automatically
+- Run `apt-get upgrade` without a package list
+- Install anything if rover2-api health check fails post-install
+
+Priority: low — after issue #26, resource audit, and formal follow tests
