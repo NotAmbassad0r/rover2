@@ -315,10 +315,15 @@ def transcribe_wake(audio_bytes: bytes, lang: str = "en") -> dict:
                 text, info.language_probability,
             )
 
+        avg_logprob = (sum(s.avg_logprob for s in segment_list) / len(segment_list)
+                       if segment_list else 0.0)
+        no_speech = segment_list[0].no_speech_prob if segment_list else 1.0
         return {
             "transcript": text,
             "language": info.language,
             "duration_s": round(info.duration, 2),
+            "avg_logprob": round(avg_logprob, 3),
+            "no_speech_prob": round(no_speech, 3),
         }
     except Exception as exc:
         logger.warning("voice_engine: transcribe_wake error: %s", exc)

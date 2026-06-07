@@ -287,6 +287,15 @@ def create_app(
     _tracking_was_enabled: bool = False
     _conversation_timeout_task: asyncio.Task | None = None
 
+    # Voice pipeline telemetry — live state for DIAG tab / /api/voice/status
+    _voice_pipeline: str = "idle"       # idle | wake_checking | transcribing | processing
+    _voice_last_transcript: str = ""
+    _voice_last_stt_latency_ms: int = 0
+    _voice_last_wake_confidence: float = 0.0  # avg_logprob; closer to 0 = better
+    _voice_last_wake_no_speech: float = 0.0
+    _voice_last_wake_ts: float = 0.0
+    _voice_last_stt_ts: float = 0.0
+
     async def _hailo_recovery_task() -> None:
         if body_tracker is None:
             return
@@ -619,6 +628,8 @@ def create_app(
                     "watchdog_last_action": _wd_last_action,
                     "watchdog_last_action_ts": _wd_last_action_ts,
                     "watchdog_last_cycle": _wd_last_cycle,
+                    "voice_pipeline": _voice_pipeline,
+                    "voice_session_active": _conversation_active,
                 })
                 # ───────────────────────────────────────────────────────────
 
@@ -951,8 +962,11 @@ def create_app(
         lang: str = Form("en"),
     ) -> JSONResponse:
         """Multipart: field 'audio' (wav/webm) + optional 'lang'. Always returns JSON."""
+        nonlocal _voice_pipeline, _voice_last_transcript, _voice_last_stt_latency_ms, _voice_last_stt_ts
         if not _VOICE:
             return JSONResponse({"transcript": "", "error": "voice_engine not available"})
+        _voice_pipeline = "transcribing"
+        _t0 = time.monotonic()
         try:
             audio_bytes = await audio.read()
             loop = asyncio.get_event_loop()
@@ -964,6 +978,11 @@ def create_app(
             result = {"transcript": "", "error": "timeout"}
         except Exception as exc:
             result = {"transcript": "", "error": str(exc)}
+        finally:
+            _voice_pipeline = "idle"
+            _voice_last_stt_latency_ms = int((time.monotonic() - _t0) * 1000)
+            _voice_last_stt_ts = time.monotonic()
+            _voice_last_transcript = result.get("transcript", "") if isinstance(result, dict) else ""
         return JSONResponse(result)
 
     @app.post("/api/voice/wake")
@@ -976,8 +995,11 @@ def create_app(
         Called by A32 VAD pipeline; returns {wake: true} when 'rover' is heard.
         Uses faster-whisper tiny (int8, CPU) — no cloud, fully local.
         """
+        nonlocal _voice_pipeline, _voice_last_wake_confidence, _voice_last_wake_no_speech, _voice_last_wake_ts
         if not _VOICE:
             return JSONResponse({"wake": False, "transcript": "", "error": "voice_engine not available"})
+        _voice_pipeline = "wake_checking"
+        result: dict = {}
         try:
             audio_bytes = await audio.read()
             loop = asyncio.get_event_loop()
@@ -989,6 +1011,11 @@ def create_app(
             result = {"transcript": "", "error": "timeout"}
         except Exception as exc:
             result = {"transcript": "", "error": str(exc)}
+        finally:
+            _voice_pipeline = "idle"
+            _voice_last_wake_confidence = result.get("avg_logprob", 0.0)
+            _voice_last_wake_no_speech = result.get("no_speech_prob", 0.0)
+            _voice_last_wake_ts = time.monotonic()
         transcript = result.get("transcript", "").lower().strip()
         # Fuzzy match — accept common whisper mishearings of Czech-accented "rover"
         matched = next((w for w in _WAKE_WORDS if w in transcript), None)
@@ -1421,6 +1448,7 @@ def create_app(
         Response: {reply, routed_to, session_id}
         """
         nonlocal _conversation_active, _tracking_was_enabled, _conversation_timeout_task
+        nonlocal _voice_pipeline
         if rover_agent is None:
             raise HTTPException(status_code=503, detail="Agent not configured")
         try:
@@ -1465,6 +1493,7 @@ def create_app(
 
         _conversation_timeout_task = asyncio.ensure_future(_auto_end())
 
+        _voice_pipeline = "processing"
         try:
             reply_tuple = await asyncio.wait_for(
                 rover_agent.run_spoken_turn(message, lang, history),
@@ -1472,6 +1501,8 @@ def create_app(
             )
         except asyncio.TimeoutError:
             reply_tuple = ("", "agent")
+        finally:
+            _voice_pipeline = "idle"
 
         reply     = reply_tuple[0] if isinstance(reply_tuple, tuple) else reply_tuple
         routed_to = reply_tuple[1] if isinstance(reply_tuple, tuple) else "agent"
@@ -1880,6 +1911,24 @@ def create_app(
             "last_action": watchdog.last_action,
             "last_action_ts": watchdog.last_action_ts,
             "persistent_alerts": watchdog.get_persistent_alerts(),
+        })
+
+    @app.get("/api/voice/status")
+    async def voice_status() -> JSONResponse:
+        """Live voice pipeline state — pipeline phase, last transcript, STT latency, wake confidence."""
+        _now = time.monotonic()
+        wake_age_s = int(_now - _voice_last_wake_ts) if _voice_last_wake_ts else None
+        stt_age_s  = int(_now - _voice_last_stt_ts)  if _voice_last_stt_ts  else None
+        return JSONResponse({
+            "pipeline":            _voice_pipeline,
+            "session_active":      _conversation_active,
+            "whisper_loaded":      _voice_engine._whisper_model is not None if _VOICE else False,
+            "last_transcript":     _voice_last_transcript,
+            "last_stt_latency_ms": _voice_last_stt_latency_ms,
+            "last_stt_age_s":      stt_age_s,
+            "last_wake_logprob":   _voice_last_wake_confidence,
+            "last_wake_no_speech": _voice_last_wake_no_speech,
+            "last_wake_age_s":     wake_age_s,
         })
 
     @app.get("/api/network/status")

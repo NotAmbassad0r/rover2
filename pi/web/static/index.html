@@ -689,6 +689,14 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-title">VOICE PIPELINE</div>
+      <div class="diag-grid" id="voice-status-grid"></div>
+      <div class="tools-actions" style="margin-top:8px;">
+        <button type="button" id="voice-status-refresh-btn">REFRESH</button>
+      </div>
+    </div>
+
   </div>
 
   <!-- ════ CHAT TAB ════ -->
@@ -1614,6 +1622,44 @@
 
     document.getElementById('agent-stats-refresh-btn').onclick = () => loadAgentStats();
     loadAgentStats().catch(() => {});
+
+    async function loadVoiceStatus() {
+      try {
+        const r = await fetch(apiBase() + '/api/voice/status');
+        const d = await r.json();
+        const grid = document.getElementById('voice-status-grid');
+        if (!grid) return;
+        const pipeline = (d.pipeline || 'idle').toUpperCase();
+        const pipelineCol = pipeline === 'IDLE'
+          ? 'var(--muted)'
+          : pipeline === 'PROCESSING'
+            ? 'var(--warn)'
+            : 'var(--accent)';
+        const sessionCol  = d.session_active ? 'var(--accent)' : 'var(--muted)';
+        const whisperCol  = d.whisper_loaded ? 'var(--success)' : 'var(--muted)';
+        const transcript  = d.last_transcript ? d.last_transcript.slice(0, 80) : '—';
+        const latency     = d.last_stt_latency_ms ? d.last_stt_latency_ms + ' ms' : '—';
+        const sttAge      = d.last_stt_age_s != null ? d.last_stt_age_s + 's ago' : '—';
+        const logprob     = d.last_wake_logprob != null ? d.last_wake_logprob.toFixed(2) : '—';
+        const noSpeech    = d.last_wake_no_speech != null ? (d.last_wake_no_speech * 100).toFixed(0) + '%' : '—';
+        const wakeAge     = d.last_wake_age_s != null ? d.last_wake_age_s + 's ago' : '—';
+        const rows = [
+          ['STATE',         `<span style="color:${pipelineCol};font-weight:700">${pipeline}</span>`],
+          ['SESSION',       `<span style="color:${sessionCol}">${d.session_active ? 'ACTIVE' : 'idle'}</span>`],
+          ['WHISPER',       `<span style="color:${whisperCol}">${d.whisper_loaded ? 'loaded' : 'unloaded'}</span>`],
+          ['LAST TRANSCRIPT', transcript],
+          ['STT LATENCY',   latency + (d.last_stt_age_s != null ? ' · ' + sttAge : '')],
+          ['WAKE LOGPROB',  logprob + ' · no-speech ' + noSpeech + (d.last_wake_age_s != null ? ' · ' + wakeAge : '')],
+        ];
+        grid.innerHTML = rows.map(([k, v]) =>
+          `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
+        ).join('');
+      } catch (_) {}
+    }
+
+    document.getElementById('voice-status-refresh-btn').onclick = () => loadVoiceStatus();
+    loadVoiceStatus().catch(() => {});
+    setInterval(loadVoiceStatus, 5000);
 
     // ─────────────────────────────────────────────────────────────────────────
 
