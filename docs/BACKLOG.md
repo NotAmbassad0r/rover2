@@ -32,24 +32,13 @@ Priority: medium — after watchdog expansion and HailoRT 5.2.0 upgrade
 
 ## Voice
 
-### Increase TTS speech speed slightly
+### ✓ Increase TTS speech speed slightly — DONE 2026-06-07
 
-Both TTS paths speak slightly too slowly. Increase speed on both:
-
-- Web Speech API (agent replies via A32): `rate` is currently 0.88 in face/index.html
-  (_makeTtsUtterance) — increase to ~0.95
-- Piper TTS (proactive events via voice_engine.py): `length_scale` is currently 1.05
-  in voice_engine.py — decrease to ~0.92 (lower = faster in Piper)
-
-Test both after change:
-- Web Speech: trigger a voice conversation, listen to agent reply speed
-- Piper: trigger a proactive event (e.g. person found) or POST /api/voice/speak
-
-Tune further if still too slow or becomes too fast. Values are in config.yaml if
-already externalised; otherwise update the constants directly and consider moving
-them to config.yaml as part of this task.
-
-Priority: low
+- Web Speech API rate: 0.88 → 0.95 (face/index.html `_makeTtsUtterance()`)
+- Piper TTS length_scale: 1.05 → 0.92 (config.yaml `tts.length_scale`; voice_engine.py reads from config, no code change)
+- Config keys: `tts.length_scale` (Piper), `tts.web_speech_rate` (documentation only — face PWA reads constant directly)
+- Service worker: rover-face-v34 → rover-face-v35
+- Deployed and tested: Piper `/api/voice/speak` returned 200 OK
 
 ---
 

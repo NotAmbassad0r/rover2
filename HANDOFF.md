@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed)
+Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed; TTS speed — Piper length_scale 0.92, Web Speech rate 0.95, sw.js rover-face-v35)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -243,7 +243,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Face debug overlay** — top-left corner, `position:fixed;top:0;left:0;z-index:9999`, always visible on load. Rows (in order): MIC, LEVEL, VAD, SESSION, LAST, ROUTED, WSS. LEVEL updates every 150 ms from `_rmsLevel()`. Tap to hide/show. Service-worker cache on `rover-face-v27`
 - **Face initial state** — `faceState` initialises as `STATE.IDLE` (not OFFLINE); face shows normally on page load. `_ws.onopen` snaps to IDLE immediately; `_ws.onclose` transitions to OFFLINE and shows "OFFLINE" in status text
 - **Voice conversation concurrency fix** — `_convLoopActive` guard at outer `_convLoop` prevents duplicate invocations; `if (!_conversation) return` at start of inner `loop()` stops runaway iterations when the 10-second silence timeout fires `_end()` mid-fetch
-- **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice; `POST /api/voice/speak` streams WAV; length_scale 1.05; for proactive server events only. Agent replies spoken via **Web Speech API** on A32 (`speechSynthesis`, British voice, rate 0.88)
+- **TTS** — piper binary (`/opt/rover2/piper/piper`) + **en_GB-cori-high** voice; `POST /api/voice/speak` streams WAV; `length_scale: 0.92` (config key `tts.length_scale`); for proactive server events only. Agent replies spoken via **Web Speech API** on A32 (`speechSynthesis`, British voice, rate 0.95; config key `tts.web_speech_rate`)
 - **STT** — faster-whisper tiny (int8, CPU, ctranslate2, ~150 MB RSS on first call). `/api/voice/transcribe` (full turn), `/api/voice/wake` (2.5 s chunk, returns `{wake: bool, transcript: str}`). No cloud, fully offline
 - **Proactive speech** — voice_engine.py fires BOOT_COMPLETE, PERSON_FOUND/LOST, OBSTACLE, THERMAL events (debounced 30s, ROVER_A32 mode only)
 - **Audio routing** — `POST /api/audio/route {mode: ROVER_A32|BUDS}`; `GET /api/status` includes `audio_mode`
@@ -760,7 +760,7 @@ Must be created manually on a fresh Pi setup.
 - WebSocket telemetry extra (5 s tick, not 400 ms): `ap_state`, `watchdog_last_action`, `watchdog_last_action_ts`, `watchdog_last_cycle`
 - Face PWA: WDOG + AP rows in debug overlay; SELF-HEALED canvas status (5 s, when watchdog acted <60 s ago and IDLE)
 - Face PWA: PAGE 3 info page (ROVER2 overview, capabilities, voice, architecture, live status from WS, built-by)
-- Face PWA: 4-page swipe layout (help ← face → ctrl → info); indicator dots updated; sw.js bumped to `rover-face-v34`
+- Face PWA: 4-page swipe layout (help ← face → ctrl → info); indicator dots updated; sw.js bumped to `rover-face-v35`
 - Watchdog: `last_cycle_iso`, `last_action`, `last_action_ts` properties added
 
 **hailo-ollama LLM benchmark (2026-06-06):** ✓ done — decision: **KEEP qwen2.5-instruct:1.5b**

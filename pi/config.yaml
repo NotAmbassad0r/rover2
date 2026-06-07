@@ -113,7 +113,8 @@ audio_routing:
   tts_voice_en: "en_GB-cori-high"    # preferred English TTS voice (Piper)
 
 tts:
-  length_scale: 1.05        # slightly slower than default (1.0); cori-high sounds natural here
+  length_scale: 0.92        # ~8% faster than default (1.0); lower = faster in Piper
+  web_speech_rate: 0.95     # Web Speech API rate on A32 (higher = faster; was 0.88)
   sox_enabled: false        # optional: pipe WAV through sox for EQ/normalise (adds ~0.3s latency)
   sox_effects: "norm -3 rate 22050"   # sox effect chain applied when sox_enabled=true
 
