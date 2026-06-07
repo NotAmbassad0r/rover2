@@ -101,6 +101,34 @@ Priority: medium
 
 ---
 
+### Natural language understanding, multilingual support, advanced reasoning
+
+Improve the agent's ability to handle ambiguous, multilingual, and multi-step reasoning queries.
+
+**NLU improvements:**
+- Expand `_SPOKEN_FAST_PATTERNS` and `_FAST_PATTERNS` (chat_router.py / agent.py) to cover paraphrases, contractions, and common misspellings
+- Add intent confidence scoring — route to LLM when regex match is weak rather than forcing a mismatch
+- Add slot extraction for parameterised commands ("set speed to 180", "follow at distance 1 metre")
+- Add disambiguation prompt when intent is ambiguous ("do you want detect-only or full follow?")
+
+**Multilingual support:**
+- faster-whisper already transcribes non-English; voice pipeline assumes English throughout
+- Add language detection on transcribed text (langdetect, <1 MB)
+- Route non-English to a multilingual model path or translate → English → respond → translate back
+- Priority languages: French, German, Spanish (most likely users at office demos)
+
+**Advanced reasoning tier (DeepSeek-R1 or equivalent):**
+- For complex multi-step queries ("why is the CPU high and what should I do?"), invoke a reasoning model
+- DeepSeek-R1:1.5b runs on Pi 5 CPU; benchmark against llama3.2:1b for diagnostic accuracy
+- Add a third routing tier: fast-path → hailo-ollama → reasoning model (CPU, 60-90s acceptable for
+  complex diagnostics where user expects to wait)
+- Gate: only invoke reasoning tier if hailo-ollama returns low-confidence or the query contains
+  multi-step logical connectives ("and", "because", "why", "what if")
+
+Priority: low — do after structured output tool-calling is working
+
+---
+
 ## Resource Optimisation
 
 ### Full resource audit — CPU, memory, battery, temperature
@@ -205,3 +233,77 @@ Process:
 6. Commit with message "chore: remove dead code and unused files"
 
 Priority: low — do after resource audit so audit findings may also identify dead code
+
+---
+
+## Agent / Architecture
+
+### Structured output tool-calling on hailo-ollama — eliminate CPU fallback
+
+hailo-ollama currently returns HTTP 500 when the `tools` parameter is passed (confirmed in hailo-ollama
+benchmark 2026-06-06). This forces all tool-calling web chat queries to fall back to llama3.2:1b on CPU
+(~120–150s warm with 38 tools), which is borderline for the 180s production timeout.
+
+**Goal:** enable tool-calling on hailo-ollama so web chat tool queries run at 6.3 TPS on Hailo instead
+of falling back to CPU.
+
+**Approach options:**
+1. **Structured output / constrained decoding** — pass a JSON schema to hailo-ollama using the
+   `/api/generate` format parameter (`format: "json"` + schema). If supported, force model to emit
+   valid tool-call JSON without the `tools` API. Parse response in `_converse_hailo()`.
+2. **Prompt-engineered tool-calling** — include tool definitions as text in the system prompt, instruct
+   the model to emit `{"tool": "...", "args": {...}}` JSON when a tool is needed. Parse with regex.
+   More fragile but works with any model.
+3. **Wait for hailo-ollama native tool support** — hailo-ollama is under active development; check
+   release notes for `tools` parameter support before implementing workaround.
+
+**Implementation plan (option 2 — prompt-engineered):**
+- Reduce tool set to 10–15 essentials (do this first — see below)
+- Serialise reduced tool list as plain text descriptions in `_HAILO_SYSTEM_WITH_TOOLS`
+- Add JSON extraction + validation in `_converse_hailo()` response handler
+- Route structured tool response through existing tool dispatch logic
+- Fallback: if hailo response is not valid JSON tool-call, treat as plain text reply
+
+**Prerequisites:**
+- CPU fallback benchmark complete (done — keep llama3.2:1b)
+- Reduce tool context (task below) — must have ≤15 tools before including them in Hailo prompt
+- Verify hailo-ollama GenAI session isolation (issue #26) — VLM and hailo-ollama contention
+
+Priority: high — eliminates the 120-150s CPU fallback latency for web chat tool queries
+
+---
+
+### Reduce CPU fallback tool context from 38 to 10-15 essential tools
+
+`_call_model_cpu()` in pi/agent.py passes all 38 tools (`_ALL_TOOLS`) to llama3.2:1b. The resulting
+context is ~3000–5000 tokens; prefill alone takes ~120s warm on Pi 5 ARM, leaving almost no margin
+before the 180s production timeout.
+
+**Goal:** reduce to 10–15 essential tools, cutting warm latency to ~20–25s.
+
+**Analysis needed:**
+- Read `_FAST_PATTERNS` (lines 1078–1089) — queries handled before LLM is called
+- Read `_converse_hailo()` — queries handled by hailo-ollama (voice path)
+- Identify which of the 38 tools are actually reachable via `_call_model_cpu` (web chat only)
+- `_SPOKEN_TOOLS` (line 484) is confirmed dead code — delete it
+
+**Candidate tools to keep (estimated):**
+- `monitor_snapshot` — single-call system snapshot
+- `get_diagnostics` — extended health
+- `get_top_processes` — CPU investigation
+- `list_parameters` / `set_parameters` — config read/write
+- `get_hardware_reference` — wiring / port facts
+- `get_robot_capabilities` — capabilities overview
+- `describe_camera` — VLM describe
+- `set_robot_mode` — follow/detect/off
+- `restart_service` / `reboot_pi` — dangerous actions (keep with proposal guard)
+- 2–3 HA tools if HA enabled
+
+**Candidate tools to remove from CPU path:**
+- Fine-grained metrics tools already covered by `monitor_snapshot`
+- `get_network_interfaces` (covered by diagnostics)
+- Any tool whose query is intercepted by `_FAST_PATTERNS` before reaching LLM
+
+**Also:** remove `_SPOKEN_TOOLS` dead code from pi/agent.py line 484 in same PR.
+
+Priority: high — prerequisite for structured output tool-calling on hailo-ollama

@@ -768,6 +768,7 @@ Removed from ollama: `gemma3:1b`, `qwen2.5:3b`. Retained: `llama3.2:1b`, `llama3
 
 **Next session priorities:**
 - **Reduce `_call_model_cpu` tool context** (pi/agent.py) from 38 to ~10–15 essential tools: fixes production CPU fallback latency (~120s → ~20–25s); also remove `_SPOKEN_TOOLS` dead code (line 484, never referenced)
+- **Implement structured output tool-calling on hailo-ollama** — eliminates CPU fallback for most tool calls; keeps everything on Hailo at 6.3 TPS instead of falling back to CPU at 20–30s; CPU fallback benchmark complete, baseline established (keep llama3.2:1b); see BACKLOG.md for full implementation plan
 - **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
 - **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)**
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
