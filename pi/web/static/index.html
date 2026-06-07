@@ -445,6 +445,7 @@
       <div class="status-row"><span>UPTIME</span><span id="st-uptime">—</span></div>
       <div class="status-row" id="row-watchdog"><span>WATCHDOG</span><span id="st-watchdog">—</span></div>
       <div class="status-row" id="row-ap"><span>AP MODE</span><span id="st-ap">—</span></div>
+      <div class="status-row" id="row-whisper"><span>WHISPER</span><span id="st-whisper">—</span></div>
     </div>
 
     <div class="panel">
@@ -1674,7 +1675,7 @@
             ? 'var(--warn)'
             : 'var(--accent)';
         const sessionCol  = d.session_active ? 'var(--accent)' : 'var(--muted)';
-        const whisperCol  = d.whisper_loaded ? 'var(--success)' : 'var(--muted)';
+        const whisperCol  = d.whisper_loaded ? 'var(--accent)' : 'var(--muted)';
         const transcript  = d.last_transcript ? d.last_transcript.slice(0, 80) : '—';
         const latency     = d.last_stt_latency_ms ? d.last_stt_latency_ms + ' ms' : '—';
         const sttAge      = d.last_stt_age_s != null ? d.last_stt_age_s + 's ago' : '—';
@@ -1684,7 +1685,12 @@
         const rows = [
           ['STATE',         `<span style="color:${pipelineCol};font-weight:700">${pipeline}</span>`],
           ['SESSION',       `<span style="color:${sessionCol}">${d.session_active ? 'ACTIVE' : 'idle'}</span>`],
-          ['WHISPER',       `<span style="color:${whisperCol}">${d.whisper_loaded ? 'loaded' : 'unloaded'}</span>`],
+          ['WHISPER',       (() => {
+            const idle = d.whisper_idle_s != null ? ` · idle ${Math.floor(d.whisper_idle_s)}s` : '';
+            const unloadAt = d.whisper_unload_after_s != null ? ` / ${d.whisper_unload_after_s}s` : '';
+            const label = d.whisper_loaded ? `loaded${idle}` : `unloaded (lazy${idle}${unloadAt})`;
+            return `<span style="color:${whisperCol}">${label}</span>`;
+          })()],
           ['LAST TRANSCRIPT', transcript],
           ['STT LATENCY',   latency + (d.last_stt_age_s != null ? ' · ' + sttAge : '')],
           ['WAKE LOGPROB',  logprob + ' · no-speech ' + noSpeech + (d.last_wake_age_s != null ? ' · ' + wakeAge : '')],
@@ -2056,6 +2062,21 @@
           apEl.textContent = ap;
           apEl.style.color = '';
           apRow.className  = 'status-row';
+        }
+      }
+
+      // WHISPER row
+      const wRow = document.getElementById('row-whisper');
+      const wEl  = document.getElementById('st-whisper');
+      if (wRow && wEl && 'whisper_loaded' in d) {
+        if (d.whisper_loaded) {
+          wEl.textContent = 'loaded';
+          wEl.style.color = 'var(--accent)';
+          wRow.className  = 'status-row';
+        } else {
+          wEl.textContent = 'unloaded';
+          wEl.style.color = 'var(--muted)';
+          wRow.className  = 'status-row';
         }
       }
 

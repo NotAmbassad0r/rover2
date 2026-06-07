@@ -118,6 +118,9 @@ tts:
   sox_enabled: false        # optional: pipe WAV through sox for EQ/normalise (adds ~0.3s latency)
   sox_effects: "norm -3 rate 22050"   # sox effect chain applied when sox_enabled=true
 
+voice:
+  whisper_unload_after_s: 300   # unload faster-whisper after 5 min inactivity (~257 MB reclaimed)
+
 hailo_ollama:
   # hailo-ollama binary stays disabled (systemd override in place).
   # rover2-api uses hailo_platform.genai.LLM directly via hailo_session lock.

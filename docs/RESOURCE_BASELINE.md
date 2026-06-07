@@ -231,20 +231,32 @@ Test audio: 2 s silence WAV, 16 kHz mono 16-bit.
 
 **After whisper loads, rover2-api exceeds the 280 MB watchdog WARNING threshold.**
 
+**Resolved (2026-06-07):** whisper auto-unloads after 5 min inactivity (`voice.whisper_unload_after_s: 300`).
+Watchdog thresholds are now whisper-aware: +280 MB added to all thresholds when model is loaded.
+
 ### Latency
 
 | Call | Latency |
 |------|---------|
 | Cold (model load + inference) | **24,857 ms = 24.9 s** |
 | Hot (model resident) | **9,510 ms = 9.5 s** |
+| First response after unload (reload) | **~25 s** (same as cold — model must reload) |
 
 Both measured on 2 s silence audio. Actual speech would be similar (silence is not skipped).
 
+### Auto-unload behaviour
+
+| State | RSS |
+|-------|-----|
+| Idle, whisper unloaded | ~95 MB (base) |
+| During/after voice use (whisper loaded) | ~350–420 MB (normal for up to 5 min post-voice) |
+| After auto-unload (5 min idle) | ~95 MB (GC reclaims ~257 MB) |
+
 ### Watchdog interaction
 
-Watchdog (30 s cycle) detected 403 MB RSS and auto-stopped ollama (`memory_high_403MB`).  
-Whisper itself was not stopped — only ollama was targeted as the remediation action.  
-After ollama stopped, rover2-api stayed at ~394 MB (whisper remains resident).
+Original: watchdog detected 403 MB RSS and auto-stopped ollama (`memory_high_403MB`).  
+Fixed (2026-06-07): thresholds raised by +280 MB when whisper is loaded — no spurious alerts
+during legitimate whisper-loaded periods. Whisper auto-unloads after 5 min returning RSS to baseline.
 
 ### Temperature
 
@@ -342,7 +354,7 @@ VDD_CORE lower than Step 3 (1.154 W vs 1.799 W) — measured between Hailo burst
 
 1. **rover2-api idle RSS: 94.9 MB** — within 150 MB target ✓
 2. **Hailo loads +49 MB** (94.9 → 145 MB) on first detect-only — stays resident thereafter
-3. **whisper loads +257 MB** (145 → 403 MB) — exceeds watchdog WARN (280 MB) immediately; watchdog correctly stops ollama
+3. **whisper loads +257 MB** (145 → 403 MB) — exceeds watchdog WARN (280 MB); **resolved 2026-06-07**: auto-unloads after 5 min; watchdog thresholds are now whisper-aware (+280 MB when loaded)
 4. **LLM runner: 1.5 GB RSS** — fills most of available RAM; cannot run concurrently with whisper
 5. **rover-camera (`/opt/rover/`)** runs constantly at 8.6% CPU — old project, not rover2; should be investigated/stopped if not needed
 6. **Throttle history**: past undervolt/throttle events (0x50000). Currently clean. Likely from high-load sessions on USB-C 3A cable.

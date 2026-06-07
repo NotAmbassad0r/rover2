@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed; TTS speed — Piper length_scale 0.92, Web Speech rate 0.95, sw.js rover-face-v35; cert auto-renewal cron installed; code hygiene audit — hailo_session dead fns removed, renew-cert.sh dead fn removed, .gitignore updated)
+Last updated: 2026-06-07 (whisper lazy-load + auto-unload — 5 min inactivity; watchdog thresholds whisper-aware; web UI gaps #1–#4 implemented; RESOURCES·LIVE + FOLLOW PIPELINE + VOICE PIPELINE + AGENT BACKEND panels added to DIAG tab)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -18,7 +18,7 @@ Hard rules applied to every change:
 - CPU governor: `schedutil` always. Not `performance`, not `ondemand`.
 - `stress-ng` / virtual USB dongle: only on battery. Always off on mains.
 - Verify idle CPU before and after every change.
-- rover2-api memory target: <150 MB RSS.
+- rover2-api memory target: ~95 MB RSS idle (whisper unloaded). ~350–420 MB post-voice (whisper loaded, auto-unloads 5 min). Watchdog thresholds whisper-aware.
 
 **Claude Code:** Start every session with: `Read HANDOFF.md in full before making changes.`
 
@@ -483,7 +483,7 @@ Endpoint: `wss://<ROVER_WIFI_IP>:8082/ws`
 **Client → server:** `drive`, `stop`, `grip`, `arm`, `arm_pulse`, `tracking`, `ping`
 **Server → client:** `telemetry`, `ack`, `pong`, `error`
 
-Telemetry fields include: `tracking_enabled`, `tracking_detect_only`, `tracking_hailo_ready`, `person_detected`, `ble_active`, `ble_follow_enabled`, `ble_available`, `ble_seen`, `ble_rssi`, `alerts`, `ap_state`, `watchdog_last_action`, `watchdog_last_action_ts`, `watchdog_last_cycle`.
+Telemetry fields include: `tracking_enabled`, `tracking_detect_only`, `tracking_hailo_ready`, `person_detected`, `ble_active`, `ble_follow_enabled`, `ble_available`, `ble_seen`, `ble_rssi`, `alerts`, `ap_state`, `watchdog_last_action`, `watchdog_last_action_ts`, `watchdog_last_cycle`, `voice_pipeline`, `voice_session_active`, `whisper_loaded`.
 
 New REST endpoints (2026-06-05):
 - `GET /api/watchdog/status` — detailed watchdog state (last_cycle, last_action, last_action_ts, persistent_alerts, actions_used)
@@ -913,4 +913,4 @@ Then: U0 battery test when 5A cable arrives.
 | **WebSocket telemetry** | Default 400 ms. Do not push faster. |
 | **New features** | Before merging: check DIAG tab — cpu_percent, temperature. |
 | **WiFi AP** | Auto-off when on home WiFi (~0.5–1W saving); NM dispatcher + boot service manage state. |
-| **Memory** | rover2-api base RSS target: <150 MB (measured ~92 MB at idle). Watchdog thresholds: warn 280 MB, target 300 MB, critical 400 MB (whisper loads ~150 MB RSS on first transcribe). |
+| **Memory** | Base RSS: ~95 MB idle (whisper unloaded). ~350–420 MB during/after voice activity (whisper loaded, auto-unloads after 5 min). Watchdog thresholds whisper-aware: +280 MB added when loaded (warn 560/critical 630/emergency 680 MB). Config: `voice.whisper_unload_after_s: 300`. |

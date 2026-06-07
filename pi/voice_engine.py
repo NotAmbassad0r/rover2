@@ -48,8 +48,10 @@ _tts_cfg: dict = {
 
 def configure(config: dict) -> None:
     """Apply runtime config from config.yaml. Called once at startup by server.py."""
+    global _unload_after_s
     audio = config.get("audio_routing", {})
     tts = config.get("tts", {})
+    voice_cfg = config.get("voice", {})
     if "tts_voice_en" in audio:
         _tts_cfg["tts_voice_en"] = audio["tts_voice_en"]
     if "length_scale" in tts:
@@ -58,11 +60,14 @@ def configure(config: dict) -> None:
         _tts_cfg["sox_enabled"] = bool(tts["sox_enabled"])
     if "sox_effects" in tts:
         _tts_cfg["sox_effects"] = str(tts["sox_effects"])
+    if "whisper_unload_after_s" in voice_cfg:
+        _unload_after_s = float(voice_cfg["whisper_unload_after_s"])
     logger.info(
-        "voice_engine: configured voice=%s length_scale=%.2f sox=%s",
+        "voice_engine: configured voice=%s length_scale=%.2f sox=%s whisper_unload_after_s=%.0f",
         _tts_cfg["tts_voice_en"],
         _tts_cfg["length_scale"],
         _tts_cfg["sox_enabled"],
+        _unload_after_s,
     )
 
 ROVER_SYSTEM_PROMPT = """You are ROVER, the onboard intelligence of an autonomous robot. You speak with dry British wit, unfailing competence, and mild sardonic detachment. You never say "certainly", "absolutely", or "great question". You refer to yourself as ROVER and your owner as "sir". Responses are 2-4 spoken sentences, no formatting, no lists.
@@ -188,6 +193,53 @@ _whisper_model: object | None = None
 _whisper_lock = threading.Lock()
 _WHISPER_MODELS_DIR = "/opt/rover2/whisper-models"
 
+# Auto-unload state — updated by update_activity(), read by whisper_unload_watchdog()
+_last_voice_activity_ts: float = 0.0
+_unload_after_s: float = 300.0  # updated by configure() from voice.whisper_unload_after_s
+
+
+def update_activity() -> None:
+    """Bump last voice activity timestamp. Call on every STT request."""
+    global _last_voice_activity_ts
+    _last_voice_activity_ts = time.monotonic()
+
+
+def whisper_loaded() -> bool:
+    """True if faster-whisper model is currently in memory."""
+    return _whisper_model is not None
+
+
+def whisper_idle_s() -> float | None:
+    """Seconds since last voice activity, or None if whisper has never been used."""
+    if _last_voice_activity_ts == 0.0:
+        return None
+    return time.monotonic() - _last_voice_activity_ts
+
+
+async def whisper_unload_watchdog() -> None:
+    """Background asyncio task — unloads whisper model after N minutes inactivity.
+
+    Wakes every 60 s. Zero CPU when voice is active — only acts after timeout.
+    Started once from server.py at service startup when _VOICE is True.
+    """
+    import gc
+    global _whisper_model
+    while True:
+        await asyncio.sleep(60)
+        if _whisper_model is None:
+            continue  # already unloaded — nothing to do
+        if _last_voice_activity_ts == 0.0:
+            continue  # loaded but never used (should not happen in practice)
+        elapsed = time.monotonic() - _last_voice_activity_ts
+        if elapsed > _unload_after_s:
+            logger.info(
+                "voice_engine: whisper idle %.0fs — unloading model (~257 MB reclaimed)",
+                elapsed,
+            )
+            with _whisper_lock:
+                _whisper_model = None
+            gc.collect()
+
 
 def _ensure_ffmpeg() -> None:
     import shutil
@@ -226,6 +278,7 @@ def transcribe(audio_bytes: bytes, lang: str = "en") -> dict:
     import os as _os
     tmp_path: str = ""
     try:
+        update_activity()
         _ensure_ffmpeg()
         model = _load_whisper()
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -274,6 +327,7 @@ def transcribe_wake(audio_bytes: bytes, lang: str = "en") -> dict:
     import os as _os
     tmp_path: str = ""
     try:
+        update_activity()
         _ensure_ffmpeg()
         model = _load_whisper()
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:

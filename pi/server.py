@@ -507,7 +507,18 @@ def create_app(
                 # Memory watchdog
                 proc_mem = points.get("process_memory_mb")
                 if proc_mem is not None:
-                    if proc_mem > _MEM_EMERGENCY_MB:
+                    # Whisper-aware thresholds: when model is loaded (+257 MB) raise limits by 280 MB
+                    _whisper_adj = 280.0 if (_VOICE and _voice_engine.whisper_loaded()) else 0.0
+                    _eff_warn = _MEM_WARN_MB + _whisper_adj
+                    _eff_critical = _MEM_CRITICAL_MB + _whisper_adj
+                    _eff_emergency = _MEM_EMERGENCY_MB + _whisper_adj
+                    if _whisper_adj:
+                        logger.debug(
+                            "watchdog/mem: whisper loaded — thresholds adjusted +280 MB "
+                            "(warn %.0f, critical %.0f, emergency %.0f)",
+                            _eff_warn, _eff_critical, _eff_emergency,
+                        )
+                    if proc_mem > _eff_emergency:
                         new_alerts.append({
                             "metric": "process_memory_mb", "value": round(proc_mem, 1),
                             "severity": "crit", "ts": int(time.time()),
@@ -517,7 +528,7 @@ def create_app(
                         _mem_warn_ts = now_m
                         if _VOICE and audio_router is not None:
                             _voice_engine.speak_event("MEMORY_CRITICAL", {}, audio_router)
-                    elif proc_mem > _MEM_CRITICAL_MB:
+                    elif proc_mem > _eff_critical:
                         if now_m - _mem_warn_ts >= _MEM_CRITICAL_COOLDOWN_S:
                             new_alerts.append({
                                 "metric": "process_memory_mb", "value": round(proc_mem, 1),
@@ -528,7 +539,7 @@ def create_app(
                             _mem_warn_ts = now_m
                             if _VOICE and audio_router is not None:
                                 _voice_engine.speak_event("MEMORY_CRITICAL", {}, audio_router)
-                    elif proc_mem > _MEM_WARN_MB:
+                    elif proc_mem > _eff_warn:
                         if now_m - _mem_warn_ts >= _MEM_WARN_COOLDOWN_S:
                             new_alerts.append({
                                 "metric": "process_memory_mb", "value": round(proc_mem, 1),
@@ -630,6 +641,7 @@ def create_app(
                     "watchdog_last_cycle": _wd_last_cycle,
                     "voice_pipeline": _voice_pipeline,
                     "voice_session_active": _conversation_active,
+                    "whisper_loaded": _voice_engine.whisper_loaded() if _VOICE else False,
                 })
                 # ───────────────────────────────────────────────────────────
 
@@ -698,6 +710,8 @@ def create_app(
         if audio_router is not None:
             await audio_router.start()
             asyncio.create_task(_boot_speech_task())
+        if _VOICE:
+            asyncio.create_task(_voice_engine.whisper_unload_watchdog())
         if guard_controller is not None:
             await guard_controller.start()
         if watchdog is not None:
@@ -1189,11 +1203,12 @@ def create_app(
 
         _rss = disk_mem.get("memory_rss_mb")
         if _rss is not None:
-            if _rss > _MEM_EMERGENCY_MB:
+            _wadj = 280.0 if (_VOICE and _voice_engine.whisper_loaded()) else 0.0
+            if _rss > _MEM_EMERGENCY_MB + _wadj:
                 _mem_level = "emergency"
-            elif _rss > _MEM_CRITICAL_MB:
+            elif _rss > _MEM_CRITICAL_MB + _wadj:
                 _mem_level = "critical"
-            elif _rss > _MEM_WARN_MB:
+            elif _rss > _MEM_WARN_MB + _wadj:
                 _mem_level = "warn"
             else:
                 _mem_level = "ok"
@@ -2008,16 +2023,19 @@ def create_app(
         _now = time.monotonic()
         wake_age_s = int(_now - _voice_last_wake_ts) if _voice_last_wake_ts else None
         stt_age_s  = int(_now - _voice_last_stt_ts)  if _voice_last_stt_ts  else None
+        _idle = _voice_engine.whisper_idle_s() if _VOICE else None
         return JSONResponse({
-            "pipeline":            _voice_pipeline,
-            "session_active":      _conversation_active,
-            "whisper_loaded":      _voice_engine._whisper_model is not None if _VOICE else False,
-            "last_transcript":     _voice_last_transcript,
-            "last_stt_latency_ms": _voice_last_stt_latency_ms,
-            "last_stt_age_s":      stt_age_s,
-            "last_wake_logprob":   _voice_last_wake_confidence,
-            "last_wake_no_speech": _voice_last_wake_no_speech,
-            "last_wake_age_s":     wake_age_s,
+            "pipeline":              _voice_pipeline,
+            "session_active":        _conversation_active,
+            "whisper_loaded":        _voice_engine.whisper_loaded() if _VOICE else False,
+            "whisper_idle_s":        round(_idle, 1) if _idle is not None else None,
+            "whisper_unload_after_s": _voice_engine._unload_after_s if _VOICE else None,
+            "last_transcript":       _voice_last_transcript,
+            "last_stt_latency_ms":   _voice_last_stt_latency_ms,
+            "last_stt_age_s":        stt_age_s,
+            "last_wake_logprob":     _voice_last_wake_confidence,
+            "last_wake_no_speech":   _voice_last_wake_no_speech,
+            "last_wake_age_s":       wake_age_s,
         })
 
     @app.get("/api/network/status")
