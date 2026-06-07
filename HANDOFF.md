@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed; TTS speed — Piper length_scale 0.92, Web Speech rate 0.95, sw.js rover-face-v35)
+Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed; TTS speed — Piper length_scale 0.92, Web Speech rate 0.95, sw.js rover-face-v35; cert auto-renewal cron installed)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -276,7 +276,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Home Assistant integration (2026-06-03)** — `pi/ha_client.py`: async HAClient (5s timeout, 13 entity name mappings); voice fast-path patterns for room temperatures and home status (`ha_get_temperatures`, `ha_get_status`); `ha_toggle` for switches/lights/media (dangerous, requires confirm). HA at `http://192.168.225.10:8123`; token in `/etc/rover2.env`. `ha_available` in `/api/status`.
 - **ROVER2 WiFi AP (2026-06-03)** — wlan1 RTL8812AU, SSID: ROVER2, 10.0.0.1, 2.4GHz ch 6. Config in `scripts/ap/`. TLS cert covers 10.0.0.1. AP and home WiFi (wlan0) run independently.
 - **AP auto-toggle (2026-06-05)** — NM dispatcher (`/etc/NetworkManager/dispatcher.d/99-rover2-ap`) stops hostapd+dnsmasq when wlan0 connects to home WiFi, starts when wlan0 disconnects. `rover2-ap-boot.service` syncs state at boot (5s delay after NM). Saves ~0.5–1W on battery. Watchdog updated to recognise wlan0-connected as intentional AP-off state (no false restart). Verified with NM simulation: AP up on disconnect, AP off on reconnect, logger confirms both transitions.
-- **TLS cert from homelabca (2026-06-03)** — self-signed cert replaced by homelabca-issued cert via step-ca at `192.168.70.14:9000`. Valid 1 year. SANs: `10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local`. Renewal: `./scripts/renew-cert.sh`.
+- **TLS cert from homelabca (2026-06-03)** — self-signed cert replaced by homelabca-issued cert via step-ca at `192.168.70.14:9000`. Valid 1 year. SANs: `10.0.0.1, 192.168.250.254, 192.168.70.11, 10.62.118.51, rover.local`. Certs: `certs/` dir (public cert + CA root tracked; `rover.key` gitignored). Renewal: `./scripts/renew-cert.sh` (manual) or automatic via monthly cron on central-computer (`scripts/cert-renew-cron.sh`; logs to `~/.rover2/cert-renew.log`). Current cert expires: 2027-06-03.
 - **Web chat auto-fallback (2026-06-03)** — when hailo-ollama returns 500 or is unreachable, web chat (`run_turn()`) falls back to CPU Ollama (llama3.2:1b) automatically. `_hailo_up` flag tracks health per-call; auto-recovers when HAT reconnects. `/api/chat/status` shows actual active backend.
 - **Person detection overlay (2026-06-03)** — `canvas#detection-overlay` on camera feed; JARVIS corner accents; label with confidence % and distance. Clears on camera idle. Requires Hailo HAT for detections.
 - **Main web UI redesigned (2026-06-03)** — brutalist monospace (#4a9eda blue, Courier New, sharp corners). STATUS table now includes WEBSOCKET / SERIAL / MOTORS / FIRMWARE rows at top.
@@ -834,7 +834,7 @@ Removed from ollama: `gemma3:1b`, `qwen2.5:3b`. Retained: `llama3.2:1b`, `llama3
 - MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting
 - HA voice: room clarification when query is ambiguous; more natural response style
 - Test `ha_toggle` via voice: "turn on the office light"
-- Certificate auto-renewal via cron on central-computer
+- ✓ Certificate auto-renewal via cron on central-computer — done 2026-06-07 (monthly cron on central-computer: `0 9 1 * *`; `scripts/cert-renew-cron.sh` → `scripts/renew-cert.sh`; tries mTLS renewal first, falls back to admin provisioner; certs in `certs/`; logs to `~/.rover2/cert-renew.log`)
 
 **Software options:**
 - "ME only" follow: BLE + camera must agree before following (prevents false positives in dense BLE environments)
