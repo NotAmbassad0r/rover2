@@ -473,33 +473,38 @@ _ALL_TOOLS = (
 ) if _HA_ENABLED else _READ_TOOLS + _DANGEROUS_TOOLS
 _DANGEROUS_NAMES = {t["function"]["name"] for t in _DANGEROUS_TOOLS + _HA_DANGEROUS_TOOLS}
 
-# Minimal tool set for spoken agent — avoids large context that slows llama3.2:1b.
-# Only the tools relevant to voice interaction (status, control, camera, diagnostics).
-_SPOKEN_TOOL_NAMES = {
-    "wave_arm", "get_full_diagnostics", "get_hailo_status",
-    "speak_diagnostics_summary", "suggest_fix", "control_follow_mode",
-    "describe_camera", "get_status",
-    "ha_get_temperatures", "ha_get_status",
+# Reduced tool set for CPU Ollama — 38-tool context exceeds Pi 5 ARM capacity (~150s warm).
+# Queries covered by _FAST_PATTERNS (temps, disk, wifi, services, hailo, capabilities) are
+# handled before the LLM is ever called, so those tools are omitted here.
+_CPU_TOOL_NAMES = {
+    # Monitoring — single call covers status + diagnostics + top processes
+    "monitor_snapshot",
+    # Diagnosis and log investigation
+    "suggest_fix", "get_logs", "get_hardware_reference",
+    # Config management
+    "list_parameters", "set_parameters",
+    # Robot control
+    "control_follow_mode", "describe_camera",
+    # Dangerous ops (guarded by UI Confirm button)
+    "restart_service", "stop_service", "start_service", "reboot_pi",
+    # HA — only present in _ALL_TOOLS when _HA_ENABLED
+    "ha_get_status", "ha_toggle",
 }
-_SPOKEN_TOOLS = [t for t in _READ_TOOLS if t["function"]["name"] in _SPOKEN_TOOL_NAMES]
+_CPU_TOOLS = [t for t in _ALL_TOOLS if t["function"]["name"] in _CPU_TOOL_NAMES]
 
-_TOOL_NAMES = ", ".join(t["function"]["name"] for t in _ALL_TOOLS)
-
-_SYSTEM_PROMPT = f"""You are ROVER2's onboard engineer: monitor hardware and software, change any allowed parameter, answer related questions.
-
-TOOLS: {_TOOL_NAMES}
+_SYSTEM_PROMPT = """You are ROVER2's onboard engineer: monitor hardware and software, change any allowed parameter, answer related questions.
 
 WORKFLOW:
-1. Monitoring (CPU, temp, RAM, disk, serial, camera, follow, BLE): call monitor_snapshot() OR get_diagnostics() + get_top_processes().
+1. Monitoring (CPU, temp, RAM, disk, serial, camera, follow, BLE): call monitor_snapshot().
 2. Change settings: call list_parameters() then set_parameters(patch) with one or more sections.
-3. Hardware/software facts (ports, IPs, wiring, services): call get_hardware_reference() and/or get_robot_capabilities().
+3. Hardware/software facts (ports, IPs, wiring, services): call get_hardware_reference().
 4. Vision: describe_camera() for what the camera sees.
-5. Robot control: set_robot_mode(follow|detect|off). Drive/grip/arm via status only unless user asks to change modes.
+5. Robot control: control_follow_mode(enable|disable|camera|fused|detect).
 
 RULES:
 - ALWAYS use tools for live data. Never invent temperatures, CPU %, or RSSI.
-- Temperature: read system.temperature or extended temps from get_diagnostics — warn above 80 C, critical above 85 C.
-- CPU high: name top process pid, name, cpu_pct from get_top_processes.
+- Temperature: read from monitor_snapshot result — warn above 80 C, critical above 85 C.
+- CPU high: check top processes in monitor_snapshot result.
 - After finding a fixable config issue, call set_parameters — do not only suggest edits.
 - Dangerous actions (restart_service, reboot_pi, stop_service): use proposal only.
 - Plain text, short paragraphs. No markdown.
@@ -2174,7 +2179,7 @@ class RoverAgent:
             return None
 
         payload = {"model": self._model, "messages": messages,
-                   "tools": _ALL_TOOLS, "stream": False}
+                   "tools": _CPU_TOOLS, "stream": False}
         attempts = 1 if self._timeout_s >= 120 else 2
         for attempt in range(attempts):
             try:
@@ -2244,7 +2249,7 @@ class RoverAgent:
         payload = {
             "model":   self._cpu_model,
             "messages": messages,
-            "tools":   _ALL_TOOLS,
+            "tools":   _CPU_TOOLS,
             "stream":  False,
         }
         try:
