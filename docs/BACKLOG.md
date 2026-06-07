@@ -700,3 +700,131 @@ waiting for first weekly cycle.
 - Install anything if rover2-api health check fails post-install
 
 Priority: low — after issue #26, resource audit, and formal follow tests
+
+---
+
+## Web UI — Primary Control Interface
+
+### Web UI is the primary interaction surface — must always be complete and current
+
+The web UI at https://rover-ip:8082/ is the main way ROVER2 is controlled
+and monitored. It must reflect the current state of the robot at all times
+and expose every capability that exists.
+
+#### Standing rule (applies to every future Cline session)
+
+Every new feature, endpoint, or capability added to rover2-api must be
+accompanied by a web UI update in the same commit. No feature is complete
+until it is accessible and visible in the web UI.
+
+Checklist for every new feature:
+- Is it visible in the STATUS table or DIAG tab?
+- Can it be controlled from the UI (if it has controllable state)?
+- Does it update live via WebSocket telemetry or auto-refresh?
+- Is it accessible on mobile (Android Chrome)?
+- Are errors and edge cases shown clearly (not silent failure)?
+
+#### Current known gaps to address (in priority order)
+
+**1. Voice pipeline visibility**
+- Current: no visibility into voice pipeline state from web UI
+- Needed:
+  - VAD state: listening / wake detected / recording / processing
+  - STT latency of last transcription
+  - Last transcribed text
+  - Wake word confidence score
+  - TTS state: idle / speaking / queued
+  - Voice session active: yes/no
+- Source: read from WebSocket telemetry or new /api/voice/status endpoint
+
+**2. LLM / agent visibility**
+- Current: agent stats panel exists but limited
+- Needed:
+  - Current routing tier: fast-path / hailo-tools / cpu-fallback
+  - Last query and response (truncated, last 1 only)
+  - Hailo GenAI session state: locked / free
+  - VLM cooldown remaining (already in /api/agent/stats — verify visible)
+  - Tool call history: last 5 tool calls with latency
+  - Success/fallback rate over last 20 calls
+
+**3. Memory and resource live view**
+- Current: CPU% and RAM% in DIAG tab, not always live
+- Needed:
+  - Live RSS per major process (rover2-api, hailo-ollama if active, ollama)
+  - Live CPU% per major process
+  - Hailo chip temperature (when available via HailoRT 5.2.x+)
+  - Disk free space
+  - All updating every 5s minimum
+
+**4. Full follow pipeline control**
+- Current: follow mode selector exists
+- Needed:
+  - Person detection confidence score (live)
+  - BLE RSSI live graph (last 30 readings)
+  - Body tracker frame rate (actual fps vs configured)
+  - Hailo inference latency per frame
+  - Safety block state with distance reading
+  - Manual override: force stop, force follow, force BLE
+
+**5. Home Assistant integration panel**
+- Current: no HA visibility in web UI
+- Needed:
+  - List of all HA entities rover2-api knows about
+  - Current state of each entity (on/off, temperature, etc.)
+  - Toggle button for switchable entities
+  - Last HA command sent and result
+  - HA connection status (connected / disconnected)
+
+**6. Voice command console**
+- A text input in the CHAT tab that simulates a voice command
+  (sends to /api/voice/chat endpoint, shows full agent response
+  including which tool was called, latency breakdown, routing tier)
+- Useful for testing without speaking
+
+**7. Config editor**
+- Read-only view of current config.yaml values in DIAG tab
+- Key tunable values editable from UI:
+  - frame_interval_s (body tracker fps)
+  - follow speeds (turn_speed, forward_speed)
+  - VLM cooldown_s
+  - voice thresholds (WAKE_RMS_THRESHOLD)
+  - hailo_tool_calling enabled/disabled
+- Changes applied via /api/config/set endpoint
+- Saved to config.yaml on Pi via deploy or direct write
+
+**8. Log viewer**
+- Live journal tail for rover2-api in DIAG tab
+- Last 50 lines, auto-scrolling
+- Filter by: ERROR, WARNING, INFO, hailo, voice, tool
+- Source: /api/logs endpoint streaming via SSE or WebSocket
+
+**9. Watchdog action history**
+- Current: watchdog shows last action only
+- Needed: last 10 actions with timestamp, severity, action taken
+- Source: watchdog maintains a ring buffer of last 10 actions
+
+**10. Alert history**
+- Current: alert bar shows last 3 alerts, dismissible
+- Needed: persistent alert log (last 50) accessible via a button
+- Survives page refresh (stored in rover2-api memory, not localStorage)
+
+#### UI quality standards
+
+Every panel in the web UI must meet these standards:
+- Live data: updates without page refresh (WebSocket or 5s poll)
+- Error state: shows clearly when data unavailable (not blank, not stale)
+- Mobile: works on Android Chrome at 375px width
+- Loading: shows spinner or "loading..." for operations > 500ms
+- Confirmation: dangerous actions (restart, reboot, stop service) require
+  a confirm dialog before executing
+- Consistency: all panels use same visual language (colours, fonts, spacing)
+
+#### Process for keeping UI current
+
+After every Cline session that adds a feature:
+- Check the web UI gap list above
+- If the new feature adds something not yet in the UI, add it
+- Update this backlog entry to mark gaps as resolved
+- The UI is never "done" — it grows with the robot
+
+Priority: high — ongoing, applied to every future session
