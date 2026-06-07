@@ -117,12 +117,15 @@ tts:
   sox_effects: "norm -3 rate 22050"   # sox effect chain applied when sox_enabled=true
 
 hailo_ollama:
+  # hailo-ollama binary stays disabled (systemd override in place).
+  # rover2-api uses hailo_platform.genai.LLM directly via hailo_session lock.
   host: "http://localhost:8000"
   model: "qwen2.5-instruct:1.5b"
-  enabled: true
-  fallback_to_cpu: true        # fall back to localhost:11434 if hailo-ollama unavailable
+  enabled: false               # binary disabled — direct Python LLM used instead
+  fallback_to_cpu: true        # fall back to localhost:11434 if Hailo LLM unavailable
   num_predict: 120             # enough for 2-4 spoken sentences
   temperature: 0.65            # lower = closer to few-shot examples; 0.85 too noisy for 1.5B
+  llm_hef_path: "/home/ambassad0r/.local/share/hailo-ollama/models/blob/sha256_5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd"
 
 guard:
   enabled: false                      # master switch — off by default, zero impact when disabled

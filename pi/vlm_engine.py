@@ -1,15 +1,14 @@
 """VLM — Qwen2-VL-2B-Instruct on Hailo-10H via hailo_platform.genai.
 
-Background-preloaded 40 s after startup (after body_tracker warmup).
-Describe calls block if preload is still in progress.
-hailo-ollama MUST be stopped — the Hailo-10H firmware only allows one
-GenAI session at a time (LLM port 12145 or VLM port 12147, not both).
+Session lifecycle: open on every describe() call, release after inference.
+Serialised with LLM via hailo_session.genai_session lock (HailoRT 5.2.0
+firmware only allows one GenAI session at a time).
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
-import threading
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -24,9 +23,9 @@ _FETCH_TIMEOUT_S = 3.0
 class VLMEngine:
     """Qwen2-VL-2B-Instruct on Hailo-10H.
 
-    Not loaded at startup. First call to describe() triggers _load(),
-    which opens a VDevice with the same group_id as body_tracker so
-    Hailo's round-robin scheduler time-multiplexes both models.
+    Per-request GenAI session: the VDevice+VLM is opened, used, and released
+    for every describe() call. No persistent session is held between calls so
+    the Hailo LLM engine can use the chip between VLM requests.
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
@@ -37,24 +36,8 @@ class VLMEngine:
         self._enabled = bool(cfg.get("enabled", True))
         self._max_tokens = int(cfg.get("max_tokens", 128))
 
-        self._lock = threading.Lock()
-        self._vdevice: Any = None
-        self._vlm: Any = None
         self._available = False
-        self._loaded = False
         self._load_error = ""
-
-        if self._enabled:
-            threading.Thread(target=self._background_preload, daemon=True,
-                             name="vlm-preload").start()
-
-    def _background_preload(self) -> None:
-        import time
-        time.sleep(40.0)  # wait for body_tracker warmup (30 s) + model load (~6 s)
-        logger.info("VLMEngine: preloading in background…")
-        with self._lock:
-            if not self._loaded:
-                self._load()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -63,12 +46,14 @@ class VLMEngine:
         image_bytes: bytes,
         prompt: str = "Describe briefly what you see.",
     ) -> str | None:
-        """Run VLM inference on image_bytes. Lazy-loads on first call."""
-        import asyncio
-
-        return await asyncio.get_event_loop().run_in_executor(
-            None, self._ensure_and_generate, image_bytes, prompt
-        )
+        """Run VLM inference. Opens a GenAI session, generates, closes."""
+        if not self._enabled:
+            return None
+        from hailo_session import genai_session
+        async with genai_session("vlm"):
+            return await asyncio.get_event_loop().run_in_executor(
+                None, self._open_and_generate, image_bytes, prompt
+            )
 
     def fetch_camera_frame(self) -> bytes | None:
         """Fetch a JPEG snapshot from the camera service (blocking)."""
@@ -83,46 +68,32 @@ class VLMEngine:
 
     @property
     def available(self) -> bool:
-        with self._lock:
-            return self._available
+        return self._available
 
     @property
     def loaded(self) -> bool:
-        with self._lock:
-            return self._loaded
+        return self._available
 
     def get_status(self) -> dict[str, Any]:
-        with self._lock:
-            if not self._enabled:
-                return {"status": "skip", "detail": "disabled via config"}
-            if not self._loaded:
-                return {"status": "idle", "detail": "lazy — not yet loaded", "available": False}
-            if self._available:
-                return {"status": "ok", "available": True, "hef": self._hef_path,
-                        "group_id": self._group_id}
+        if not self._enabled:
+            return {"status": "skip", "detail": "disabled via config"}
+        if not Path(self._hef_path).exists():
+            return {"status": "error", "available": False, "detail": f"HEF missing: {self._hef_path}"}
+        if self._available:
+            return {"status": "ok", "available": True, "hef": self._hef_path,
+                    "group_id": self._group_id, "mode": "per-request"}
+        if self._load_error:
             return {"status": "error", "available": False, "detail": self._load_error}
+        return {"status": "idle", "detail": "per-request — opens on demand", "available": False}
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _ensure_and_generate(self, image_bytes: bytes, prompt: str) -> str | None:
-        with self._lock:
-            if not self._loaded:
-                self._load()
-            avail = self._available
-        if not avail:
-            return None
-        return self._generate_sync(image_bytes, prompt)
-
-    def _load(self) -> None:
-        """Load VDevice + VLM model. Must be called with self._lock held."""
-        self._loaded = True
-        if not self._enabled:
-            self._load_error = "disabled via config"
-            return
+    def _open_and_generate(self, image_bytes: bytes, prompt: str) -> str | None:
+        """Open VLM session, run inference, release. Called from executor under genai_session lock."""
         if not Path(self._hef_path).exists():
             self._load_error = f"HEF not found: {self._hef_path}"
             logger.warning("VLMEngine: %s", self._load_error)
-            return
+            return None
         try:
             from hailo_platform import HailoSchedulingAlgorithm, VDevice  # type: ignore[import]
             from hailo_platform.genai import VLM  # type: ignore[import]
@@ -130,22 +101,30 @@ class VLMEngine:
             params = VDevice.create_params()
             params.group_id = self._group_id
             params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
-            self._vdevice = VDevice(params)
-            self._vlm = VLM(self._vdevice, self._hef_path)
+            vdevice = VDevice(params)
+            vlm = VLM(vdevice, self._hef_path)
             self._available = True
-            logger.info("VLMEngine: loaded %s (group=%s)", self._hef_path, self._group_id)
+            logger.info("VLMEngine: session opened (group=%s)", self._group_id)
+
+            result = self._run_inference(vlm, image_bytes, prompt)
+
+            vlm.release()
+            logger.info("VLMEngine: session released")
+            return result
         except Exception as exc:
             self._load_error = str(exc)[:120]
-            logger.warning("VLMEngine: load failed: %s", self._load_error)
+            self._available = False
+            logger.warning("VLMEngine: open_and_generate failed: %s", self._load_error)
+            return None
 
-    def _generate_sync(self, image_bytes: bytes, prompt: str) -> str | None:
-        """Blocking inference — called from a thread executor."""
+    def _run_inference(self, vlm: Any, image_bytes: bytes, prompt: str) -> str | None:
+        """Run VLM inference on open session."""
         try:
             import numpy as np  # type: ignore[import]
             from PIL import Image  # type: ignore[import]
 
             img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            shape = self._vlm.input_frame_shape()
+            shape = vlm.input_frame_shape()
             h, w = shape[0], shape[1]
             img = img.resize((w, h))
             frame = np.array(img, dtype=np.uint8)
@@ -154,16 +133,14 @@ class VLMEngine:
                 {"type": "text", "text": prompt},
                 {"type": "image"},
             ]}]
-            # Serialize VLM calls — one inference at a time.
-            with self._lock:
-                self._vlm.clear_context()
-                response: str = self._vlm.generate_all(
-                    messages,
-                    frames=[frame],
-                    max_generated_tokens=self._max_tokens,
-                    temperature=0.1,
-                    timeout_ms=30_000,
-                )
+            vlm.clear_context()
+            response: str = vlm.generate_all(
+                messages,
+                frames=[frame],
+                max_generated_tokens=self._max_tokens,
+                temperature=0.1,
+                timeout_ms=30_000,
+            )
             logger.info("VLMEngine: %d chars generated", len(response))
             cleaned = response.replace("<|im_end|>", "").strip()
             return cleaned or None

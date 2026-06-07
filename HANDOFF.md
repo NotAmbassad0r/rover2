@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (structured output tool-calling on hailo-ollama — `_call_hailo_with_tools()` method, `_CPU_TOOLS` context reduction, `GET /api/agent/stats`, AGENT BACKEND panel in DIAG)
+Last updated: 2026-06-07 (issue #26 resolved — direct Python Hailo LLM, asyncio session lock; `pi/hailo_session.py`; VLM per-request sessions; `_call_hailo_with_tools()` / `_converse_hailo()` / `_hailo_spoken_with_context()` rewritten; hailo-ollama stays disabled)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -167,7 +167,8 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
     pi/agent.py              RoverAgent: Ollama tool-use agentic loop (35 tools, fast-path, spoken agent)
     pi/agent_knowledge.py    Static ROVER2 hardware/software reference injected into agent context
     pi/agent_solutions.py    Diagnostic fix proposals for suggest_fix tool
-    pi/vlm_engine.py         VLMEngine: Hailo Qwen2-VL-2B-Instruct scene description
+    pi/hailo_session.py      Shared asyncio.Lock for Hailo GenAI sessions (LLM + VLM serialised; HailoRT 5.2.0 single-session limit)
+    pi/vlm_engine.py         VLMEngine: Hailo Qwen2-VL-2B-Instruct scene description (per-request sessions)
     pi/voice_engine.py       Piper TTS (binary subprocess) + faster-whisper STT + ROVER personality
     pi/audio_router.py       UDP audio router (asyncio, zero-CPU idle) + /ws/audio WebSocket bridge
     pi/config_public.py      Config masking for GET /api/config (redacts secrets)
@@ -192,10 +193,11 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
     YOLOv8m_h10.hef     Body tracker (FOLLOW / DETECT)  group_id=rover2
     Qwen2-VL-2B.hef     VLM scene description           group_id=rover2
     ← ROUND_ROBIN scheduler: YOLO + VLM share the chip without mode-switching
-    ← NOTE: hailo-ollama (GenAI LLM) and VLM (GenAI VLM) are mutually exclusive
-      on HailoRT 5.2.0 — firmware only allows one GenAI session at a time (issue #26)
-      hailo-ollama is DISABLED via systemd drop-in override (ExecStart=/bin/true).
-      Voice agent backend is now CPU llama3.2:1b. Web chat auto-fallback handles this.
+    ← issue #26 RESOLVED: hailo_session.py asyncio.Lock serialises all GenAI opens.
+      hailo-ollama binary stays DISABLED (ExecStart=/bin/true override). Instead,
+      rover2-api opens hailo_platform.genai.LLM directly per-request, acquires the
+      shared lock, generates, calls release() — same lock that VLM uses. No session
+      is held between requests. Idle CPU unchanged (no polling, no spin loop).
 
     ── Ollama (system service on Pi) ─────────────────────────────────────────
     llama3.2:1b         Agent LLM (tool-use capable; gemma2:2b does NOT support tools)
@@ -209,7 +211,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 | `rover-camera.service` | **8081** | MJPEG (v1 stack; shared) |
 | `ollama.service` | **11434** | Local LLM — llama3.2:1b for agent CPU fallback |
 | `rover-api` (v1) | 8080 | Stop when testing ROVER2 serial |
-| `hailo-ollama` | **8000** | **DISABLED** — HailoRT 5.2.0 GenAI single-session limit (issue #26); re-enable only if VLM not in use |
+| `hailo-ollama` | **8000** | **DISABLED** — rover2-api uses `hailo_platform.genai.LLM` directly; hailo-ollama binary stays disabled (override: ExecStart=/bin/true). Do not re-enable. |
 | `rover2-restore-wifi.service` | — | Boot: re-apply WiFi from `/boot/firmware/network-config` |
 | `hostapd.service` | — | ROVER2 WiFi AP on wlan1 (RTL8812AU), SSID: ROVER2, ch 6 |
 | `dnsmasq.service` | — | DHCP + DNS for AP network (10.0.0.10–50, rover.local) |
@@ -254,7 +256,7 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Web METRICS tab** — Chart.js graphs (CPU%, Temp, RAM%)
 - **AI Agent** — 35 tools (31 read-only + 4 dangerous); primary backend: hailo-ollama `qwen2.5-instruct:1.5b` on AI HAT+; CPU fallback: `llama3.2:1b`; 10 web-chat fast-path patterns; voice uses 12 spoken fast-path patterns
 - **Agentic voice assistant** — `run_spoken_turn()` routes voice through tool-use loop; 12 spoken fast-path patterns; instant canned responses for actions; hailo for data queries; `POST /api/arm/wave` endpoint
-- **Structured output tool-calling on hailo-ollama (2026-06-07)** — `_call_hailo_with_tools()` does 2-round hailo `/api/chat`: (1) JSON tool detection, (2) result narration. Used by both web chat `run_turn()` and spoken agent `_run_spoken_agent()`. Returns `None` to fall back to CPU. Dangerous tools return `action_proposal` without execution. Config flag: `agent.hailo_tool_calling: true/false`. When hailo-ollama disabled (issue #26), path returns `None` immediately and falls back to CPU. Stats: `GET /api/agent/stats` — last_backend, last_tool, success/fallback counts. DIAG tab has AGENT BACKEND panel.
+- **Structured output tool-calling via direct Hailo LLM (2026-06-07, issue #26 resolved)** — `_call_hailo_with_tools()` does 2-round `hailo_platform.genai.LLM` call: (1) JSON tool detection, (2) result narration — session held open across both rounds. `_converse_hailo()` and `_hailo_spoken_with_context()` use same direct-Python path. `hailo_session.py` asyncio.Lock serialises all GenAI opens (LLM + VLM). VLM uses per-request sessions. hailo-ollama binary stays disabled (ExecStart=/bin/true override). Config: `agent.hailo_tool_calling: true`. Stats: `GET /api/agent/stats`. DIAG tab AGENT BACKEND panel. `<|im_end|>` EOS tokens stripped from all LLM output. Verified 2026-06-07: session acquire → reply → release logged cleanly.
 - **CPU fallback context reduction (2026-06-07)** — `_CPU_TOOLS`: 14-tool subset replacing 38-tool context; warm latency ~20–25s (was ~120–150s). `_SPOKEN_TOOLS`/`_TOOL_NAMES`/`_SPOKEN_TOOL_NAMES` dead code removed.
 - **VLM scene description** — Hailo Qwen2-VL-2B-Instruct, confirmed working on HailoRT 5.2.0; background preload at t+40s, ready ~80s after startup; `/api/vision/describe` returns real scene descriptions
 - **Wake word detection** — faster-whisper tiny, `vad_filter=False` on both wake and conversation paths (A32 RMS VAD is the sole gate). Wake word "rover" matched with German-accent fuzzy variants: rower, rofer, roffer, rofar, over, rove, robo, robot, mover, dover, lover. `beam_size=3`, `language="en"` forced on wake path
@@ -298,9 +300,10 @@ A32 voice pipeline (fully local — no cloud)
                  → faster-whisper → "rover" detected → conversation start
     Conversation: MediaRecorder + VAD silence gate → POST /api/voice/transcribe
                  → POST /api/voice/converse → run_spoken_turn() agentic loop:
-                   1. regex pattern → direct tool call + canned/hailo reply (~0.1–4 s)
-                   2. hailo-ollama conversational fallback (~3 s)
-                   3. CPU llama3.2:1b without tools (~10 s)
+                   1. regex pattern → direct tool call + canned/hailo reply (~0.1 s canned; ~10-15s hailo)
+                   2. _call_hailo_with_tools → direct hailo_platform.genai.LLM (~10-15s total)
+                   3. _converse_hailo → direct hailo LLM conversational (~5-10s)
+                   4. CPU llama3.2:1b without tools (~10 s fallback)
                  → Web Speech API TTS (on-device, British voice)
 ```
 
@@ -324,7 +327,7 @@ A32 voice pipeline (fully local — no cloud)
 
 ### agent.py — agentic tool-use loop
 
-- **Primary model:** `qwen2.5-instruct:1.5b` via hailo-ollama on AI HAT+ (port 8000, `agent.backend=hailo`)
+- **Primary model:** `qwen2.5-instruct:1.5b` via `hailo_platform.genai.LLM` direct Python API on AI HAT+ (`agent.backend=hailo`; hailo-ollama binary disabled)
 - **CPU fallback model:** `llama3.2:1b` via Ollama (port 11434; used when hailo-ollama unavailable)
 - **Tools:** 35 total — 31 read-only + 4 dangerous (require Confirm button)
 - **Web-chat fast-path:** 10 patterns skip Ollama, call tool directly, format result in Python
@@ -636,7 +639,25 @@ Must be created manually on a fresh Pi setup.
    **Watchdog:** `_check_wifi_driver()` monitors `rtw88_8812au` in `lsmod`, attempts `modprobe rtw88_8812au` if missing. `_check_network()` corrected: eth0 check removed (eth0 is built-in GbE with no cable — NO-CARRIER is normal); wlan1 check now verifies both `type AP` in `iw dev` AND `10.0.0.1` in `ip addr`, restarts stack in correct order if either is missing.
    **Recovery:** `sudo systemctl restart systemd-networkd && sleep 2 && sudo systemctl restart hostapd && sleep 2 && sudo systemctl restart dnsmasq`
 
-26. **hailo-ollama and VLM are mutually exclusive on HailoRT 5.2.0** — The Hailo-10H firmware (5.2.0) only allows ONE GenAI session at a time: either the LLM session (hailo-ollama, port **8000**) OR the VLM session (VLM engine, Qwen2-VL-2B). When hailo-ollama is running, VLM gets `HAILO_COMMUNICATION_CLOSED(62)`. **Current decision:** hailo-ollama disabled (systemd override at `/etc/systemd/system/hailo-ollama.service.d/override.conf` sets `ExecStart=/bin/true`, `Restart=no`); VLM owns the Hailo chip for GenAI; voice agent falls back to CPU `llama3.2:1b` (~20-30s). **To benchmark hailo-ollama:** stop rover2-api, run `HAILO_OLLAMA_VDEVICE_GROUP_ID=rover2 HAILO_OLLAMA_GENERATION_TIMEOUT=120 /usr/local/bin/hailo-ollama serve`, test, then stop and restart rover2-api. Resolution requires either: (a) Hailo firmware update that lifts the single-session GenAI limit, or (b) time-multiplexed session management (open/close GenAI session per request). Body tracker (VDMA inference, NOT GenAI) is unaffected by either session. See benchmark results in "Next session" section above.
+26. ~~**hailo-ollama and VLM are mutually exclusive on HailoRT 5.2.0**~~ — **RESOLVED 2026-06-07** via software session multiplexing.
+
+   **Root cause:** HailoRT 5.2.0 only allows one `hailo_platform.genai.{LLM,VLM}` session open at a time per chip. The hailo-ollama binary kept its session open indefinitely, blocking VLM.
+
+   **Resolution:** hailo-ollama binary stays disabled (`ExecStart=/bin/true` override). `pi/hailo_session.py` provides a shared `asyncio.Lock()` (`genai_session(holder)` context manager). All Hailo GenAI opens must hold this lock. LLM is opened, used, and released per-request using `hailo_platform.genai.LLM` directly.
+
+   **Files changed:**
+   - `pi/hailo_session.py` (NEW) — shared asyncio lock; `genai_session(holder)` context manager
+   - `pi/vlm_engine.py` (REWRITTEN) — per-request sessions; `_open_and_generate()` opens VDevice+VLM, runs inference, calls `vlm.release()`; acquires `genai_session("vlm")` before executor call
+   - `pi/agent.py` — `_call_hailo_with_tools()`, `_converse_hailo()`, `_hailo_spoken_with_context()` rewritten to use direct `hailo_platform.genai.LLM` under `genai_session("llm-*")` lock. `_hailo_llm_available()` helper checks HEF file exists. `check_available()` and `_check_availability()` use HEF existence for hailo backend (no HTTP ping). `_run_llm()` helper does open/generate/release in executor.
+   - `pi/config.yaml` — `hailo_ollama.enabled: false`, `hailo_ollama.llm_hef_path` set to blob path
+
+   **Session lifecycle (LLM):** `genai_session` lock acquired → executor opens VDevice+LLM (~5s reopen) → `generate_all()` (~2-4s) → `llm.release()` → lock released. For two-round tool-calling (`_call_hailo_with_tools`), LLM stays open across both rounds (tool exec is async during this time) → single `release()` in `finally`.
+
+   **Idle CPU:** zero. `asyncio.Lock()` — no polling, no thread. Lock is only acquired during active LLM/VLM generation.
+
+   **Body tracker (VDMA inference):** unaffected — never uses GenAI session, runs independently.
+
+   **Verified 2026-06-07:** `hailo_session: llm-tools acquired GenAI session` → reply returned (clean, no `<|im_end|>`) → `hailo_session: llm-tools released GenAI session`. Session open+generate+release confirmed from log.
 
 ---
 
@@ -773,9 +794,12 @@ Removed from ollama: `gemma3:1b`, `qwen2.5:3b`. Retained: `llama3.2:1b`, `llama3
 
 **Next session priorities:**
 - ✓ **Reduce `_call_model_cpu` tool context** (pi/agent.py) — done 2026-06-07; `_CPU_TOOLS` = 14 tools, warm ~20–25s; dead code removed
-- ✓ **Implement structured output tool-calling on hailo-ollama** — done 2026-06-07; `_call_hailo_with_tools()`, config flag, `/api/agent/stats`, DIAG panel; falls back to CPU when hailo-ollama disabled (issue #26)
+- ✓ **Implement structured output tool-calling on hailo-ollama** — done 2026-06-07; `_call_hailo_with_tools()`, config flag, `/api/agent/stats`, DIAG panel
+- ✓ **Issue #26 resolved (2026-06-07)** — direct Python LLM via `hailo_platform.genai.LLM`; `hailo_session.py` asyncio lock; VLM per-request; hailo-ollama stays disabled; verified working
+- **Verify VLM concurrency** — trigger `/api/vision/describe` while LLM is running; confirm queuing works (log: "waiting (held by llm-tools)")
+- **Test two-round tool-calling** — ask for sensor data (battery voltage, temperature) via voice/chat; confirm tool parsed + executed + narrated by hailo LLM
+- **LLM session open latency** — log: first open ~9s, reopen ~5s. Consider adding `_run_llm_warmup()` (optional, not priority) to pre-warm after boot so first spoken query is faster
 - **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
-- **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)**
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
 - MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting
 - HA voice: room clarification when query is ambiguous; more natural response style

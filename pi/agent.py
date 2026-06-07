@@ -1166,20 +1166,27 @@ class RoverAgent:
         elif self._backend == "cpu":
             self._base = str(cfg.get("ollama_base", "http://127.0.0.1:11434"))
             self._model = self._cpu_model
-        else:  # hailo (default) — LLM on AI HAT+ via hailo-ollama
+        else:  # hailo (default) — LLM on AI HAT+ via direct Python genai API
             self._backend = "hailo"
             self._base = str(cfg.get("hailo_ollama_base", "http://127.0.0.1:8000"))
             self._model = self._hailo_model
+        # LLM HEF path for direct hailo_platform.genai.LLM calls (bypasses hailo-ollama)
+        hailo_ollama_cfg = self._full_config.get("hailo_ollama", {})
+        _default_hef = (
+            "/home/ambassad0r/.local/share/hailo-ollama/models/blob/"
+            "sha256_5310176848638505fbc28add04ba60c97abe345cdb0ec7e3b8ffaa4b0a8c65dd"
+        )
+        self._llm_hef_path: str = str(hailo_ollama_cfg.get("llm_hef_path", _default_hef))
+        self._llm_group_id: str = "rover2"
         self._available: bool | None = None
         self._last_availability_check: float = 0.0
         self._availability_recheck_interval_s: float = 30.0
         self._last_model_error: str | None = None
         self._keepalive_task: asyncio.Task | None = None
-        # Tracks which backend/model the last spoken turn used (for keepalive)
+        # Tracks which backend/model the last spoken turn used (for CPU keepalive)
         self._spoken_base: str = _SPOKEN_CPU_BASE
         self._spoken_model: str = _SPOKEN_MODEL
-        # Live health of hailo-ollama /api/generate for web chat turns.
-        # Set to False on first failure; resets to True on next success.
+        # Health of the direct Hailo Python LLM path (set False on session open failure).
         self._hailo_up: bool = True
         # Hailo structured tool-calling via JSON format instruction.
         # Disabled by config flag (hailo_tool_calling: false) for easy rollback.
@@ -1208,10 +1215,52 @@ class RoverAgent:
         """True when a HAClient was successfully initialised."""
         return self._ha_client is not None
 
+    def _hailo_llm_available(self) -> bool:
+        """True when the LLM HEF blob exists and Hailo LLM is usable."""
+        from pathlib import Path as _Path
+        return bool(self._llm_hef_path) and _Path(self._llm_hef_path).exists()
+
+    async def _run_llm(
+        self, messages: list[dict], max_tokens: int = 120, temperature: float = 0.65,
+        llm_ref: "list | None" = None,
+    ) -> str:
+        """Execute LLM generation within an already-acquired genai_session lock.
+
+        llm_ref: if a list [vd, llm] is provided, reuse the open session instead of
+        opening a new one. The caller is responsible for releasing.
+        """
+        from hailo_platform import HailoSchedulingAlgorithm, VDevice  # type: ignore[import]
+        from hailo_platform.genai import LLM  # type: ignore[import]
+
+        def _clean(s: str) -> str:
+            return s.replace("<|im_end|>", "").replace("<|im_start|>", "").strip()
+
+        if llm_ref is not None and len(llm_ref) == 2:
+            llm = llm_ref[1]
+            def _gen():
+                return _clean(llm.generate_all(messages, temperature=temperature, max_generated_tokens=max_tokens) or "")
+            return await asyncio.get_event_loop().run_in_executor(None, _gen)
+
+        hef = self._llm_hef_path
+        grp = self._llm_group_id
+
+        def _open_and_gen():
+            params = VDevice.create_params()
+            params.group_id = grp
+            params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
+            vd = VDevice(params)
+            llm = LLM(vd, hef)
+            try:
+                return _clean(llm.generate_all(messages, temperature=temperature, max_generated_tokens=max_tokens) or "")
+            finally:
+                llm.release()
+
+        return await asyncio.get_event_loop().run_in_executor(None, _open_and_gen)
+
     # ── Public API ──────────────────────────────────────────────────────────
 
     async def _check_availability(self) -> bool:
-        """Check Ollama availability; skip re-check if result is fresh (<30s)."""
+        """Check availability; for hailo backend checks HEF existence."""
         now = time.monotonic()
         if (self._available is True and
                 now - self._last_availability_check < self._availability_recheck_interval_s):
@@ -1220,6 +1269,10 @@ class RoverAgent:
             self._available = True
             self._last_availability_check = now
             return True
+        if self._backend == "hailo":
+            self._available = self._hailo_llm_available()
+            self._last_availability_check = now
+            return bool(self._available)
         if not self._base:
             self._available = False
             self._last_availability_check = now
@@ -1235,10 +1288,14 @@ class RoverAgent:
         return bool(self._available)
 
     async def check_available(self) -> bool:
-        """Public alias — full model-list check (used by /api/status)."""
+        """Public alias — full availability check (used by /api/status)."""
         if self._backend == "tools_only":
             self._available = True
             return True
+        if self._backend == "hailo":
+            self._available = self._hailo_llm_available()
+            self._last_availability_check = time.monotonic()
+            return bool(self._available)
         if not self._base:
             self._available = False
             return False
@@ -1388,22 +1445,19 @@ class RoverAgent:
     async def _hailo_spoken_with_context(
         self, user_text: str, tool_name: str, tool_result: Any, lang: str
     ) -> str:
-        """Call hailo-ollama with tool result injected as context for fast voice response (~3s)."""
-        hailo_cfg = self._full_config.get("hailo_ollama", {})
-        if not hailo_cfg.get("enabled", False):
+        """Direct Hailo LLM: tool result injected as context for fast voice response."""
+        if not self._hailo_llm_available():
             return ""
-        h_base    = hailo_cfg.get("host", "http://localhost:8000")
-        h_model   = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
+        hailo_cfg = self._full_config.get("hailo_ollama", {})
         h_predict = int(hailo_cfg.get("num_predict", 120))
         h_temp    = float(hailo_cfg.get("temperature", 0.65))
-
-        context = _fmt_tool_result_for_voice(tool_name, tool_result)
-        # Build a sentence that gives hailo clear context to respond naturally.
-        user_msg = f"{user_text} [{context}]" if context else user_text
 
         import re as _re
         def _flatten(s: str) -> str:
             return _re.sub(r"\s+", " ", s).strip()
+
+        context = _fmt_tool_result_for_voice(tool_name, tool_result)
+        user_msg = f"{user_text} [{context}]" if context else user_text
 
         sys_note = _ROVER_HAILO_SYSTEM
         if lang and lang not in ("en", "auto"):
@@ -1415,24 +1469,11 @@ class RoverAgent:
             + [{"role": "user", "content": _flatten(user_msg)}]
         )
         try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                r = await c.post(
-                    f"{h_base}/api/chat",
-                    json={
-                        "model":   h_model,
-                        "messages": messages,
-                        "stream":  False,
-                        "options": {"num_predict": h_predict, "temperature": h_temp, "top_p": 0.92},
-                    },
-                )
-                if r.status_code == 200:
-                    reply = r.json().get("message", {}).get("content", "").strip()
-                    logger.info("Agent: hailo_with_context OK (%d chars)", len(reply))
-                    self._spoken_base  = h_base
-                    self._spoken_model = h_model
-                    self._start_keepalive()
-                    return reply
-                logger.warning("Agent: hailo_with_context HTTP %d", r.status_code)
+            from hailo_session import genai_session
+            async with genai_session("llm-spoken-ctx"):
+                reply = await self._run_llm(messages, max_tokens=h_predict, temperature=h_temp)
+            logger.info("Agent: hailo_with_context OK (%d chars)", len(reply))
+            return reply.strip()
         except Exception as exc:
             logger.warning("Agent: hailo_with_context error: %s", exc)
         return ""
@@ -1609,43 +1650,33 @@ class RoverAgent:
     async def _converse_hailo(
         self, user_text: str, lang: str, history: list[dict]
     ) -> str:
-        """Call hailo-ollama with ROVER persona and conversation history."""
-        hailo_cfg = self._full_config.get("hailo_ollama", {})
-        if not hailo_cfg.get("enabled", False):
+        """Direct Hailo LLM conversation with ROVER persona and history."""
+        if not self._hailo_llm_available():
             return ""
-        h_base    = hailo_cfg.get("host", "http://localhost:8000")
-        h_model   = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
+        hailo_cfg = self._full_config.get("hailo_ollama", {})
         h_predict = int(hailo_cfg.get("num_predict", 120))
         h_temp    = float(hailo_cfg.get("temperature", 0.65))
-        import re as _re
 
+        import re as _re
         def _flatten(s: str) -> str:
             return _re.sub(r"\s+", " ", s).strip()
 
+        sys_msg = _ROVER_HAILO_SYSTEM
+        if lang and lang not in ("en", "auto"):
+            sys_msg += f" Respond in this language: {lang}."
+
         messages = (
-            [{"role": "system", "content": _ROVER_HAILO_SYSTEM}]
+            [{"role": "system", "content": sys_msg}]
             + _ROVER_HAILO_FEW_SHOT
             + [{"role": h["role"], "content": _flatten(str(h.get("content", "")))} for h in history]
             + [{"role": "user", "content": _flatten(user_text)}]
         )
         try:
-            async with httpx.AsyncClient(timeout=60.0) as c:
-                r = await c.post(
-                    f"{h_base}/api/chat",
-                    json={
-                        "model":    h_model,
-                        "messages": messages,
-                        "stream":   False,
-                        "options":  {"num_predict": h_predict, "temperature": h_temp, "top_p": 0.92},
-                    },
-                )
-                if r.status_code == 200:
-                    reply = r.json().get("message", {}).get("content", "").strip()
-                    logger.info("Agent: _converse_hailo OK (%d chars)", len(reply))
-                    self._spoken_base  = h_base
-                    self._spoken_model = h_model
-                    return reply
-                logger.warning("Agent: _converse_hailo HTTP %d — %s", r.status_code, r.text[:120])
+            from hailo_session import genai_session
+            async with genai_session("llm-converse"):
+                reply = await self._run_llm(messages, max_tokens=h_predict, temperature=h_temp)
+            logger.info("Agent: _converse_hailo OK (%d chars)", len(reply))
+            return reply.strip()
         except Exception as exc:
             logger.warning("Agent: _converse_hailo error: %s", exc)
         return ""
@@ -2243,19 +2274,17 @@ class RoverAgent:
         lang: str = "en",
         spoken: bool = False,
     ) -> "tuple[str, list[dict], dict | None] | None":
-        """Hailo structured JSON tool-calling via /api/chat.
+        """Direct Hailo LLM two-round tool-calling. Session held open across both rounds.
 
         Returns (reply, tool_log, action_proposal_or_None) on success.
         Returns None to signal fall back to CPU Ollama.
         """
         if not self._hailo_tool_calling:
             return None
-        hailo_cfg = self._full_config.get("hailo_ollama", {})
-        if not hailo_cfg.get("enabled", False):
+        if not self._hailo_llm_available():
             return None
 
-        h_base    = hailo_cfg.get("host", "http://localhost:8000")
-        h_model   = hailo_cfg.get("model", "qwen2.5-instruct:1.5b")
+        hailo_cfg = self._full_config.get("hailo_ollama", {})
         h_predict = int(hailo_cfg.get("num_predict", 120))
         h_temp    = float(hailo_cfg.get("temperature", 0.65))
 
@@ -2264,7 +2293,7 @@ class RoverAgent:
             return _re_local.sub(r"\s+", " ", str(s)).strip()
 
         manifest = HAILO_SPOKEN_TOOLS_MANIFEST if spoken else HAILO_TOOLS_MANIFEST
-        sys_content = _flat(_HAILO_TOOL_SYSTEM.format(manifest=manifest))
+        sys_content = _flat(_HAILO_TOOL_SYSTEM.replace("{manifest}", manifest))
         if lang and lang not in ("en", "auto"):
             sys_content += f" Respond in: {lang}."
 
@@ -2274,131 +2303,146 @@ class RoverAgent:
             + [{"role": "user", "content": _flat(user_text)}]
         )
 
-        # ── Round 1: ask model what to do ─────────────────────────────────
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                r = await c.post(
-                    f"{h_base}/api/chat",
-                    json={
-                        "model": h_model, "messages": messages, "stream": False,
-                        "options": {"num_predict": h_predict, "temperature": h_temp, "top_p": 0.92},
-                    },
-                )
-            if r.status_code != 200:
-                logger.warning("Agent: hailo_with_tools HTTP %d — fallback", r.status_code)
+        from hailo_session import genai_session
+        from hailo_platform import HailoSchedulingAlgorithm, VDevice  # type: ignore[import]
+        from hailo_platform.genai import LLM  # type: ignore[import]
+
+        hef = self._llm_hef_path
+        grp = self._llm_group_id
+
+        async with genai_session("llm-tools"):
+            # Open once — keep session across round 1 + tool execution + round 2
+            def _open_llm():
+                params = VDevice.create_params()
+                params.group_id = grp
+                params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
+                vd = VDevice(params)
+                return vd, LLM(vd, hef)
+
+            try:
+                _vd, llm = await asyncio.get_event_loop().run_in_executor(None, _open_llm)
+            except Exception as exc:
+                logger.warning("Agent: hailo_with_tools LLM open failed: %s — fallback", exc)
                 self._agent_stats["hailo_tool_fallback"] += 1
                 return None
-            content = r.json().get("message", {}).get("content", "").strip()
-        except Exception as exc:
-            logger.warning("Agent: hailo_with_tools round1 error: %s — fallback", exc)
-            self._agent_stats["hailo_tool_fallback"] += 1
-            return None
 
-        # ── Parse for JSON tool call ───────────────────────────────────────
-        tool_name: str | None = None
-        tool_args: dict = {}
-        stripped = content.strip()
-        if stripped.startswith("{"):
+            def _strip_eos(s: str) -> str:
+                return (s or "").replace("<|im_end|>", "").replace("<|im_start|>", "").strip()
+
             try:
-                obj = json.loads(stripped)
-                if isinstance(obj.get("tool"), str):
-                    tool_name = obj["tool"]
-                    tool_args = obj.get("args") or {}
-            except json.JSONDecodeError:
-                m = re.search(r'\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}', stripped)
-                if m:
+                # ── Round 1: ask model what to do ─────────────────────────
+                def _gen1():
+                    return llm.generate_all(
+                        messages, temperature=h_temp, max_generated_tokens=h_predict
+                    )
+                try:
+                    content = _strip_eos(await asyncio.get_event_loop().run_in_executor(None, _gen1))
+                except Exception as exc:
+                    logger.warning("Agent: hailo_with_tools round1 error: %s — fallback", exc)
+                    self._agent_stats["hailo_tool_fallback"] += 1
+                    return None
+
+                # ── Parse for JSON tool call ───────────────────────────────
+                tool_name: str | None = None
+                tool_args: dict = {}
+                stripped = content.strip()
+                if stripped.startswith("{"):
                     try:
-                        obj = json.loads(m.group())
+                        obj = json.loads(stripped)
                         if isinstance(obj.get("tool"), str):
                             tool_name = obj["tool"]
                             tool_args = obj.get("args") or {}
-                    except Exception:
-                        pass
+                    except json.JSONDecodeError:
+                        m = re.search(r'\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}', stripped)
+                        if m:
+                            try:
+                                obj = json.loads(m.group())
+                                if isinstance(obj.get("tool"), str):
+                                    tool_name = obj["tool"]
+                                    tool_args = obj.get("args") or {}
+                            except Exception:
+                                pass
 
-        # ── Plain text — no tool needed ────────────────────────────────────
-        if not tool_name:
-            logger.info("Agent: hailo_with_tools → plain text (%d chars)", len(content))
-            self._agent_stats["hailo_tool_success"] += 1
-            self._agent_stats["last_backend"] = "hailo-tools"
-            self._agent_stats["last_tool_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            self._spoken_base  = h_base
-            self._spoken_model = h_model
-            self._start_keepalive()
-            return content, [], None
+                # ── Plain text — no tool needed ────────────────────────────
+                if not tool_name:
+                    logger.info("Agent: hailo_with_tools → plain text (%d chars)", len(content))
+                    self._agent_stats["hailo_tool_success"] += 1
+                    self._agent_stats["last_backend"] = "hailo-tools"
+                    self._agent_stats["last_tool_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    return content, [], None
 
-        logger.info("Agent: hailo_with_tools parsed tool=%r args=%r", tool_name, tool_args)
-        self._agent_stats["last_tool"] = tool_name
+                logger.info("Agent: hailo_with_tools parsed tool=%r args=%r", tool_name, tool_args)
+                self._agent_stats["last_tool"] = tool_name
 
-        # ── Dangerous tool — proposal only, no execution ───────────────────
-        if tool_name in _DANGEROUS_NAMES:
-            proposal_text = (
-                f"I can {tool_name.replace('_', ' ')} for you, sir, "
-                "but that requires your explicit confirmation."
-            )
-            self._agent_stats["hailo_tool_success"] += 1
-            self._agent_stats["last_backend"] = "hailo-tools"
-            self._agent_stats["last_tool_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            return proposal_text, [], {"name": tool_name, "args": tool_args}
+                # ── Dangerous tool — proposal only, no execution ───────────
+                if tool_name in _DANGEROUS_NAMES:
+                    proposal_text = (
+                        f"I can {tool_name.replace('_', ' ')} for you, sir, "
+                        "but that requires your explicit confirmation."
+                    )
+                    self._agent_stats["hailo_tool_success"] += 1
+                    self._agent_stats["last_backend"] = "hailo-tools"
+                    self._agent_stats["last_tool_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    return proposal_text, [], {"name": tool_name, "args": tool_args}
 
-        # ── Validate tool name ─────────────────────────────────────────────
-        _valid = {t["function"]["name"] for t in _CPU_TOOLS} | {
-            "wave_arm", "get_full_diagnostics", "speak_diagnostics_summary",
-            "ha_get_temperatures", "get_hailo_status", "get_temperature_status",
-        }
-        if tool_name not in _valid:
-            logger.warning("Agent: hailo_with_tools unknown tool %r — fallback", tool_name)
-            self._agent_stats["hailo_tool_fallback"] += 1
-            return None
+                # ── Validate tool name ─────────────────────────────────────
+                _valid = {t["function"]["name"] for t in _CPU_TOOLS} | {
+                    "wave_arm", "get_full_diagnostics", "speak_diagnostics_summary",
+                    "ha_get_temperatures", "get_hailo_status", "get_temperature_status",
+                }
+                if tool_name not in _valid:
+                    logger.warning("Agent: hailo_with_tools unknown tool %r — fallback", tool_name)
+                    self._agent_stats["hailo_tool_fallback"] += 1
+                    return None
 
-        # ── Execute tool ───────────────────────────────────────────────────
-        t0 = time.monotonic()
-        result = await self._run_tool(tool_name, tool_args)
-        ms = int((time.monotonic() - t0) * 1000)
-        tool_log = [{"name": tool_name, "args": tool_args, "result": result, "duration_ms": ms}]
-        logger.info("Agent: hailo_with_tools tool %s → %d ms", tool_name, ms)
+                # ── Execute tool (async, session held open to avoid reopen cost) ──
+                t0 = time.monotonic()
+                result = await self._run_tool(tool_name, tool_args)
+                ms = int((time.monotonic() - t0) * 1000)
+                tool_log = [{"name": tool_name, "args": tool_args, "result": result, "duration_ms": ms}]
+                logger.info("Agent: hailo_with_tools tool %s → %d ms", tool_name, ms)
 
-        # ── Round 2: narrate tool result ───────────────────────────────────
-        result_snippet = _flat(json.dumps(result, default=str))[:800]
-        narrate_sys = _flat(
-            "You are ROVER, the AI of an autonomous robot. "
-            "Dry sardonic British wit. Call owner sir. 2-3 sentences. No markdown. No preamble."
-        )
-        narrate_msgs = (
-            [{"role": "system", "content": narrate_sys}]
-            + _ROVER_HAILO_FEW_SHOT[:2]
-            + [{"role": "user", "content": _flat(f"[Tool result: {result_snippet}] {user_text}")}]
-        )
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                r = await c.post(
-                    f"{h_base}/api/chat",
-                    json={
-                        "model": h_model, "messages": narrate_msgs, "stream": False,
-                        "options": {"num_predict": h_predict, "temperature": h_temp, "top_p": 0.92},
-                    },
+                # ── Round 2: narrate tool result ───────────────────────────
+                result_snippet = _flat(json.dumps(result, default=str))[:800]
+                narrate_sys = _flat(
+                    "You are ROVER, the AI of an autonomous robot. "
+                    "Dry sardonic British wit. Call owner sir. 2-3 sentences. No markdown. No preamble."
                 )
-            if r.status_code == 200:
-                reply = r.json().get("message", {}).get("content", "").strip()
-                logger.info("Agent: hailo_with_tools narration OK (%d chars)", len(reply))
+                narrate_msgs = (
+                    [{"role": "system", "content": narrate_sys}]
+                    + _ROVER_HAILO_FEW_SHOT[:2]
+                    + [{"role": "user", "content": _flat(f"[Tool result: {result_snippet}] {user_text}")}]
+                )
+
+                def _gen2():
+                    llm.clear_context()
+                    return llm.generate_all(
+                        narrate_msgs, temperature=h_temp, max_generated_tokens=h_predict
+                    )
+
+                try:
+                    reply = _strip_eos(await asyncio.get_event_loop().run_in_executor(None, _gen2))
+                    logger.info("Agent: hailo_with_tools narration OK (%d chars)", len(reply))
+                except Exception as exc:
+                    logger.warning("Agent: hailo_with_tools narration error: %s", exc)
+                    reply = ""
+
+                if reply:
+                    self._agent_stats["hailo_tool_success"] += 1
+                    self._agent_stats["last_backend"] = "hailo-tools"
+                    self._agent_stats["last_tool_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    return reply, tool_log, None
+
+                # Narration failed — Python formatter as last resort
+                py_reply = _fmt_tool_result_for_voice(tool_name, result)
+                final_reply = py_reply or f"Done. {result_snippet[:200]}"
                 self._agent_stats["hailo_tool_success"] += 1
                 self._agent_stats["last_backend"] = "hailo-tools"
                 self._agent_stats["last_tool_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                self._spoken_base  = h_base
-                self._spoken_model = h_model
-                self._start_keepalive()
-                return reply, tool_log, None
-            logger.warning("Agent: hailo_with_tools narration HTTP %d", r.status_code)
-        except Exception as exc:
-            logger.warning("Agent: hailo_with_tools narration error: %s", exc)
+                return final_reply, tool_log, None
 
-        # Narration failed — Python formatter as last resort
-        py_reply = _fmt_tool_result_for_voice(tool_name, result)
-        final_reply = py_reply or f"Done. {result_snippet[:200]}"
-        self._agent_stats["hailo_tool_success"] += 1
-        self._agent_stats["last_backend"] = "hailo-tools"
-        self._agent_stats["last_tool_ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        return final_reply, tool_log, None
+            finally:
+                await asyncio.get_event_loop().run_in_executor(None, llm.release)
 
     async def _call_model(self, messages: list[dict]) -> dict | None:
         self._last_model_error = None
