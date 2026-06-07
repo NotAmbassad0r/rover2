@@ -28,24 +28,6 @@ RENEW_DAYS_THRESHOLD="${RENEW_DAYS_THRESHOLD:-60}"
 # Days remaining on the cert (0 if cert missing or unreadable)
 _days_remaining() {
     if [ ! -f "$CERT_OUT" ]; then echo 0; return; fi
-    python3 - <<'EOF'
-import subprocess, sys, datetime
-out = subprocess.run(
-    ['openssl', 'x509', '-in', '${CERT_OUT}', '-noout', '-enddate'],
-    capture_output=True, text=True
-)
-if out.returncode != 0:
-    print(0); sys.exit(0)
-date_str = out.stdout.strip().split('=', 1)[1]  # "Jun  3 13:46:48 2027 GMT"
-exp = datetime.datetime.strptime(date_str, '%b %d %H:%M:%S %Y %Z').replace(tzinfo=datetime.timezone.utc)
-now = datetime.datetime.now(datetime.timezone.utc)
-print(max(0, (exp - now).days))
-EOF
-}
-
-# Inline CERT_OUT for the python heredoc
-_days_remaining() {
-    if [ ! -f "$CERT_OUT" ]; then echo 0; return; fi
     openssl x509 -in "$CERT_OUT" -noout -enddate 2>/dev/null \
         | awk -F= '{print $2}' \
         | python3 -c "

@@ -26,3 +26,8 @@ rover.crt
 
 # Pi system env files (contain secrets — HA_TOKEN, etc.)
 /etc/rover2.env
+
+# Runtime-generated data files
+*.tmp
+last_update_check.json
+last_hailo_models.json

@@ -5,6 +5,20 @@ Format: ## Category / ### Item / bullet details / Priority line.
 
 ---
 
+## Code Quality
+
+### ✓ Full code hygiene audit — DONE 2026-06-07
+
+- Read all 31 pi/*.py files and face/index.html in full before any changes
+- Removed `current_holder()` and `is_locked()` from `pi/hailo_session.py` (defined but never called)
+- Removed dead first `_days_remaining()` definition from `scripts/renew-cert.sh` (shadowed by second definition; first had broken `${CERT_OUT}` in single-quoted heredoc)
+- Added `*.tmp`, `last_update_check.json`, `last_hailo_models.json` to `.gitignore`
+- Kept (ambiguous): `watchdog.py` `_hailo_500_streak` ("kept for compat" comment), `agent.py` `_SPOKEN_TIMEOUT_S` (no callers but clear intent comment)
+- No dead imports, no dead functions, no stale hailo-ollama HTTP calls, no webkitSpeechRecognition anywhere
+- `python3 -m py_compile` passed on all modified Python files
+
+---
+
 ## Web UI
 
 ### Improve web GUI and verify all functions

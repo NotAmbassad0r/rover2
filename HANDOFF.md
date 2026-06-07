@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed; TTS speed — Piper length_scale 0.92, Web Speech rate 0.95, sw.js rover-face-v35; cert auto-renewal cron installed)
+Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed; TTS speed — Piper length_scale 0.92, Web Speech rate 0.95, sw.js rover-face-v35; cert auto-renewal cron installed; code hygiene audit — hailo_session dead fns removed, renew-cert.sh dead fn removed, .gitignore updated)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 

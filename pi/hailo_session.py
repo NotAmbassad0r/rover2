@@ -50,9 +50,3 @@ def genai_session(holder: str) -> _GenAISession:
     return _GenAISession(holder)
 
 
-def current_holder() -> str | None:
-    return _current_holder
-
-
-def is_locked() -> bool:
-    return _genai_lock.locked()
