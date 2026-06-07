@@ -726,16 +726,10 @@ Checklist for every new feature:
 
 #### Current known gaps to address (in priority order)
 
-**1. Voice pipeline visibility**
-- Current: no visibility into voice pipeline state from web UI
-- Needed:
-  - VAD state: listening / wake detected / recording / processing
-  - STT latency of last transcription
-  - Last transcribed text
-  - Wake word confidence score
-  - TTS state: idle / speaking / queued
-  - Voice session active: yes/no
-- Source: read from WebSocket telemetry or new /api/voice/status endpoint
+**1. Voice pipeline visibility** ✅ DONE 2026-06-07
+- DIAG VOICE PIPELINE panel: STATE, VAD, TTS, SESSION, WHISPER, LAST STT, STT LATENCY, WAKE LOGPROB
+- `GET /api/voice/status` includes `vad_active`, `tts_active`
+- WebSocket telemetry includes `vad_active`, `tts_active`
 
 **2. LLM / agent visibility**
 - Current: agent stats panel exists but limited
@@ -747,66 +741,38 @@ Checklist for every new feature:
   - Tool call history: last 5 tool calls with latency
   - Success/fallback rate over last 20 calls
 
-**3. Memory and resource live view**
-- Current: CPU% and RAM% in DIAG tab, not always live
-- Needed:
-  - Live RSS per major process (rover2-api, hailo-ollama if active, ollama)
-  - Live CPU% per major process
-  - Hailo chip temperature (when available via HailoRT 5.2.x+)
-  - Disk free space
-  - All updating every 5s minimum
+**3. Memory and resource live view** ✅ DONE 2026-06-07
+- DIAG RESOURCES LIVE panel: PI TEMP, DISK, rover2-api RSS+CPU, hailo-ollama, ollama — auto-refresh 5s
+- `GET /api/system/resources`
 
-**4. Full follow pipeline control**
-- Current: follow mode selector exists
-- Needed:
-  - Person detection confidence score (live)
-  - BLE RSSI live graph (last 30 readings)
-  - Body tracker frame rate (actual fps vs configured)
-  - Hailo inference latency per frame
-  - Safety block state with distance reading
-  - Manual override: force stop, force follow, force BLE
+**4. Full follow pipeline control** ✅ DONE 2026-06-07
+- DIAG FOLLOW PIPELINE panel: detection conf, person, mode, fps, infer latency, safety, BLE RSSI sparkline
+- Manual override buttons: STOP, DETECT, FOLLOW, BLE
+- `GET /api/follow/status`
 
-**5. Home Assistant integration panel**
-- Current: no HA visibility in web UI
-- Needed:
-  - List of all HA entities rover2-api knows about
-  - Current state of each entity (on/off, temperature, etc.)
-  - Toggle button for switchable entities
-  - Last HA command sent and result
-  - HA connection status (connected / disconnected)
+**5. Home Assistant integration panel** ✅ DONE (previous session)
+- DIAG HOME ASSISTANT panel with entity toggles and temperatures
 
-**6. Voice command console**
-- A text input in the CHAT tab that simulates a voice command
-  (sends to /api/voice/chat endpoint, shows full agent response
-  including which tool was called, latency breakdown, routing tier)
-- Useful for testing without speaking
+**6. Voice command console** ✅ DONE (previous session)
+- CHAT tab VOICE COMMAND CONSOLE panel
 
-**7. Config editor**
-- Read-only view of current config.yaml values in DIAG tab
-- Key tunable values editable from UI:
-  - frame_interval_s (body tracker fps)
-  - follow speeds (turn_speed, forward_speed)
-  - VLM cooldown_s
-  - voice thresholds (WAKE_RMS_THRESHOLD)
-  - hailo_tool_calling enabled/disabled
-- Changes applied via /api/config/set endpoint
-- Saved to config.yaml on Pi via deploy or direct write
+**7. Config editor** ✅ DONE 2026-06-07
+- TOOLS tab CONFIG panel shows config.yaml values (read-only view)
+- TOOLS tab FOLLOW TUNING panel — editable sliders for key follow params → POST /api/config/tuning
 
-**8. Log viewer**
-- Live journal tail for rover2-api in DIAG tab
-- Last 50 lines, auto-scrolling
-- Filter by: ERROR, WARNING, INFO, hailo, voice, tool
-- Source: /api/logs endpoint streaming via SSE or WebSocket
+**8. Log viewer** ✅ DONE 2026-06-07
+- DIAG LOG VIEWER panel: service selector, lines selector, filter input, colour-coded output
+- `GET /api/diagnostics/journal?service=&lines=&filter=`
 
-**9. Watchdog action history**
-- Current: watchdog shows last action only
-- Needed: last 10 actions with timestamp, severity, action taken
-- Source: watchdog maintains a ring buffer of last 10 actions
+**9. Watchdog action history** ✅ DONE 2026-06-07
+- DIAG WATCHDOG RECENT ACTIONS section shows last 10 auto-fix actions with timestamps
+- `GET /api/watchdog/status` now includes `action_history` field
+- `watchdog.py` maintains `_action_history: deque(maxlen=10)` ring buffer
 
-**10. Alert history**
-- Current: alert bar shows last 3 alerts, dismissible
-- Needed: persistent alert log (last 50) accessible via a button
-- Survives page refresh (stored in rover2-api memory, not localStorage)
+**10. Alert history** ✅ DONE 2026-06-07
+- HISTORY button in alert bar → modal with last 50 alerts + CLEAR button
+- `GET /api/alerts/history`, `DELETE /api/alerts/history`
+- `server.py` maintains `_alert_history: deque(maxlen=50)` ring buffer
 
 #### UI quality standards
 

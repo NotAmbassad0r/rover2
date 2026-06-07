@@ -18,6 +18,7 @@ import asyncio
 import datetime
 import logging
 import shutil
+from collections import deque
 import time
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,9 @@ class Watchdog:
 
         # Persistent alerts for WebSocket broadcast
         self._persistent_alerts: list[dict[str, Any]] = []
+
+        # Action history ring (last 10 auto-fix actions for /api/watchdog/status)
+        self._action_history: deque[dict[str, Any]] = deque(maxlen=10)
 
         # ── New check state ──────────────────────────────────────────────────
         # Camera frames stall
@@ -174,6 +178,10 @@ class Watchdog:
     def last_action_ts(self) -> float:
         return self._last_action_ts
 
+    @property
+    def action_history(self) -> list[dict[str, Any]]:
+        return list(self._action_history)
+
     # ── Internal helpers — global action window ─────────────────────────────
 
     def _prune_window(self) -> None:
@@ -189,6 +197,10 @@ class Watchdog:
     def _record_action(self) -> None:
         self._last_action_ts = time.time()
         self._actions.append(time.monotonic())
+        self._action_history.append({
+            "ts": int(self._last_action_ts),
+            "desc": self._last_action_desc,
+        })
         self._prune_window()
         if len(self._actions) >= self._max_actions:
             self._limit_reached = True
@@ -487,8 +499,8 @@ class Watchdog:
                 if now - self._last_ollama_restart > 1800:
                     self._last_ollama_restart = now
                     ok = await self._run_fix(["sudo", "systemctl", "restart", "ollama"])
-                    self._record_action()
                     self._last_action_desc = f"RSS {rss:.0f} MB → restart ollama"
+                    self._record_action()
                     self._log("CRITICAL", f"memory_critical_{rss:.0f}MB",
                               "restart_ollama", "ok" if ok else "failed")
                 else:
@@ -510,8 +522,8 @@ class Watchdog:
                     "-d", '{"enabled":false,"detect_only":false}',
                     "https://localhost:8082/api/tracking",
                 ])
-                self._record_action()
                 self._last_action_desc = f"temp {temp:.1f}°C → disable tracking"
+                self._record_action()
                 self._log("CRITICAL", f"temp_critical_{temp:.1f}C",
                           "disable_tracking", "ok" if ok else "failed")
         elif temp > self._temp_warn_c:
@@ -527,8 +539,8 @@ class Watchdog:
                 if ok:
                     await asyncio.sleep(5.0)
                     result = "stream_ok" if await self._probe_camera() else "stream_not_responding"
-                self._record_action()
                 self._last_action_desc = "rover2-camera down → restart"
+                self._record_action()
                 self._log("ERROR", "rover_camera_down", "restart_rover2_camera", result)
 
     async def _check_existing_ollama_runners(self) -> None:
@@ -540,8 +552,8 @@ class Watchdog:
                 if now - self._last_ollama_restart > 300:
                     self._last_ollama_restart = now
                     ok = await self._run_fix(["sudo", "systemctl", "restart", "ollama"])
-                    self._record_action()
                     self._last_action_desc = f"ollama {runners} runners → restart ollama"
+                    self._record_action()
                     self._log("WARNING", f"ollama_runners_{runners}",
                               "restart_ollama", "ok" if ok else "failed")
                 else:
@@ -563,8 +575,8 @@ class Watchdog:
                 if _LOG_PATH.exists() and _LOG_PATH.stat().st_size > 1024 * 1024:
                     data = _LOG_PATH.read_bytes()
                     _LOG_PATH.write_bytes(data[-10240:])
-                self._record_action()
                 self._last_action_desc = f"disk {disk:.0f}% → clear tmp/pip"
+                self._record_action()
                 self._log("CRITICAL", f"disk_critical_{disk:.0f}pct",
                           "clear_tmp_pip_logs", "done")
         elif disk > 85:

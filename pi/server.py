@@ -269,6 +269,7 @@ def create_app(
 
     # Alert state — updated each metrics tick, pushed via WebSocket extra
     _active_alerts: list[dict] = []
+    _alert_history: _collections.deque = _collections.deque(maxlen=50)
     _cpu_high_since: float | None = None
     _thermal_alert: dict | None = None  # set by /api/services on-demand evaluation
 
@@ -558,6 +559,10 @@ def create_app(
                     _sleep_s = _METRICS_INTERVAL_HOT_S
                 else:
                     _sleep_s = _METRICS_INTERVAL_S
+                for _a in new_alerts:
+                    if not any(h.get("metric") == _a.get("metric") and h.get("ts") == _a.get("ts")
+                               for h in _alert_history):
+                        _alert_history.append(dict(_a, captured_at=int(time.time())))
                 _active_alerts = new_alerts
                 all_alerts = list(new_alerts)
                 if _thermal_alert:
@@ -644,6 +649,8 @@ def create_app(
                     "voice_pipeline": _voice_pipeline,
                     "voice_session_active": _conversation_active,
                     "whisper_loaded": _voice_engine.whisper_loaded() if _VOICE else False,
+                    "vad_active": _voice_pipeline in ("wake_checking", "transcribing"),
+                    "tts_active": _voice_pipeline == "processing",
                 })
                 # ───────────────────────────────────────────────────────────
 
@@ -951,6 +958,15 @@ def create_app(
     @app.get("/api/alerts/current")
     async def get_alerts_current() -> JSONResponse:
         return JSONResponse({"alerts": _active_alerts, "count": len(_active_alerts)})
+
+    @app.get("/api/alerts/history")
+    async def get_alerts_history() -> JSONResponse:
+        return JSONResponse({"alerts": list(_alert_history), "count": len(_alert_history)})
+
+    @app.delete("/api/alerts/history")
+    async def clear_alerts_history() -> JSONResponse:
+        _alert_history.clear()
+        return JSONResponse({"status": "ok"})
 
     # ── Audio routing ────────────────────────────────────────────────────────
 
@@ -1707,9 +1723,9 @@ def create_app(
     })
 
     @app.get("/api/diagnostics/journal")
-    async def get_journal(service: str = "rover2-api", lines: int = 40) -> JSONResponse:
+    async def get_journal(service: str = "rover2-api", lines: int = 40, filter: str = "") -> JSONResponse:
         import subprocess
-        lines = min(lines, 120)
+        lines = min(lines, 200)
         if service not in _ALLOWED_SERVICES:
             raise HTTPException(status_code=400, detail=f"Service not in allowed list")
         def _run():
@@ -1717,7 +1733,11 @@ def create_app(
                 ["journalctl", "-u", service, f"-n{lines}", "--no-pager", "--output=short"],
                 capture_output=True, text=True, timeout=8,
             )
-            return r.stdout.splitlines()
+            raw = r.stdout.splitlines()
+            if filter:
+                fl = filter.lower()
+                return [l for l in raw if fl in l.lower()]
+            return raw
         entries = await asyncio.to_thread(_run)
         return JSONResponse({"service": service, "lines": entries, "count": len(entries)})
 
@@ -2017,6 +2037,7 @@ def create_app(
             "last_action": watchdog.last_action,
             "last_action_ts": watchdog.last_action_ts,
             "persistent_alerts": watchdog.get_persistent_alerts(),
+            "action_history": watchdog.action_history,
         })
 
     @app.get("/api/voice/status")
@@ -2028,6 +2049,8 @@ def create_app(
         _idle = _voice_engine.whisper_idle_s() if _VOICE else None
         return JSONResponse({
             "pipeline":              _voice_pipeline,
+            "vad_active":            _voice_pipeline in ("wake_checking", "transcribing"),
+            "tts_active":            _voice_pipeline == "processing",
             "session_active":        _conversation_active,
             "whisper_loaded":        _voice_engine.whisper_loaded() if _VOICE else False,
             "whisper_idle_s":        round(_idle, 1) if _idle is not None else None,

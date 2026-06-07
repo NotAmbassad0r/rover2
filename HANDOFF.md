@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (rover2-camera.service deployed — replaces v1 rover-camera, TurboJPEG+idle mode, same port 8081; rover-ble disabled; HA DIAG panel; voice console CHAT panel)
+Last updated: 2026-06-07 (web UI gaps #1 #3 #4 #7 #8 #9 #10 — voice pipeline visibility, resources, follow pipeline, config, log viewer, watchdog action history, alert history)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -483,15 +483,21 @@ Endpoint: `wss://<ROVER_WIFI_IP>:8082/ws`
 **Client → server:** `drive`, `stop`, `grip`, `arm`, `arm_pulse`, `tracking`, `ping`
 **Server → client:** `telemetry`, `ack`, `pong`, `error`
 
-Telemetry fields include: `tracking_enabled`, `tracking_detect_only`, `tracking_hailo_ready`, `person_detected`, `ble_active`, `ble_follow_enabled`, `ble_available`, `ble_seen`, `ble_rssi`, `alerts`, `ap_state`, `watchdog_last_action`, `watchdog_last_action_ts`, `watchdog_last_cycle`, `voice_pipeline`, `voice_session_active`, `whisper_loaded`.
+Telemetry fields include: `tracking_enabled`, `tracking_detect_only`, `tracking_hailo_ready`, `person_detected`, `ble_active`, `ble_follow_enabled`, `ble_available`, `ble_seen`, `ble_rssi`, `alerts`, `ap_state`, `watchdog_last_action`, `watchdog_last_action_ts`, `watchdog_last_cycle`, `voice_pipeline`, `voice_session_active`, `whisper_loaded`, `vad_active`, `tts_active`.
 
 New REST endpoints (2026-06-05):
-- `GET /api/watchdog/status` — detailed watchdog state (last_cycle, last_action, last_action_ts, persistent_alerts, actions_used)
+- `GET /api/watchdog/status` — detailed watchdog state (last_cycle, last_action, last_action_ts, persistent_alerts, actions_used, **action_history**)
 - `GET /api/network/status` — AP state (wlan0_connected, wlan1_ap_active, wlan1_channel, rtw88_8812au_loaded)
 - `POST /api/watchdog/test-alert` — inject a test alert into the next telemetry push (dev/debug only)
 
 New REST endpoints (2026-06-07):
 - `GET /api/agent/stats` — agent backend stats: last_backend, last_tool, last_tool_ts, hailo_tool_success_count, hailo_tool_fallback_count, hailo_tool_success_rate, hailo_tool_calling_enabled
+- `GET /api/alerts/history` — last 50 fired alerts ring buffer
+- `DELETE /api/alerts/history` — clear alert history
+- `GET /api/diagnostics/journal?service=&lines=&filter=` — journal log viewer with filter param (added `filter` query param to existing endpoint)
+- `GET /api/system/resources` — per-process RSS+CPU, Pi temp, disk (already existed)
+- `GET /api/follow/status` — live follow pipeline telemetry (already existed)
+- `GET /api/voice/status` — now includes `vad_active`, `tts_active` fields
 
 Tracking API: `POST /api/tracking`
 - `{"enabled": true}` — enable FOLLOW

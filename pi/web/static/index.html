@@ -406,10 +406,35 @@
         style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;font-family:inherit;">&#x2715;</button>
     </div>
     <div id="alert-msgs" style="color:var(--warn);margin-top:6px;line-height:1.5;font-size:12px;"></div>
-    <button type="button" onclick="alertAskAI()"
-      style="margin-top:8px;font-family:'Courier New',monospace;font-size:11px;
-      background:#100000;border:1px solid var(--danger);color:var(--danger);
-      padding:4px 10px;cursor:pointer;letter-spacing:.04em;">ASK AI WHAT'S WRONG</button>
+    <div style="display:flex;gap:6px;margin-top:8px;">
+      <button type="button" onclick="alertAskAI()"
+        style="font-family:'Courier New',monospace;font-size:11px;
+        background:#100000;border:1px solid var(--danger);color:var(--danger);
+        padding:4px 10px;cursor:pointer;letter-spacing:.04em;">ASK AI WHAT'S WRONG</button>
+      <button type="button" id="btn-alert-history" onclick="showAlertHistory()"
+        style="font-family:'Courier New',monospace;font-size:11px;
+        background:#100000;border:1px solid var(--warn);color:var(--warn);
+        padding:4px 10px;cursor:pointer;letter-spacing:.04em;">HISTORY</button>
+    </div>
+  </div>
+
+  <!-- ── Alert history modal ── -->
+  <div id="alert-history-modal" style="display:none;position:fixed;inset:0;z-index:9998;
+    background:rgba(0,0,0,0.85);overflow-y:auto;padding:24px 16px;">
+    <div style="max-width:480px;margin:0 auto;background:var(--surface);
+      border:1px solid var(--border);padding:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <span style="font-size:12px;letter-spacing:.1em;color:var(--accent);">ALERT HISTORY (LAST 50)</span>
+        <div style="display:flex;gap:6px;">
+          <button type="button" onclick="clearAlertHistory()"
+            style="font-family:'Courier New',monospace;font-size:11px;padding:3px 8px;
+            border:1px solid var(--danger);background:#100000;color:var(--danger);cursor:pointer;">CLEAR</button>
+          <button type="button" onclick="document.getElementById('alert-history-modal').style.display='none'"
+            style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1.1rem;">&#x2715;</button>
+        </div>
+      </div>
+      <div id="alert-history-list" style="font-size:11px;line-height:1.6;"></div>
+    </div>
   </div>
 
   <!-- ── Voice / TTS bar ── -->
@@ -675,6 +700,8 @@
     <div class="panel">
       <div class="panel-title">WATCHDOG</div>
       <div class="diag-grid" id="watchdog-status-grid"></div>
+      <div class="diag-section-title" style="margin-top:8px;">RECENT ACTIONS</div>
+      <div id="watchdog-action-history" style="font-size:11px;color:var(--muted);">—</div>
       <div class="tools-actions" style="margin-top:8px;">
         <button type="button" id="watchdog-log-btn">VIEW LOG</button>
         <button type="button" id="watchdog-reset-btn">RESET ACTIONS</button>
@@ -730,6 +757,37 @@
       <div class="tools-actions" style="margin-top:8px;">
         <button type="button" id="ha-refresh-btn">REFRESH</button>
       </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">LOG VIEWER</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center;">
+        <select id="log-svc-sel" style="font-family:'Courier New',monospace;font-size:11px;
+          background:#0d1117;color:var(--text);border:1px solid var(--border);padding:4px 6px;">
+          <option value="rover2-api">rover2-api</option>
+          <option value="hailo-ollama">hailo-ollama</option>
+          <option value="ollama">ollama</option>
+          <option value="rover2-camera">rover2-camera</option>
+          <option value="cpu-governor">cpu-governor</option>
+          <option value="bluetooth">bluetooth</option>
+        </select>
+        <select id="log-lines-sel" style="font-family:'Courier New',monospace;font-size:11px;
+          background:#0d1117;color:var(--text);border:1px solid var(--border);padding:4px 6px;">
+          <option value="40">40 lines</option>
+          <option value="80">80 lines</option>
+          <option value="120">120 lines</option>
+          <option value="200">200 lines</option>
+        </select>
+        <input id="log-filter-in" type="text" placeholder="filter…"
+          style="font-family:'Courier New',monospace;font-size:11px;padding:4px 6px;
+          background:#0d1117;color:var(--text);border:1px solid var(--border);flex:1;min-width:60px;"
+          onkeydown="if(event.key==='Enter')loadJournalLogs()" />
+        <button type="button" id="log-viewer-refresh-btn"
+          onclick="loadJournalLogs()"
+          style="font-family:'Courier New',monospace;font-size:11px;padding:4px 10px;
+          border:1px solid var(--border);background:#0d1117;color:var(--text);cursor:pointer;min-height:32px;">LOAD</button>
+      </div>
+      <pre class="log-area" id="log-viewer-area" style="max-height:240px;">—</pre>
     </div>
 
   </div>
@@ -1003,7 +1061,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); loadHAStatus(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); loadHAStatus(); loadVoiceStatus(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1364,7 +1422,7 @@
         _diagAutoTimer = null;
         this.classList.remove('active');
       } else {
-        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); loadHAStatus(); }, 5000);
+        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); loadHAStatus(); loadVoiceStatus(); }, 5000);
         this.classList.add('active');
         loadFullDiagnostics();
       }
@@ -1616,6 +1674,22 @@
         grid.innerHTML = rows.map(([k, v]) =>
           `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
         ).join('');
+
+        // RECENT ACTIONS history
+        const histEl = document.getElementById('watchdog-action-history');
+        if (histEl) {
+          const hist = (d.action_history || []).slice().reverse();
+          if (!hist.length) {
+            histEl.textContent = 'No auto-fix actions recorded';
+          } else {
+            histEl.innerHTML = hist.map(h => {
+              const ts = h.ts ? new Date(h.ts * 1000).toLocaleTimeString() : '—';
+              return `<div style="padding:2px 0;border-bottom:1px solid var(--border);">` +
+                `<span style="color:var(--muted);font-size:10px;">${ts}</span> ` +
+                `<span style="color:var(--warn)">${_escHtml(h.desc || '—')}</span></div>`;
+            }).join('');
+          }
+        }
       } catch (_) {}
     }
 
@@ -1714,8 +1788,12 @@
         const logprob     = d.last_wake_logprob != null ? d.last_wake_logprob.toFixed(2) : '—';
         const noSpeech    = d.last_wake_no_speech != null ? (d.last_wake_no_speech * 100).toFixed(0) + '%' : '—';
         const wakeAge     = d.last_wake_age_s != null ? d.last_wake_age_s + 's ago' : '—';
+        const vadCol = d.vad_active ? 'var(--accent)' : 'var(--muted)';
+        const ttsCol = d.tts_active ? 'var(--warn)' : 'var(--muted)';
         const rows = [
           ['STATE',         `<span style="color:${pipelineCol};font-weight:700">${pipeline}</span>`],
+          ['VAD',           `<span style="color:${vadCol}">${d.vad_active ? 'ACTIVE' : 'idle'}</span>`],
+          ['TTS',           `<span style="color:${ttsCol}">${d.tts_active ? 'ACTIVE' : 'idle'}</span>`],
           ['SESSION',       `<span style="color:${sessionCol}">${d.session_active ? 'ACTIVE' : 'idle'}</span>`],
           ['WHISPER',       (() => {
             const idle = d.whisper_idle_s != null ? ` · idle ${Math.floor(d.whisper_idle_s)}s` : '';
@@ -1723,7 +1801,7 @@
             const label = d.whisper_loaded ? `loaded${idle}` : `unloaded (lazy${idle}${unloadAt})`;
             return `<span style="color:${whisperCol}">${label}</span>`;
           })()],
-          ['LAST TRANSCRIPT', transcript],
+          ['LAST STT',      transcript],
           ['STT LATENCY',   latency + (d.last_stt_age_s != null ? ' · ' + sttAge : '')],
           ['WAKE LOGPROB',  logprob + ' · no-speech ' + noSpeech + (d.last_wake_age_s != null ? ' · ' + wakeAge : '')],
         ];
@@ -2923,6 +3001,73 @@
         "What's wrong? Active alerts: " + msgs +
         '. What is causing this and how do I fix it?'
       );
+    }
+
+    // ── Alert history modal ───────────────────────────────────────────────────
+
+    async function showAlertHistory() {
+      const modal = document.getElementById('alert-history-modal');
+      const list  = document.getElementById('alert-history-list');
+      modal.style.display = 'block';
+      list.innerHTML = '<span style="color:var(--muted)">Loading…</span>';
+      try {
+        const r = await fetch(apiBase() + '/api/alerts/history');
+        const d = await r.json();
+        const alerts = (d.alerts || []).slice().reverse();
+        if (!alerts.length) {
+          list.innerHTML = '<span style="color:var(--muted)">No alerts recorded</span>';
+          return;
+        }
+        list.innerHTML = alerts.map(a => {
+          const ts = new Date((a.captured_at || a.ts || 0) * 1000).toLocaleTimeString();
+          const col = a.severity === 'crit' || a.severity === 'critical'
+            ? 'var(--danger)' : 'var(--warn)';
+          return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">` +
+            `<span style="color:var(--muted);font-size:10px;">${ts}</span> ` +
+            `<span style="color:${col}">[${(a.severity||'warn').toUpperCase()}]</span> ` +
+            `${_escHtml(a.msg || '')}` +
+            `</div>`;
+        }).join('');
+      } catch (e) {
+        list.innerHTML = '<span style="color:var(--danger)">Error: ' + e.message + '</span>';
+      }
+    }
+
+    async function clearAlertHistory() {
+      try {
+        await fetch(apiBase() + '/api/alerts/history', { method: 'DELETE' });
+        document.getElementById('alert-history-list').innerHTML =
+          '<span style="color:var(--muted)">Cleared</span>';
+        toast('Alert history cleared');
+      } catch (e) { toast('Clear failed: ' + e.message); }
+    }
+
+    // ── Journal log viewer ────────────────────────────────────────────────────
+
+    async function loadJournalLogs() {
+      const svc    = document.getElementById('log-svc-sel')?.value || 'rover2-api';
+      const lines  = document.getElementById('log-lines-sel')?.value || '40';
+      const filter = document.getElementById('log-filter-in')?.value || '';
+      const area   = document.getElementById('log-viewer-area');
+      if (!area) return;
+      area.textContent = 'Loading…';
+      try {
+        const params = new URLSearchParams({ service: svc, lines, filter });
+        const r = await fetch(apiBase() + '/api/diagnostics/journal?' + params);
+        const d = await r.json();
+        const rows = d.lines || [];
+        if (!rows.length) { area.textContent = '(no entries)'; return; }
+        area.innerHTML = rows.map(l => {
+          const ll = l.toLowerCase();
+          const cls = ll.includes(' err') || ll.includes('error') || ll.includes('critical') || ll.includes('fail')
+            ? 'error'
+            : ll.includes('warn') ? 'warn' : '';
+          const safe = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          return cls ? `<span class="log-line ${cls}">${safe}</span>` : safe;
+        }).join('\n');
+      } catch (e) {
+        area.textContent = 'Error: ' + e.message;
+      }
     }
 
     // ── GLOBAL VOICE + TTS ───────────────────────────────────────────────────
