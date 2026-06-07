@@ -1593,6 +1593,93 @@ def create_app(
             stats["vlm_last_describe_wait_s"] = round(vlm_engine._last_describe_wait_s, 1)
         return JSONResponse(stats)
 
+    @app.get("/api/system/resources")
+    async def system_resources() -> JSONResponse:
+        """Live per-process RSS + CPU%, Pi temp, and disk free."""
+        def _collect() -> dict:
+            import os as _os, psutil, shutil, subprocess, re
+            self_pid = _os.getpid()
+
+            def _proc_info(pid: int | None) -> dict:
+                if pid is None:
+                    return {"rss_mb": 0, "cpu_pct": 0.0, "active": False}
+                try:
+                    p = psutil.Process(pid)
+                    p.cpu_percent()  # prime
+                    import time as _t; _t.sleep(0.2)
+                    return {
+                        "rss_mb": round(p.memory_info().rss / (1024 ** 2), 1),
+                        "cpu_pct": round(p.cpu_percent(), 1),
+                        "active": True,
+                        "pid": pid,
+                    }
+                except Exception:
+                    return {"rss_mb": 0, "cpu_pct": 0.0, "active": False}
+
+            def _find_pid(pattern: str) -> int | None:
+                for p in psutil.process_iter(["pid", "cmdline"]):
+                    try:
+                        cmd = " ".join(p.info["cmdline"] or [])
+                        if pattern in cmd:
+                            return p.pid
+                    except Exception:
+                        pass
+                return None
+
+            hailo_pid = _find_pid("hailo-ollama") or _find_pid("hailo_ollama")
+            ollama_pid = _find_pid("ollama serve")
+
+            # Prime all at once, then sleep once
+            primes = []
+            for pid in [self_pid, hailo_pid, ollama_pid]:
+                if pid:
+                    try:
+                        primes.append(psutil.Process(pid))
+                        primes[-1].cpu_percent()
+                    except Exception:
+                        pass
+            import time as _t; _t.sleep(0.3)
+
+            def _read(pid: int | None) -> dict:
+                if pid is None:
+                    return {"rss_mb": 0, "cpu_pct": 0.0, "active": False}
+                try:
+                    p = psutil.Process(pid)
+                    return {
+                        "rss_mb": round(p.memory_info().rss / (1024 ** 2), 1),
+                        "cpu_pct": round(p.cpu_percent(), 1),
+                        "active": True,
+                        "pid": pid,
+                    }
+                except Exception:
+                    return {"rss_mb": 0, "cpu_pct": 0.0, "active": False}
+
+            api_info    = _read(self_pid)
+            hailo_info  = _read(hailo_pid)
+            ollama_info = _read(ollama_pid)
+
+            try:
+                temp_raw = subprocess.check_output(
+                    ["vcgencmd", "measure_temp"], timeout=2
+                ).decode()
+                pi_temp = float(re.search(r"[\d.]+", temp_raw).group())
+            except Exception:
+                pi_temp = None
+
+            disk = shutil.disk_usage("/")
+            return {
+                "rover2_api":   api_info,
+                "hailo_ollama": hailo_info,
+                "ollama":       ollama_info,
+                "pi_temp_c":    pi_temp,
+                "disk_free_gb": round(disk.free / 1e9, 2),
+                "disk_total_gb": round(disk.total / 1e9, 2),
+                "disk_used_pct": round(100 * disk.used / disk.total, 1),
+            }
+
+        data = await asyncio.to_thread(_collect)
+        return JSONResponse(data)
+
     # ── Agent diagnostic tools endpoints ─────────────────────────────────────
 
     _ALLOWED_SERVICES = frozenset({

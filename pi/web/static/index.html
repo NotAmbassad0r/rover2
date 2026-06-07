@@ -697,6 +697,14 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-title">RESOURCES · LIVE</div>
+      <div class="diag-grid" id="resources-grid"></div>
+      <div class="tools-actions" style="margin-top:8px;">
+        <button type="button" id="resources-refresh-btn">REFRESH</button>
+      </div>
+    </div>
+
   </div>
 
   <!-- ════ CHAT TAB ════ -->
@@ -945,7 +953,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1306,7 +1314,7 @@
         _diagAutoTimer = null;
         this.classList.remove('active');
       } else {
-        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); }, 5000);
+        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); }, 5000);
         this.classList.add('active');
         loadFullDiagnostics();
       }
@@ -1673,6 +1681,38 @@
     document.getElementById('voice-status-refresh-btn').onclick = () => loadVoiceStatus();
     loadVoiceStatus().catch(() => {});
     setInterval(loadVoiceStatus, 5000);
+
+    async function loadResourceStats() {
+      try {
+        const r = await fetch(apiBase() + '/api/system/resources');
+        const d = await r.json();
+        const grid = document.getElementById('resources-grid');
+        if (!grid) return;
+        const tempStr = d.pi_temp_c != null ? d.pi_temp_c.toFixed(1) + ' °C' : '—';
+        const diskStr = d.disk_free_gb != null
+          ? d.disk_free_gb + ' GB free / ' + d.disk_total_gb + ' GB (' + d.disk_used_pct + '% used)'
+          : '—';
+        const api = d.rover2_api || {};
+        const hailo = d.hailo_ollama || {};
+        const ollama = d.ollama || {};
+        const rows = [
+          ['PI TEMP',       tempStr],
+          ['DISK',          diskStr],
+          ['rover2-api',    api.active !== false
+            ? api.rss_mb + ' MB · ' + api.cpu_pct + '% CPU'
+            : '—'],
+        ];
+        if (hailo.active) rows.push(['hailo-ollama', hailo.rss_mb + ' MB · ' + hailo.cpu_pct + '% CPU']);
+        if (ollama.active) rows.push(['ollama',       ollama.rss_mb + ' MB · ' + ollama.cpu_pct + '% CPU']);
+        grid.innerHTML = rows.map(([k, v]) =>
+          `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
+        ).join('');
+      } catch (_) {}
+    }
+
+    document.getElementById('resources-refresh-btn').onclick = () => loadResourceStats();
+    loadResourceStats().catch(() => {});
+    setInterval(loadResourceStats, 5000);
 
     // ─────────────────────────────────────────────────────────────────────────
 
