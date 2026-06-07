@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified)
+Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified; web GUI audit — 9 bugs fixed)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -742,7 +742,7 @@ Must be created manually on a fresh Pi setup.
 - Hooks into `_ttsSpeak()` and `_ttsSpeakAsync()` — shows at speak start, hides at onend/onerror
 - Service worker on `rover-face-v27`
 
-**Backlog:** `docs/BACKLOG.md` — confirmed desirable work not yet scheduled (web GUI audit, TTS speed, GenAI session multiplexing)
+**Backlog:** `docs/BACKLOG.md` — confirmed desirable work not yet scheduled (TTS speed, GenAI session multiplexing)
 
 **Auto-handled by watchdog (2026-06-05):** service restarts (hostapd/dnsmasq/ssh/tailscaled), wlan0 reconnect, wlan1 AP stack restore (checks AP mode + 10.0.0.1 IP, restarts networkd→hostapd→dnsmasq), RTL8812AU driver reload (`rtw88_8812au`), Hailo PCIe module load, camera frame stall, MegaPi serial reconnect, robot stuck detection, stale safety block clear, ollama idle stop, CPU sustained high (ollama), thermal follow-disable (85°C) + TTS (90°C), disk low vacuum, disk critical metrics-disable, TLS cert expiry alert + auto-renew, boot-partition rw guard, env/binary file presence warnings. Note: eth0 is built-in GbE with no cable — NO-CARRIER is normal; watchdog no longer acts on eth0.
 
@@ -821,8 +821,15 @@ Removed from ollama: `gemma3:1b`, `qwen2.5:3b`. Retained: `llama3.2:1b`, `llama3
 - ✓ **Verify VLM concurrency (2026-06-07)** — session lock serializes correctly; LLM waits while VLM holds lock. New issue found: VLM second rapid load crashes device (issue #28)
 - ✓ **Test two-round tool-calling (2026-06-07)** — `_call_hailo_with_tools()` confirmed: `llm-tools acquired` → `get_logs {n:10}` parsed → tool executed → round-2 narration → released. ~17.5s warm
 - ✓ **VLM cooldown (issue #28 — 2026-06-07)** — 95s cooldown in `vlm_engine.describe()` via `asyncio.sleep()`. `vlm.cooldown_s: 95.0` in config.yaml. `cooldown_remaining_s` + `last_describe_wait_s` in `/api/vision/describe` response and `/api/agent/stats`. Body tracker unaffected during wait. Verified: no crash on rapid second describe.
+- ✓ **Web GUI audit (2026-06-07)** — 9 bugs fixed in `pi/web/static/index.html`:
+  - Agent stats panel: `diag-label`/`diag-val` CSS classes didn't exist → panel was unstyled text; fixed to `diag-row/label/val`
+  - Agent stats panel: VLM cooldown rows now shown when nonzero (API already had the fields)
+  - Chat tab VLM detail: shows cooldown remaining when active
+  - Detection overlay: label now shows actual `ultrasonic_cm` reading (was always showing safe distance threshold "40 cm")
+  - `cameraStreamUrl()`: was hardcoding `'https://'` ignoring computed `proto` variable — fixed
+  - Global voice button: initial text was `_ SPEAK TO ROVER` placeholder — fixed to 🎤
+  - `wakeCamera()`, `setBleFollow()`, `setFollowMode()`: changed relative `/api/...` URLs to `apiBase() + '/api/...'`
 - **LLM session open latency** — first open ~76s (cold + YOLO contention), warm ~17s. No action needed — acceptable for voice use. Consider `_run_llm_warmup()` only if first-query latency complaints arise.
-- **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
 - MINIMIC1 hardware fix (Ring 2 tape) — restore lavalier mic, fix speaker muting
 - HA voice: room clarification when query is ambiguous; more natural response style
