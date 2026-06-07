@@ -2134,6 +2134,13 @@ def create_app(
             "ble_follow_enabled": body_tracker._ble_follow_enabled,
         })
 
+    @app.get("/api/follow/status")
+    async def follow_status() -> JSONResponse:
+        """Live follow pipeline telemetry for the DIAG tab."""
+        if body_tracker is None:
+            return JSONResponse({"available": False})
+        return JSONResponse(body_tracker.get_state())
+
     @app.get("/api/guard/status")
     async def guard_status() -> JSONResponse:
         if guard_controller is None:

@@ -705,6 +705,23 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-title">FOLLOW PIPELINE</div>
+      <div class="diag-grid" id="follow-pipeline-grid"></div>
+      <canvas id="ble-rssi-canvas" width="280" height="48"
+        style="display:block;margin:8px 0 4px;width:100%;max-width:280px;background:#111;border-radius:4px;"></canvas>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:8px;">BLE RSSI (last 30 readings · dBm)</div>
+      <div class="tools-actions">
+        <button type="button" id="follow-stop-btn">STOP</button>
+        <button type="button" id="follow-detect-btn">DETECT</button>
+        <button type="button" id="follow-camera-btn">FOLLOW</button>
+        <button type="button" id="follow-ble-btn">BLE</button>
+      </div>
+      <div class="tools-actions" style="margin-top:4px;">
+        <button type="button" id="follow-pipeline-refresh-btn">REFRESH</button>
+      </div>
+    </div>
+
   </div>
 
   <!-- ════ CHAT TAB ════ -->
@@ -953,7 +970,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1314,7 +1331,7 @@
         _diagAutoTimer = null;
         this.classList.remove('active');
       } else {
-        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); }, 5000);
+        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); loadResourceStats(); loadFollowPipeline(); }, 5000);
         this.classList.add('active');
         loadFullDiagnostics();
       }
@@ -1713,6 +1730,107 @@
     document.getElementById('resources-refresh-btn').onclick = () => loadResourceStats();
     loadResourceStats().catch(() => {});
     setInterval(loadResourceStats, 5000);
+
+    function _drawRssiSparkline(canvas, history) {
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      if (!history || history.length < 2) {
+        ctx.fillStyle = '#333';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#555';
+        ctx.font = '10px monospace';
+        ctx.fillText('no data', 8, H / 2 + 4);
+        return;
+      }
+      const MIN_DBM = -100, MAX_DBM = -40;
+      const pad = 4;
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, W, H);
+      // reference line at -70 dBm (track threshold approx)
+      const refY = H - pad - (((-70) - MIN_DBM) / (MAX_DBM - MIN_DBM)) * (H - pad * 2);
+      ctx.strokeStyle = '#333';
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(0, refY); ctx.lineTo(W, refY); ctx.stroke();
+      ctx.setLineDash([]);
+      const step = W / (history.length - 1);
+      ctx.strokeStyle = '#0af';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      history.forEach((v, i) => {
+        const x = i * step;
+        const norm = Math.max(0, Math.min(1, (v - MIN_DBM) / (MAX_DBM - MIN_DBM)));
+        const y = H - pad - norm * (H - pad * 2);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      // latest value label
+      const last = history[history.length - 1];
+      ctx.fillStyle = '#0af';
+      ctx.font = '10px monospace';
+      ctx.fillText(last + ' dBm', W - 56, 12);
+    }
+
+    async function loadFollowPipeline() {
+      try {
+        const r = await fetch(apiBase() + '/api/follow/status');
+        const d = await r.json();
+        const grid = document.getElementById('follow-pipeline-grid');
+        if (!grid) return;
+        if (!d.available) {
+          grid.innerHTML = '<div class="diag-row"><span class="val">tracker not available</span></div>';
+          return;
+        }
+        const conf = d.person_conf != null ? (d.person_conf * 100).toFixed(0) + '%' : '—';
+        const confCol = d.person_detected ? 'var(--success)' : d.person_conf > 0 ? 'var(--warn)' : 'var(--muted)';
+        const fps = d.actual_fps > 0
+          ? d.actual_fps.toFixed(2) + ' fps (cfg ' + d.configured_fps + ')'
+          : '— fps (cfg ' + (d.configured_fps || '—') + ')';
+        const latency = d.infer_ms > 0 ? d.infer_ms + ' ms' : '—';
+        const blocked = d.safety_blocked;
+        const dist = d.safety_distance_cm != null ? d.safety_distance_cm + ' cm' : '—';
+        const thresh = d.safety_threshold_cm != null ? ' (safe >' + d.safety_threshold_cm + ')' : '';
+        const safetyStr = blocked
+          ? '⛔ BLOCKED · ' + dist + thresh
+          : '✓ clear · ' + dist;
+        const safetyCol = blocked ? 'var(--error,#f55)' : 'var(--success)';
+        const bleRssi = d.ble && d.ble.rssi != null ? d.ble.rssi + ' dBm' : '—';
+        const bleActive = d.ble_active ? 'ACTIVE' : 'idle';
+        const rows = [
+          ['DETECT CONF',  `<span style="color:${confCol};font-weight:700">${conf}</span>`],
+          ['PERSON',       d.person_tracked ? 'TRACKED' : (d.person_detected ? 'detected' : 'none')],
+          ['MODE',         (d.follow_mode || '—').toUpperCase() + (d.detect_only ? ' · detect-only' : '') + (d.enabled ? ' · follow-on' : '')],
+          ['HAILO FPS',    fps],
+          ['INFER LAT',    latency],
+          ['SAFETY',       `<span style="color:${safetyCol}">${safetyStr}</span>`],
+          ['BLE RSSI',     bleRssi],
+          ['BLE STATE',    d.ble_active ? `<span style="color:var(--accent)">${bleActive}</span>` : bleActive],
+          ['FRAMES',       d.frames_inferred ?? 0],
+        ];
+        grid.innerHTML = rows.map(([k, v]) =>
+          `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
+        ).join('');
+        const canvas = document.getElementById('ble-rssi-canvas');
+        if (canvas) _drawRssiSparkline(canvas, d.ble_rssi_history || []);
+      } catch (_) {}
+    }
+
+    // Follow pipeline override buttons
+    document.getElementById('follow-stop-btn').onclick = () =>
+      fetch(apiBase() + '/api/tracking', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({enabled: false})}).then(() => loadFollowPipeline());
+    document.getElementById('follow-detect-btn').onclick = () =>
+      fetch(apiBase() + '/api/tracking', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({detect_only: true})}).then(() => loadFollowPipeline());
+    document.getElementById('follow-camera-btn').onclick = () =>
+      fetch(apiBase() + '/api/tracking', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({follow_mode: 'camera'})}).then(() => loadFollowPipeline());
+    document.getElementById('follow-ble-btn').onclick = () =>
+      fetch(apiBase() + '/api/tracking', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({follow_mode: 'ble'})}).then(() => loadFollowPipeline());
+    document.getElementById('follow-pipeline-refresh-btn').onclick = () => loadFollowPipeline();
+    loadFollowPipeline().catch(() => {});
+    setInterval(loadFollowPipeline, 5000);
 
     // ─────────────────────────────────────────────────────────────────────────
 

@@ -112,6 +112,7 @@ class BodyTracker:
         self._ble_search_dir: str = "right"
         self._ble_dir_since: float = 0.0
         self._ble_rssi_history: deque[int] = deque(maxlen=_BLE_TREND_WINDOW)
+        self._ble_rssi_ui: deque[int] = deque(maxlen=30)  # larger history for UI sparkline
 
         ble_cfg = (config or {}).get("ble_tracker", {})
         self._ble_rssi_close = int(ble_cfg.get("rssi_close", _BLE_RSSI_CLOSE))
@@ -122,6 +123,11 @@ class BodyTracker:
         # External detection callback (e.g. guard mode) — non-blocking, set to None to deregister
         self._detection_cb: Callable[[float, tuple], None] | None = None
         self._detection_cb_lock = threading.Lock()
+
+        # Inference telemetry for UI
+        self._last_infer_ms: int = 0
+        self._last_frame_ts: float = 0.0
+        self._actual_fps: float = 0.0
 
     def set_detection_callback(
         self, cb: Callable[[float, tuple], None] | None
@@ -217,6 +223,14 @@ class BodyTracker:
             "follow_mode": self._follow_mode,
             "ble_active": self._ble_active,
             "ble_follow_enabled": self._ble_follow_enabled,
+            "frames_inferred": self._frames_inferred,
+            "infer_ms": self._last_infer_ms,
+            "actual_fps": self._actual_fps,
+            "configured_fps": round(1.0 / self._frame_interval_s, 2) if self._frame_interval_s > 0 else 0,
+            "safety_blocked": self._safety.forward_blocked if self._safety else False,
+            "safety_distance_cm": self._safety.distance_cm if self._safety else None,
+            "safety_threshold_cm": self._safety.safe_distance_cm if self._safety else None,
+            "ble_rssi_history": list(self._ble_rssi_ui),
         }
         if self._ble is not None:
             state["ble"] = self._ble.get_state()
@@ -415,6 +429,7 @@ class BodyTracker:
 
         if rssi is not None:
             self._ble_rssi_history.append(rssi)
+            self._ble_rssi_ui.append(rssi)
 
         if rssi is None or rssi < self._ble_rssi_track:
             # Beacon not visible or too weak — rotate to search
@@ -596,7 +611,15 @@ class BodyTracker:
             return
 
         rgb = cv2.resize(frame, (640, 640)).astype(np.uint8)
+        _t_infer = time.monotonic()
         nms_out = self._hailo.infer(rgb)
+        _infer_ms = int((time.monotonic() - _t_infer) * 1000)
+        now_fps = time.monotonic()
+        if self._last_frame_ts > 0.0:
+            dt = now_fps - self._last_frame_ts
+            self._actual_fps = round(0.7 * self._actual_fps + 0.3 * (1.0 / dt if dt > 0 else 0.0), 2)
+        self._last_frame_ts = now_fps
+        self._last_infer_ms = _infer_ms
         if nms_out is None:
             logger.warning("Hailo infer returned None")
             return
