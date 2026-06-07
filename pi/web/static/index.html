@@ -834,6 +834,29 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-title">VOICE COMMAND CONSOLE</div>
+      <p class="muted" style="margin-bottom:8px;">
+        Simulate a voice command — same agentic path as the A32 mic.
+        Shows routing tier, latency, and last tool called.
+      </p>
+      <div id="vc-log" class="chat-log" style="min-height:80px;max-height:200px;"></div>
+      <div class="chat-row" style="margin-top:6px;">
+        <input id="vc-input" type="text" class="chat-input"
+               placeholder="how are you / follow me / what do you see …"
+               onkeydown="if(event.key==='Enter')sendVoiceConsole()" />
+        <button type="button" onclick="sendVoiceConsole()" id="vc-send-btn">SEND</button>
+      </div>
+      <div class="chat-btns" style="margin-top:4px;">
+        <button onclick="vcSend('how are you')">HOW ARE YOU</button>
+        <button onclick="vcSend('follow me')">FOLLOW ME</button>
+        <button onclick="vcSend('what do you see')">WHAT DO YOU SEE</button>
+        <button onclick="vcSend('stop following')">STOP</button>
+        <button id="vc-end-btn" onclick="endVoiceConsoleSession()">END SESSION</button>
+      </div>
+      <div class="diag-grid" id="vc-stats-grid" style="margin-top:8px;"></div>
+    </div>
+
   </div>
 
   <div class="toast" id="toast"></div>
@@ -2985,6 +3008,127 @@
     // TTS is triggered from inside sendAgent after the reply is appended (see below)
 
     // ── END METRICS / VOICE / ALERTS ─────────────────────────────────────────
+
+    // ── VOICE COMMAND CONSOLE ─────────────────────────────────────────────────
+
+    let _vcSessionId = 'vc-' + Math.random().toString(36).slice(2, 9);
+    let _vcHistory = [];
+    let _vcBusy = false;
+
+    const _vcRoutingColors = {
+      'fast-path':    'var(--success)',
+      'hailo-tools':  'var(--accent)',
+      'hailo':        'var(--accent)',
+      'hailo-converse': 'var(--accent)',
+      'cpu-fallback': 'var(--warn)',
+      'cpu':          'var(--warn)',
+      'agent':        'var(--warn)',
+      'error':        'var(--error,#f55)',
+    };
+
+    function _vcAppend(role, text, meta) {
+      const log = document.getElementById('vc-log');
+      if (!log) return;
+      const ts = new Date().toLocaleTimeString();
+      const who = role === 'user' ? 'YOU' : 'ROVER';
+      const routeStr = meta && meta.routed_to
+        ? ` <span style="color:${_vcRoutingColors[meta.routed_to] || 'var(--muted)'}">` +
+          `[${meta.routed_to}]</span>` : '';
+      const latStr = meta && meta.latency_ms != null
+        ? ` <span style="color:var(--muted)">${meta.latency_ms}ms</span>` : '';
+      const div = document.createElement('div');
+      div.className = 'chat-msg chat-' + (role === 'user' ? 'user' : 'rover');
+      div.innerHTML = `<span class="chat-ts">${ts}</span>` +
+        `<span class="chat-who">${who}</span>${routeStr}${latStr} ${text}`;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+      while (log.children.length > 60) log.removeChild(log.firstChild);
+    }
+
+    async function sendVoiceConsole() {
+      if (_vcBusy) { toast('Voice console busy — wait for reply'); return; }
+      const input = document.getElementById('vc-input');
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = '';
+      _vcBusy = true;
+      const btn = document.getElementById('vc-send-btn');
+      if (btn) { btn.textContent = '…'; btn.disabled = true; }
+
+      _vcAppend('user', msg, null);
+      const t0 = Date.now();
+      try {
+        const r = await fetch(apiBase() + '/api/voice/converse', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            message: msg,
+            history: _vcHistory,
+            spoken: false,
+            lang: 'en',
+            session_id: _vcSessionId,
+          }),
+        });
+        const latency_ms = Date.now() - t0;
+        const d = await r.json();
+        const reply = d.reply || '(no reply)';
+        _vcAppend('rover', reply, {routed_to: d.routed_to, latency_ms});
+        _vcHistory.push({role: 'user', content: msg});
+        _vcHistory.push({role: 'assistant', content: reply});
+        if (_vcHistory.length > 20) _vcHistory = _vcHistory.slice(-20);
+        if (d.end_session) {
+          _vcHistory = [];
+          _vcSessionId = 'vc-' + Math.random().toString(36).slice(2, 9);
+        }
+        // Fetch agent stats for tool detail
+        try {
+          const sr = await fetch(apiBase() + '/api/agent/stats');
+          const sd = await sr.json();
+          const grid = document.getElementById('vc-stats-grid');
+          if (grid) {
+            const rows = [
+              ['ROUTE',   d.routed_to || '—'],
+              ['LATENCY', latency_ms + ' ms'],
+            ];
+            if (sd.last_tool) rows.push(['LAST TOOL', sd.last_tool + (sd.last_tool_ts ? ' @ ' + new Date(sd.last_tool_ts * 1000).toLocaleTimeString() : '')]);
+            if (sd.last_query) rows.push(['LAST QUERY', (sd.last_query || '').slice(0, 80)]);
+            if (sd.tool_history && sd.tool_history.length) {
+              const h = sd.tool_history[0];
+              rows.push(['TOOL MS', h.ms + ' ms — ' + h.name]);
+            }
+            grid.innerHTML = rows.map(([k, v]) =>
+              `<div class="diag-row"><span class="label">${k}</span>` +
+              `<span class="val">${String(v).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span></div>`
+            ).join('');
+          }
+        } catch (_) {}
+      } catch (e) {
+        _vcAppend('error', 'Error: ' + e.message, null);
+      } finally {
+        _vcBusy = false;
+        if (btn) { btn.textContent = 'SEND'; btn.disabled = false; }
+      }
+    }
+
+    function vcSend(msg) {
+      document.getElementById('vc-input').value = msg;
+      sendVoiceConsole();
+    }
+
+    async function endVoiceConsoleSession() {
+      try {
+        await fetch(apiBase() + '/api/voice/converse/end', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({session_id: _vcSessionId}),
+        });
+      } catch (_) {}
+      _vcHistory = [];
+      _vcSessionId = 'vc-' + Math.random().toString(36).slice(2, 9);
+      const grid = document.getElementById('vc-stats-grid');
+      if (grid) grid.innerHTML = '';
+      toast('Voice console session ended');
+    }
 
     // ── END CHAT TAB ──────────────────────────────────────────────────────────
 
