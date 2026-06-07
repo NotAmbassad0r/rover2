@@ -97,6 +97,7 @@ vlm:
   hailo_group_id: rover2          # must match body_tracker — enables round-robin sharing
   camera_url: http://127.0.0.1:8081/snapshot
   max_tokens: 128                 # keep responses short; longer = more Hailo time
+  cooldown_s: 95.0                # min seconds between HEF reloads — prevents HAILO_SHUTDOWN_EVENT_SIGNALED(57)
 
 camera_idle:
   enabled: true

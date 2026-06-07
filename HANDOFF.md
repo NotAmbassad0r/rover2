@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (issue #26 resolved + full AI stack verification; VLM rapid-reload crash documented as issue #28)
+Last updated: 2026-06-07 (issue #26 resolved; issue #28 resolved — VLM 95s cooldown; full AI stack verified)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -525,6 +525,9 @@ body_tracker:
   target_bbox_width: 0.35
   ble_follow_enabled: false    # BLE fallback off by default — enable via UI BLE button
 
+vlm:
+  cooldown_s: 95.0             # min seconds between HEF reloads — issue #28 (HAILO_SHUTDOWN_EVENT_SIGNALED)
+
 ble_tracker:
   enabled: true        # set false for office demo (saves CPU + heat — no BLE needed)
                        # set true for home use (guard mode arm/disarm via beacon)
@@ -639,11 +642,18 @@ Must be created manually on a fresh Pi setup.
    **Watchdog:** `_check_wifi_driver()` monitors `rtw88_8812au` in `lsmod`, attempts `modprobe rtw88_8812au` if missing. `_check_network()` corrected: eth0 check removed (eth0 is built-in GbE with no cable — NO-CARRIER is normal); wlan1 check now verifies both `type AP` in `iw dev` AND `10.0.0.1` in `ip addr`, restarts stack in correct order if either is missing.
    **Recovery:** `sudo systemctl restart systemd-networkd && sleep 2 && sudo systemctl restart hostapd && sleep 2 && sudo systemctl restart dnsmasq`
 
-28. **VLM rapid sequential load crash (2026-06-07)** — loading `Qwen2-VL-2B-Instruct.hef` a second time within ~90 seconds of the first causes `HAILO_SHUTDOWN_EVENT_SIGNALED(57)` at chunk 14/40, which crashes the entire Hailo device state (LLM connection refused, body_tracker VDMA closed). Body_tracker then spins on `HAILO_COMMUNICATION_CLOSED(62)` errors until service restart.
-   - **Root cause:** unknown — likely Hailo device memory or power transient during rapid large HEF re-load while YOLO VDMA is also active. LLM (smaller HEF) does not exhibit this.
-   - **Mitigation needed:** add 90s cooldown between `vlm_engine.describe()` calls (track last_describe_ts; skip and return None if < 90s elapsed). Not yet implemented.
-   - **Recovery:** `sudo systemctl restart rover2-api` — Hailo re-loads cleanly; body_tracker resumes in ~30s (warmup)
-   - **Does not affect issue #26:** session lock correctly serialized the attempts; crash happened inside the VLM HEF load, not from simultaneous session opens
+28. ~~**VLM rapid sequential load crash**~~ — **RESOLVED 2026-06-07** by 95s cooldown in `vlm_engine.describe()`.
+
+   **Root cause:** HailoRT 5.2.0 cannot re-load Qwen2-VL-2B HEF within ~90s of previous release — causes `HAILO_SHUTDOWN_EVENT_SIGNALED(57)` at chunk 14/40, crashing the entire Hailo device state (body_tracker VDMA dies, LLM refuses connections).
+
+   **Fix:** `pi/vlm_engine.py` enforces a 95s minimum gap (`vlm.cooldown_s` config key) between `describe()` calls via `asyncio.sleep()` in `_wait_for_cooldown()`. Timestamp recorded in `_open_and_generate()` `finally` block (covers both success and crash paths). Zero CPU overhead — asyncio.sleep blocks no threads.
+
+   **Files changed:**
+   - `pi/vlm_engine.py` — `_cooldown_s` from config; `_last_session_release_ts` in `finally`; `cooldown_remaining()` helper; `_wait_for_cooldown()` async; `get_status()` adds `cooldown_remaining_s` + `last_describe_wait_s`
+   - `pi/config.yaml` — `vlm.cooldown_s: 95.0`
+   - `pi/server.py` — `/api/agent/stats` includes `vlm_cooldown_remaining_s` + `vlm_last_describe_wait_s`
+
+   **Verified 2026-06-07:** second describe() call logged `vlm: cooldown active — waiting 76.0s before re-loading`; body_tracker ran continuously during wait; second VLM session opened and generated 616 chars cleanly; no device crash; `last_describe_wait_s: 76.0` in response; LLM path unaffected during wait.
 
 26. ~~**hailo-ollama and VLM are mutually exclusive on HailoRT 5.2.0**~~ — **RESOLVED 2026-06-07** via software session multiplexing.
 
@@ -810,7 +820,7 @@ Removed from ollama: `gemma3:1b`, `qwen2.5:3b`. Retained: `llama3.2:1b`, `llama3
 - ✓ **Issue #26 resolved (2026-06-07)** — direct Python LLM via `hailo_platform.genai.LLM`; `hailo_session.py` asyncio lock; VLM per-request; hailo-ollama stays disabled; verified working
 - ✓ **Verify VLM concurrency (2026-06-07)** — session lock serializes correctly; LLM waits while VLM holds lock. New issue found: VLM second rapid load crashes device (issue #28)
 - ✓ **Test two-round tool-calling (2026-06-07)** — `_call_hailo_with_tools()` confirmed: `llm-tools acquired` → `get_logs {n:10}` parsed → tool executed → round-2 narration → released. ~17.5s warm
-- **VLM cooldown (issue #28)** — add 90s minimum between `vlm_engine.describe()` calls to prevent rapid sequential HEF reloads from crashing Hailo device. Track `_last_describe_ts` in VLMEngine; return `None` if cooldown not elapsed.
+- ✓ **VLM cooldown (issue #28 — 2026-06-07)** — 95s cooldown in `vlm_engine.describe()` via `asyncio.sleep()`. `vlm.cooldown_s: 95.0` in config.yaml. `cooldown_remaining_s` + `last_describe_wait_s` in `/api/vision/describe` response and `/api/agent/stats`. Body tracker unaffected during wait. Verified: no crash on rapid second describe.
 - **LLM session open latency** — first open ~76s (cold + YOLO contention), warm ~17s. No action needed — acceptable for voice use. Consider `_run_llm_warmup()` only if first-query latency complaints arise.
 - **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)

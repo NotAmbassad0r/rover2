@@ -1554,7 +1554,11 @@ def create_app(
     async def agent_stats() -> JSONResponse:
         if rover_agent is None:
             return JSONResponse({"detail": "agent not configured"}, status_code=503)
-        return JSONResponse(rover_agent.get_agent_stats())
+        stats = rover_agent.get_agent_stats()
+        if vlm_engine is not None:
+            stats["vlm_cooldown_remaining_s"] = round(vlm_engine.cooldown_remaining(), 1)
+            stats["vlm_last_describe_wait_s"] = round(vlm_engine._last_describe_wait_s, 1)
+        return JSONResponse(stats)
 
     # ── Agent diagnostic tools endpoints ─────────────────────────────────────
 
