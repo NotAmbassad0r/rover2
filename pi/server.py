@@ -1434,6 +1434,7 @@ def create_app(
                 status_code=504,
                 detail="Agent timed out (240s). First Ollama reply can take 1–2 min.",
             ) from None
+        rover_agent._agent_stats["last_reply"] = (turn.reply or "")[:160]
         return JSONResponse({
             "reply":           turn.reply,
             "tool_log":        turn.tool_log,
@@ -1506,6 +1507,7 @@ def create_app(
 
         reply     = reply_tuple[0] if isinstance(reply_tuple, tuple) else reply_tuple
         routed_to = reply_tuple[1] if isinstance(reply_tuple, tuple) else "agent"
+        rover_agent._agent_stats["last_reply"] = (reply or "")[:160]
 
         # Detect social closing in user message — signal A32 to end session after TTS.
         end_session = bool(_CLOSING_PATTERNS.search(message))

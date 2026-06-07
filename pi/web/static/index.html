@@ -1603,6 +1603,7 @@
           ? (d.hailo_tool_success_rate * 100).toFixed(1) + '%' : '—';
         const rows = [
           ['BACKEND',    d.last_backend ?? '—'],
+          ['HAILO LOCK', d.hailo_session_holder ?? 'free'],
           ['LAST TOOL',  d.last_tool    ?? '—'],
           ['LAST TS',    d.last_tool_ts ?? '—'],
           ['SUCCESS',    d.hailo_tool_success_count ?? 0],
@@ -1614,9 +1615,21 @@
           rows.push(['VLM COOLDOWN', d.vlm_cooldown_remaining_s.toFixed(1) + 's']);
         if (d.vlm_last_describe_wait_s > 0)
           rows.push(['VLM LAST WAIT', d.vlm_last_describe_wait_s.toFixed(1) + 's']);
+        if (d.last_query)
+          rows.push(['LAST QUERY', (d.last_query || '').slice(0, 60) + (d.last_query.length > 60 ? '…' : '')]);
+        if (d.last_reply)
+          rows.push(['LAST REPLY', (d.last_reply || '').slice(0, 80) + (d.last_reply.length > 80 ? '…' : '')]);
         grid.innerHTML = rows.map(([k, v]) =>
           `<div class="diag-row"><span class="label">${k}</span><span class="val">${v}</span></div>`
         ).join('');
+        // tool history table
+        const hist = d.tool_history || [];
+        if (hist.length > 0) {
+          grid.innerHTML += '<div class="diag-row" style="margin-top:6px;font-weight:bold;color:#aaa;font-size:10px;">TOOL HISTORY</div>';
+          hist.slice().reverse().forEach(h => {
+            grid.innerHTML += `<div class="diag-row"><span class="label">${h.ts}</span><span class="val">${h.name} ${h.ms}ms</span></div>`;
+          });
+        }
       } catch (e) { /* silently ignore if agent not configured */ }
     }
 

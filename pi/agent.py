@@ -1198,6 +1198,9 @@ class RoverAgent:
             "last_tool_ts": None,
             "hailo_tool_success": 0,
             "hailo_tool_fallback": 0,
+            "last_query": "",
+            "last_reply": "",
+            "tool_history": [],   # list of last 5 {name, ms, ts}
         }
         # Home Assistant client — enabled only when HA_TOKEN + HA_URL are in env
         ha_token = os.environ.get("HA_TOKEN", "")
@@ -1392,6 +1395,7 @@ class RoverAgent:
         Returns (reply, "agent").  history is capped to last 12 messages (6 pairs).
         """
         logger.info("Agent: run_spoken_turn called, user_text=%r, lang=%s", user_text[:50], lang)
+        self._agent_stats["last_query"] = user_text[:120]
         diag_context = await self._fetch_spoken_context()
         messages = list((history or [])[-12:])
         user_content = user_text
@@ -1399,6 +1403,7 @@ class RoverAgent:
             user_content = f"[Live system state: {diag_context}] User said: {user_text}"
         messages.append({"role": "user", "content": user_content})
         turn = await self._run_spoken_agent(messages, lang)
+        self._agent_stats["last_reply"] = (turn.reply or "")[:160]
         return turn.reply, "agent"
 
     async def _fetch_spoken_context(self) -> str:
@@ -1789,6 +1794,7 @@ class RoverAgent:
     async def run_turn(self, messages: list[dict]) -> AgentTurn:
         # Fast path: pattern-matched queries answer directly without Ollama.
         last_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        self._agent_stats["last_query"] = last_msg[:120]
         fast = await self._try_fast_query(last_msg)
         if fast is not None:
             self._agent_stats["last_backend"] = "fast-path"
@@ -1898,8 +1904,13 @@ class RoverAgent:
             "available": self._available,
         }
 
+    def _push_tool_history(self, name: str, ms: int) -> None:
+        entry = {"name": name, "ms": ms, "ts": time.strftime("%H:%M:%S")}
+        self._agent_stats["tool_history"] = (self._agent_stats["tool_history"] + [entry])[-5:]
+
     def get_agent_stats(self) -> dict[str, Any]:
         """In-memory agent routing stats for /api/agent/stats."""
+        import hailo_session as _hs
         success  = self._agent_stats["hailo_tool_success"]
         fallback = self._agent_stats["hailo_tool_fallback"]
         total    = success + fallback
@@ -1911,6 +1922,10 @@ class RoverAgent:
             "hailo_tool_success_count": success,
             "hailo_tool_fallback_count": fallback,
             "hailo_tool_calling_enabled": self._hailo_tool_calling,
+            "last_query":               self._agent_stats["last_query"],
+            "last_reply":               self._agent_stats["last_reply"],
+            "tool_history":             list(self._agent_stats["tool_history"]),
+            "hailo_session_holder":     _hs.session_holder(),
         }
 
     # ── Fast-path query handler ─────────────────────────────────────────────
@@ -2400,6 +2415,7 @@ class RoverAgent:
                 result = await self._run_tool(tool_name, tool_args)
                 ms = int((time.monotonic() - t0) * 1000)
                 tool_log = [{"name": tool_name, "args": tool_args, "result": result, "duration_ms": ms}]
+                self._push_tool_history(tool_name, ms)
                 logger.info("Agent: hailo_with_tools tool %s → %d ms", tool_name, ms)
 
                 # ── Round 2: narrate tool result ───────────────────────────

@@ -50,3 +50,8 @@ def genai_session(holder: str) -> _GenAISession:
     return _GenAISession(holder)
 
 
+def session_holder() -> str | None:
+    """Return the current GenAI session holder, or None if the lock is free."""
+    return _current_holder
+
+
