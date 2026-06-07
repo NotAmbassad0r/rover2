@@ -85,6 +85,7 @@ agent:
   ollama_timeout_s: 180
   warmup_on_start: true                      # ping hailo-ollama at startup
   fallback_to_cpu: true                      # fall back to localhost:11434 if hailo-ollama unavailable
+  hailo_tool_calling: true                   # structured JSON tool-calling via hailo-ollama; set false to fully disable
 
 metrics:
   interval_s: 5

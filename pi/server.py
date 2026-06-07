@@ -1550,6 +1550,12 @@ def create_app(
         avail = await rover_agent.check_available()
         return JSONResponse({**rover_agent.get_status(), "available": avail})
 
+    @app.get("/api/agent/stats")
+    async def agent_stats() -> JSONResponse:
+        if rover_agent is None:
+            return JSONResponse({"detail": "agent not configured"}, status_code=503)
+        return JSONResponse(rover_agent.get_agent_stats())
+
     # ── Agent diagnostic tools endpoints ─────────────────────────────────────
 
     _ALLOWED_SERVICES = frozenset({

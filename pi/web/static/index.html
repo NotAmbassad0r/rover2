@@ -681,6 +681,14 @@
       <pre class="log-area" id="watchdog-log" style="display:none;margin-top:8px;"></pre>
     </div>
 
+    <div class="panel">
+      <div class="panel-title">AGENT BACKEND</div>
+      <div class="diag-grid" id="agent-stats-grid"></div>
+      <div class="tools-actions" style="margin-top:8px;">
+        <button type="button" id="agent-stats-refresh-btn">REFRESH</button>
+      </div>
+    </div>
+
   </div>
 
   <!-- ════ CHAT TAB ════ -->
@@ -929,7 +937,7 @@
         loadConfig();
         loadTuningForm();
       }
-      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); }
+      if (name === 'diag') { loadFullDiagnostics(); loadServicesHealth(); loadFaultHistory(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); }
       if (name === 'chat') loadChatStatus();
       _activeTab = name;
     }
@@ -1290,7 +1298,7 @@
         _diagAutoTimer = null;
         this.classList.remove('active');
       } else {
-        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); }, 5000);
+        _diagAutoTimer = setInterval(() => { loadFullDiagnostics(); loadGuardStatus(); loadWatchdogStatus(); loadAgentStats(); }, 5000);
         this.classList.add('active');
         loadFullDiagnostics();
       }
@@ -1576,6 +1584,29 @@
     };
 
     loadWatchdogStatus().catch(() => {});
+
+    async function loadAgentStats() {
+      try {
+        const r = await fetch(apiBase() + '/api/agent/stats');
+        const d = await r.json();
+        const grid = document.getElementById('agent-stats-grid');
+        if (!grid) return;
+        const sr = d.hailo_tool_success_rate != null
+          ? (d.hailo_tool_success_rate * 100).toFixed(1) + '%' : '—';
+        grid.innerHTML = [
+          ['BACKEND',    d.last_backend ?? '—'],
+          ['LAST TOOL',  d.last_tool    ?? '—'],
+          ['LAST TS',    d.last_tool_ts ?? '—'],
+          ['SUCCESS',    d.hailo_tool_success_count ?? 0],
+          ['FALLBACK',   d.hailo_tool_fallback_count ?? 0],
+          ['SUCCESS %',  sr],
+          ['TOOL-CALL',  d.hailo_tool_calling_enabled ? 'enabled' : 'disabled'],
+        ].map(([k, v]) => `<span class="diag-label">${k}</span><span class="diag-val">${v}</span>`).join('');
+      } catch (e) { /* silently ignore if agent not configured */ }
+    }
+
+    document.getElementById('agent-stats-refresh-btn').onclick = () => loadAgentStats();
+    loadAgentStats().catch(() => {});
 
     // ─────────────────────────────────────────────────────────────────────────
 

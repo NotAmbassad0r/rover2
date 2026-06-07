@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-06 (CPU fallback LLM benchmark; llama3.2:1b vs gemma3:1b / qwen2.5:3b; decision: keep llama3.2:1b; root cause: 38-tool context too large for Pi 5)
+Last updated: 2026-06-07 (structured output tool-calling on hailo-ollama — `_call_hailo_with_tools()` method, `_CPU_TOOLS` context reduction, `GET /api/agent/stats`, AGENT BACKEND panel in DIAG)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -254,6 +254,8 @@ ROVER Face PWA (face/index.html) — Samsung Galaxy A32
 - **Web METRICS tab** — Chart.js graphs (CPU%, Temp, RAM%)
 - **AI Agent** — 35 tools (31 read-only + 4 dangerous); primary backend: hailo-ollama `qwen2.5-instruct:1.5b` on AI HAT+; CPU fallback: `llama3.2:1b`; 10 web-chat fast-path patterns; voice uses 12 spoken fast-path patterns
 - **Agentic voice assistant** — `run_spoken_turn()` routes voice through tool-use loop; 12 spoken fast-path patterns; instant canned responses for actions; hailo for data queries; `POST /api/arm/wave` endpoint
+- **Structured output tool-calling on hailo-ollama (2026-06-07)** — `_call_hailo_with_tools()` does 2-round hailo `/api/chat`: (1) JSON tool detection, (2) result narration. Used by both web chat `run_turn()` and spoken agent `_run_spoken_agent()`. Returns `None` to fall back to CPU. Dangerous tools return `action_proposal` without execution. Config flag: `agent.hailo_tool_calling: true/false`. When hailo-ollama disabled (issue #26), path returns `None` immediately and falls back to CPU. Stats: `GET /api/agent/stats` — last_backend, last_tool, success/fallback counts. DIAG tab has AGENT BACKEND panel.
+- **CPU fallback context reduction (2026-06-07)** — `_CPU_TOOLS`: 14-tool subset replacing 38-tool context; warm latency ~20–25s (was ~120–150s). `_SPOKEN_TOOLS`/`_TOOL_NAMES`/`_SPOKEN_TOOL_NAMES` dead code removed.
 - **VLM scene description** — Hailo Qwen2-VL-2B-Instruct, confirmed working on HailoRT 5.2.0; background preload at t+40s, ready ~80s after startup; `/api/vision/describe` returns real scene descriptions
 - **Wake word detection** — faster-whisper tiny, `vad_filter=False` on both wake and conversation paths (A32 RMS VAD is the sole gate). Wake word "rover" matched with German-accent fuzzy variants: rower, rofer, roffer, rofar, over, rove, robo, robot, mover, dover, lover. `beam_size=3`, `language="en"` forced on wake path
 - **Wake chime** — two-tone ascending chime (880 Hz → 1320 Hz, 70 ms apart, 80 ms each, 5 ms attack / 30 ms release) plays on A32 via Web Audio API on wake confirmation, before conversation starts
@@ -484,6 +486,9 @@ New REST endpoints (2026-06-05):
 - `GET /api/watchdog/status` — detailed watchdog state (last_cycle, last_action, last_action_ts, persistent_alerts, actions_used)
 - `GET /api/network/status` — AP state (wlan0_connected, wlan1_ap_active, wlan1_channel, rtw88_8812au_loaded)
 - `POST /api/watchdog/test-alert` — inject a test alert into the next telemetry push (dev/debug only)
+
+New REST endpoints (2026-06-07):
+- `GET /api/agent/stats` — agent backend stats: last_backend, last_tool, last_tool_ts, hailo_tool_success_count, hailo_tool_fallback_count, hailo_tool_success_rate, hailo_tool_calling_enabled
 
 Tracking API: `POST /api/tracking`
 - `{"enabled": true}` — enable FOLLOW
@@ -767,8 +772,8 @@ Removed from ollama: `gemma3:1b`, `qwen2.5:3b`. Retained: `llama3.2:1b`, `llama3
 ---
 
 **Next session priorities:**
-- **Reduce `_call_model_cpu` tool context** (pi/agent.py) from 38 to ~10–15 essential tools: fixes production CPU fallback latency (~120s → ~20–25s); also remove `_SPOKEN_TOOLS` dead code (line 484, never referenced)
-- **Implement structured output tool-calling on hailo-ollama** — eliminates CPU fallback for most tool calls; keeps everything on Hailo at 6.3 TPS instead of falling back to CPU at 20–30s; CPU fallback benchmark complete, baseline established (keep llama3.2:1b); see BACKLOG.md for full implementation plan
+- ✓ **Reduce `_call_model_cpu` tool context** (pi/agent.py) — done 2026-06-07; `_CPU_TOOLS` = 14 tools, warm ~20–25s; dead code removed
+- ✓ **Implement structured output tool-calling on hailo-ollama** — done 2026-06-07; `_call_hailo_with_tools()`, config flag, `/api/agent/stats`, DIAG panel; falls back to CPU when hailo-ollama disabled (issue #26)
 - **Deploy and verify new UI/face changes on Pi** (`./deploy_pi.sh` → verify WATCHDOG/AP rows, face info page)
 - **Investigate GenAI session multiplexing to re-enable hailo-ollama alongside VLM (issue #26)**
 - T1.4–T1.7 follow tests (advance, hold, obstacle, BLE fallback)
