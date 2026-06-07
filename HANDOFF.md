@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-07 (whisper lazy-load + auto-unload — 5 min inactivity; watchdog thresholds whisper-aware; web UI gaps #1–#4 implemented; RESOURCES·LIVE + FOLLOW PIPELINE + VOICE PIPELINE + AGENT BACKEND panels added to DIAG tab)
+Last updated: 2026-06-07 (rover-ble.service disabled — v1 BLE scanner, unused by ROVER2, 0.7% CPU saved; rover-camera.service confirmed active ROVER2 infrastructure — not disabled; Home Assistant DIAG panel added (gap #5); whisper lazy-load + auto-unload)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -611,6 +611,11 @@ Must be created manually on a fresh Pi setup.
    - **Idle CPU (tracking OFF)**: ~0–2% ✓
    - **Detect-only CPU (1fps, TurboJPEG 320×240)**: ~16–22% ✓ (measured 2026-06-05 on Pi 5 @ 1800 MHz)
    - Note: `scaling_factor=(1, 2)` assumes 640×480 camera source; if camera resolution ever changes, verify the scaling produces a sensible decoded size.
+
+29. **ROVER v1 services on Pi (2026-06-07)**
+   - `rover-camera.service` (`/opt/rover/hardware/camera.py`) — **active ROVER2 infrastructure**. Serves MJPEG on port 8081; body_tracker reads `http://127.0.0.1:8081/stream`. Do not disable. To replace: write rover2-native camera server (`pi/camera_server.py`) + `systemd/rover2-camera.service`, then mask the v1 service.
+   - `rover-ble.service` (`/opt/rover/hardware/ble_scanner.py`) — **disabled + masked 2026-06-07**. Was 0.7% idle CPU. ROVER2 uses its own in-process bleak scanner (`ble_tracker.py`); v1 scanner was unused.
+   - `rover-api.service` — unit file exists, service not running. Leave as-is.
 
 1. **USB cable 15W ceiling** — Viking bank + standard USB-C cable = 5V/3A = 15W. Pi+Hailo needs ~18–20W. Cutoff after ~46s inference. **Fix: 5A/100W e-marked cable ordered.** Until then, use mains.
 2. **cmdline.txt corruption on hard power cut** — FAT32 boot partition, no journaling. Fixed by mounting boot partition read-only. If it happens again, connect SSD to laptop and restore cmdline.txt manually (PARTUUID=a6f9ddfb-02).

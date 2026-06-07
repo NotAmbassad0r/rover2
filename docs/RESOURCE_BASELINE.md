@@ -25,13 +25,16 @@ Rover2-api running, no tracking, no inference, no voice.
 
 ### CPU
 
-| Sample | time | rover2-api | rover-camera† | ble-scanner† | NetworkMgr | tailscaled | bluetoothd |
+| Sample | time | rover2-api | rover-camera† | ble-scanner†† | NetworkMgr | tailscaled | bluetoothd |
 |--------|------|-----------|--------------|--------------|------------|-----------|-----------|
 | 1 | 19:14:35 | 1.9% | 8.6% | 0.7% | 0.7% | 0.1% | 0.5% |
 | 2 | 19:14:45 | 1.9% | 8.6% | 0.7% | 0.7% | 0.1% | 0.5% |
 | 3 | 19:14:55 | 1.8% | 8.6% | 0.7% | 0.7% | 0.1% | 0.5% |
 
-† `/opt/rover/` (old rover project) still running — 8.6% CPU constant, not rover2.
+† `rover-camera.service` (`/opt/rover/hardware/camera.py`) — active ROVER2 infrastructure: body_tracker
+  reads MJPEG from `http://127.0.0.1:8081/stream`. **Not disabled** — required dependency.
+†† `rover-ble.service` (`/opt/rover/hardware/ble_scanner.py`) — **disabled 2026-06-07**. Unused by ROVER2
+   (ROVER2 has its own in-process bleak BLE scanner). Updated idle baseline: ble-scanner 0% (was 0.7%).
 
 ### CPU Governor / Frequency
 
@@ -356,7 +359,7 @@ VDD_CORE lower than Step 3 (1.154 W vs 1.799 W) — measured between Hailo burst
 2. **Hailo loads +49 MB** (94.9 → 145 MB) on first detect-only — stays resident thereafter
 3. **whisper loads +257 MB** (145 → 403 MB) — exceeds watchdog WARN (280 MB); **resolved 2026-06-07**: auto-unloads after 5 min; watchdog thresholds are now whisper-aware (+280 MB when loaded)
 4. **LLM runner: 1.5 GB RSS** — fills most of available RAM; cannot run concurrently with whisper
-5. **rover-camera (`/opt/rover/`)** runs constantly at 8.6% CPU — old project, not rover2; should be investigated/stopped if not needed
+5. **rover-camera (`/opt/rover/`)** runs at 8.6% CPU — **active ROVER2 dependency** (body_tracker reads `http://127.0.0.1:8081/stream`). Not disabled. rover-ble.service (`/opt/rover/`) **disabled 2026-06-07** — was 0.7% CPU, unused by ROVER2. Updated total idle: ~10.6% → ~9.9%.
 6. **Throttle history**: past undervolt/throttle events (0x50000). Currently clean. Likely from high-load sessions on USB-C 3A cable.
 7. **Full follow mode**: requires active WebSocket client; heartbeat guard prevents autonomous unsupervised driving ✓
 8. **Temperature**: all scenarios ≤ 55.4 °C; no active throttling during sustained detect session
