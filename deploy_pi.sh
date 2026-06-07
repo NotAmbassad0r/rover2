@@ -198,7 +198,7 @@ fi
 
 echo ""
 echo "==> Installing systemd units (if present)..."
-for unit in rover2-api.service rover2-powerbank-keepalive.service rover2-powerbank-keepalive.timer rover2-virtual-usb-dongle.service rover2-restore-wifi.service; do
+for unit in rover2-api.service rover2-powerbank-keepalive.service rover2-powerbank-keepalive.timer rover2-virtual-usb-dongle.service rover2-restore-wifi.service rover2-camera.service; do
   if [ -f "$ROOT/systemd/$unit" ]; then
     scp "$ROOT/systemd/$unit" "$PI_HOST:/tmp/$unit"
     ssh "$PI_HOST" "sudo cp /tmp/$unit /etc/systemd/system/$unit"
@@ -235,6 +235,20 @@ if ssh "$PI_HOST" "systemctl is-enabled rover2-api.service 2>/dev/null"; then
   ssh "$PI_HOST" "systemctl status rover2-api.service --no-pager -n 8"
 else
   echo "    rover2-api.service not installed yet — see systemd/rover2-api.service"
+fi
+
+echo ""
+echo "==> Starting rover2-camera.service (replaces v1 rover-camera)..."
+if [ -f "$ROOT/systemd/rover2-camera.service" ]; then
+  ssh "$PI_HOST" "sudo systemctl enable rover2-camera.service 2>/dev/null || true"
+  # stop and mask the v1 camera service (safe — rover2-camera takes over port 8081)
+  ssh "$PI_HOST" "sudo systemctl stop rover-camera.service 2>/dev/null || true"
+  ssh "$PI_HOST" "sudo systemctl disable rover-camera.service 2>/dev/null || true"
+  ssh "$PI_HOST" "sudo ln -sf /dev/null /etc/systemd/system/rover-camera.service 2>/dev/null || true"
+  ssh "$PI_HOST" "sudo systemctl daemon-reload 2>/dev/null || true"
+  ssh "$PI_HOST" "sudo systemctl restart rover2-camera.service"
+  sleep 2
+  ssh "$PI_HOST" "systemctl is-active rover2-camera.service && echo '    rover2-camera: OK' || echo '    rover2-camera: NOT RUNNING'"
 fi
 
 echo ""

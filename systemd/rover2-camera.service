@@ -1,0 +1,19 @@
+[Unit]
+Description=ROVER2 Camera Server
+Documentation=https://github.com/NotAmbassad0r/rover2
+After=network.target
+
+[Service]
+Type=simple
+User=ambassad0r
+WorkingDirectory=/opt/rover2
+EnvironmentFile=-/etc/rover.env
+ExecStart=/usr/bin/python3 /opt/rover2/camera_server.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rover2-camera
+
+[Install]
+WantedBy=multi-user.target

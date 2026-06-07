@@ -518,18 +518,18 @@ class Watchdog:
             self._log("WARNING", f"temp_warn_{temp:.1f}C", "none", "monitoring")
 
     async def _check_existing_camera(self) -> None:
-        cam_ok = await self._is_service_active("rover-camera")
+        cam_ok = await self._is_service_active("rover2-camera")
         if not cam_ok:
             self._issue_detected = True
             if self._can_act():
-                ok = await self._run_fix(["sudo", "systemctl", "restart", "rover-camera"])
+                ok = await self._run_fix(["sudo", "systemctl", "restart", "rover2-camera"])
                 result = "restart_failed"
                 if ok:
                     await asyncio.sleep(5.0)
                     result = "stream_ok" if await self._probe_camera() else "stream_not_responding"
                 self._record_action()
-                self._last_action_desc = "rover-camera down → restart"
-                self._log("ERROR", "rover_camera_down", "restart_rover_camera", result)
+                self._last_action_desc = "rover2-camera down → restart"
+                self._log("ERROR", "rover_camera_down", "restart_rover2_camera", result)
 
     async def _check_existing_ollama_runners(self) -> None:
         runners = await self._get_ollama_runner_count()
@@ -794,7 +794,7 @@ class Watchdog:
                 self._frames_stall_since = None
                 self._clear_alert("camera_frames_stall")
                 return
-            cam_active = await self._is_service_active("rover-camera")
+            cam_active = await self._is_service_active("rover2-camera")
             if not cam_active:
                 return  # handled by _check_existing_camera
             current = bt.frames_inferred
@@ -807,12 +807,12 @@ class Watchdog:
                     if self._can_act_for(key):
                         self._record_attempt(key)
                         ok = await self._run_fix(["sudo", "systemctl",
-                                                   "restart", "rover-camera"])
+                                                   "restart", "rover2-camera"])
                         self._log("WARNING", "camera_frames_stalled",
-                                  "restart_rover_camera", "ok" if ok else "failed")
+                                  "restart_rover2_camera", "ok" if ok else "failed")
                         self._emit_alert(key, "warning",
-                                         "CAMERA FRAMES STALLED — rover-camera restarted",
-                                         action_taken="restart rover-camera")
+                                         "CAMERA FRAMES STALLED — rover2-camera restarted",
+                                         action_taken="restart rover2-camera")
                         if ok:
                             self._frames_stall_since = None
                             self._clear_alert(key)
