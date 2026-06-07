@@ -185,28 +185,202 @@ Priority: high (standing goal per HANDOFF.md)
 
 ## Documentation
 
-### Presentation booklet for IT middle management
+### Präsentation — ROVER2 für Papa (Deutsch, ~78 Jahre, Hardware-technisch)
 
-Create a professional presentation booklet (PDF or slides) suitable for IT middle
-management at a large enterprise IT company. Audience has technical awareness but
-is not embedded in the project.
+A polished PDF in the style of a quality German engineering magazine
+(think Der Spiegel Wissen or a Spektrum der Wissenschaft article).
+Informed, respectful, explains new concepts once with a good analogy
+then moves on. Large photos, purposeful layout, meaningful numbers.
 
-Content to cover:
-- What ROVER2 is — overview and purpose
-- What it does — capabilities (follow, voice, VLM, guard mode, HA integration)
-- Key differentiator: fully local, no cloud, no data egress
-- Architecture overview — Pi 5, Hailo AI HAT, on-device LLM/VLM, voice pipeline
-- How it works — simplified flow diagrams (voice pipeline, follow pipeline, agent)
-- Technology stack — hardware and software components
-- Demo scenarios — office demo, home use, guard mode
-- Roadmap / what comes next
-- Any other angle that would be interesting to IT management (security, privacy,
-  edge AI trend, potential enterprise applications)
+**Audience:** 78-year-old German-speaking father. Hardware-technical
+(understands electronics, circuits, chips, motors, sensors, engineering
+effort). Not software-technical. From a generation before the internet.
+Son will fill gaps in person — PDF just needs to tell the story clearly
+and make him proud.
 
-Format: visually appealing, infographic-heavy, minimal dense text per slide/page.
-Professional tone. No internal IP addresses, no credentials, no secrets.
+**Tone:** warm, personal, like a quality magazine article written by
+someone who loves the subject. Not corporate. Not a spec sheet.
+Not condescending. Intelligent but accessible.
 
-Priority: medium
+**Language:** German throughout. Technical terms only where they add
+meaning and are immediately explained. English only for proper names
+(ROVER2, Raspberry Pi, AI, Hailo).
+
+**Format:**
+- PDF, A4 portrait
+- 8-10 pages
+- Large text (minimum 12pt body, 16pt+ headings) — accessible for older reader
+- Magazine-style layout — large photos, white space, pull quotes
+- Warm colour scheme — not cold corporate blue
+- Use ODT as intermediate format, export to PDF
+
+**Photos needed (collect before building):**
+- docs/images/rover2_physical.png — robot upright, clean background
+- docs/images/rover2_face.png — A32 face display glowing (already have this screenshot)
+- docs/images/rover2_following.png — robot following a person if available
+- docs/images/rover2_hardware.png — top-down showing all components
+
+If photos not available, use placeholder boxes with captions.
+
+---
+
+**Content structure — 8-10 pages:**
+
+**Seite 1 — Einleitung (personal)**
+Large hero photo of ROVER2 with face display active.
+Short personal paragraph — what this is, why it was built.
+"ROVER2 ist ein autonomer Roboter, den ich von Grund auf selbst
+gebaut und programmiert habe — Hardware, Elektronik und die gesamte
+Software. Er kann sehen, hören, sprechen, sich selbst bewegen und
+Entscheidungen treffen. Alles läuft lokal, auf seiner eigenen Hardware —
+kein Internet, kein Server, keine monatlichen Kosten."
+
+**Seite 2 — Der Roboter (hardware overview with labels)**
+Full-page photo of physical robot with labeled callouts:
+- Raspberry Pi 5 → "Das Gehirn"
+- Hailo AI HAT+ 2 → "Der KI-Prozessor"
+- Samsung Galaxy A32 → "Das Gesicht"
+- Makeblock Chassis → "Das Skelett"
+- MegaPi Controller → "Die Muskeln"
+- Ultrasonic Sensor → "Die Ohren für Hindernisse"
+- Camera → "Die Augen"
+- Powerbank → "Das Herz / Energiequelle"
+- RTL8812AU Dongle → "Das eigene WLAN"
+
+**Seite 3 — Das Gehirn**
+Explain Pi 5 + Hailo in plain terms with one key analogy:
+"Der Raspberry Pi 5 ist ein vollständiger Computer — so groß wie
+eine Handfläche, aber leistungsfähig genug um ein komplettes
+Betriebssystem zu betreiben."
+
+"Der Hailo AI HAT+ 2 ist ein spezieller Prozessor, der nur für
+künstliche Intelligenz entwickelt wurde. Er schafft 26 Billionen
+Rechenoperationen pro Sekunde — und verbraucht dabei weniger Strom
+als eine Glühbirne. Früher brauchte man dafür ein ganzes Rechenzentrum."
+
+Include simple comparison:
+| | ROVER2 | Rechenzentrum (früher) |
+|-|--------|----------------------|
+| KI-Leistung | 26 TOPS | Vergleichbar |
+| Stromverbrauch | ~15 Watt | ~10.000 Watt |
+| Kosten | ~550 € | ~50.000 € |
+| Internetverbindung | Nicht nötig | Erforderlich |
+
+**Seite 4 — Die Sinne**
+Four sections with simple icons or photos:
+
+SEHEN — "Eine Kamera filmt kontinuierlich. Ein KI-Modell erkennt
+in Echtzeit Personen im Bild — Position, Abstand, Bewegungsrichtung.
+Alles auf dem Hailo-Chip, 4 Mal pro Sekunde."
+
+HÖREN — "Ein Mikrofon hört permanent zu. Sobald das Wort 'Rover'
+erkannt wird, beginnt der Roboter zuzuhören. Die Spracherkennung
+läuft vollständig lokal — keine Verbindung zu Google oder Amazon."
+
+SPRECHEN — "Eine KI-Stimme antwortet in natürlichem Englisch.
+Die Stimme wird in Echtzeit auf dem Gerät erzeugt — kein
+Text-to-Speech-Dienst, keine Cloud."
+
+FÜHLEN — "Ein Ultraschallsensor misst den Abstand zu Hindernissen
+20 Mal pro Sekunde. Erkennt er etwas näher als 40 cm, stoppt der
+Roboter automatisch."
+
+**Seite 5 — Was er kann**
+Capability list with screenshots where available:
+
+✓ Person erkennen und folgen
+  "Er erkennt eine Person mit seiner Kamera und folgt ihr durch
+  den Raum — hält automatisch Abstand, weicht Hindernissen aus."
+
+✓ Sprachbefehle verstehen
+  "Sag 'Rover, wie geht es dir?' — er antwortet mit einer
+  Diagnose seiner eigenen Systeme. Vollständig offline."
+
+✓ Sehen und beschreiben
+  "Auf die Frage 'Was siehst du?' beschreibt er die Szene
+  vor seiner Kamera in natürlicher Sprache."
+
+✓ Smart Home steuern
+  "Er ist mit dem Smart Home verbunden und kann Lichter,
+  Geräte und Sensoren steuern — per Sprachbefehl."
+
+✓ Sich selbst überwachen und reparieren
+  "Ein integriertes Überwachungssystem prüft alle 30 Sekunden
+  den Zustand aller Komponenten und behebt Probleme automatisch —
+  ohne dass jemand eingreifen muss."
+
+✓ Immer erreichbar
+  "Er hat sein eigenes WLAN-Netzwerk. Auch ohne Heimnetzwerk
+  ist er jederzeit steuerbar."
+
+**Seite 6 — Die KI (simple explanation)**
+"Künstliche Intelligenz klingt kompliziert — ist aber im Grunde
+ein sehr ausgefeiltes Muster-Erkennungssystem."
+
+Three simple analogies:
+
+Spracherkennung: "Wie ein sehr geübter Stenograph — hört,
+erkennt Muster, schreibt mit."
+
+Sprachmodell (LLM): "Wie ein sehr belesener Assistent, der
+Millionen von Texten gelesen hat und dadurch sinnvolle Antworten
+formulieren kann."
+
+Bilderkennung (VLM): "Wie ein Mensch, der gelernt hat was
+'Stuhl', 'Tisch', 'Person' bedeutet — und es sofort erkennt."
+
+"Der entscheidende Unterschied zu kommerziellen Produkten wie
+Alexa oder Siri: Alles passiert im Gerät selbst. Kein einziges
+Wort verlässt den Roboter."
+
+**Seite 7 — Die Zahlen**
+Hardware cost breakdown — visual (simple table or graphic):
+
+| Komponente | Zweck | Kosten |
+|------------|-------|--------|
+| Raspberry Pi 5 8GB | Hauptcomputer | ~90 € |
+| Hailo AI HAT+ 2 | KI-Prozessor | ~110 € |
+| Makeblock Ultimate 2.0 | Chassis + Motoren | ~180 € |
+| Samsung Galaxy A32 | Gesicht + Audio | ~80 € |
+| Viking Powerbank 65W | Stromversorgung | ~60 € |
+| Kleinteile, Kabel, Dongle | — | ~30 € |
+| **Gesamt** | | **~550 €** |
+
+Note: verify costs against actual purchases before finalising.
+
+Development effort:
+"Entwicklungszeit: über 200 Stunden
+ Laufende Kosten: 0 € (kein Internet, keine Abonnements)
+ Stromverbrauch: ~15 Watt (weniger als eine Schreibtischlampe)"
+
+**Seite 8 — Was noch kommt**
+Short, simple, forward-looking:
+"ROVER2 ist fertig — aber nie wirklich fertig."
+
+- Personen wiedererkennen und beim Namen nennen
+- Auf Deutsch antworten
+- Sich an Vorlieben und Gewohnheiten erinnern
+- Noch bessere KI wenn neue Chips verfügbar
+
+**Seite 9 — Persönliche Notiz**
+Short, warm, personal paragraph from the builder to the father.
+Leave a placeholder: [PERSÖNLICHE NOTIZ — wird vom Autor ergänzt]
+This page is for a handwritten or personally typed note —
+do not generate the content, just create the space for it.
+
+---
+
+**Technical implementation:**
+- Use Python with odfpy or python-docx for ODT generation
+- Read skill file first: /mnt/skills/public/docx/SKILL.md
+- Export to PDF via LibreOffice headless:
+  libreoffice --headless --convert-to pdf presentation.odt
+- Save to /mnt/user-data/outputs/ROVER2_Praesentation.pdf
+- If photos exist in docs/images/, embed them
+- If photos missing, insert placeholder grey boxes with captions
+
+**Timing:** needed by 2026-06-14 (one week)
+Priority: high — hard deadline
 
 ---
 
