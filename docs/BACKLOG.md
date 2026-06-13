@@ -5,6 +5,23 @@ Format: ## Category / ### Item / bullet details / Priority line.
 
 ---
 
+## Robot Control
+
+### Variable follow speed based on distance
+
+- Currently body_tracker uses a fixed `forward_speed` (170) for all following
+- Goal: scale speed proportionally to bounding-box distance from centre of frame
+  - Person close (large box) → slow down or stop
+  - Person far (small box) → approach at full forward_speed
+- Implementation hint: use normalised box height as proxy for distance;
+  linearly interpolate between min_speed (50) and forward_speed (170)
+- Config keys to add: `body_tracker.min_follow_speed`, `body_tracker.speed_distance_scale`
+- Do not change hailo inference settings or frame_interval_s
+
+Priority: medium — ergonomics improvement after basic follow is stable
+
+---
+
 ## Code Quality
 
 ### ✓ Full code hygiene audit — DONE 2026-06-07

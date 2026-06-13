@@ -38,6 +38,7 @@ class CameraIdleManager:
         self._stable_since: float | None = None
         self._sleeping: bool = False
         self._baseline_cm: float | None = None
+        self._tracking_active: bool = False
 
     @property
     def sleeping(self) -> bool:
@@ -51,9 +52,19 @@ class CameraIdleManager:
         self._sleeping = False
         self._stable_since = None
 
+    def set_tracking_active(self, enabled: bool) -> None:
+        """Immediately enable/disable idle suppression when tracking state changes.
+
+        When True the camera never sleeps regardless of scene stability.
+        When False normal idle logic resumes (if neither enabled nor detect_only).
+        """
+        self._tracking_active = enabled
+        if enabled:
+            self.wake("tracking enabled")
+
     def notify_tracking_active(self) -> None:
         """Call whenever FOLLOW or DETECT is enabled."""
-        self.wake("tracking enabled")
+        self.set_tracking_active(True)
 
     def notify_stream_connect(self) -> None:
         """Call when any client hits /stream — guarantees immediate wake."""
@@ -119,10 +130,10 @@ class CameraIdleManager:
         while True:
             await asyncio.sleep(poll_interval_s)
 
-            # Never sleep while tracking is active.
-            if body_tracker is not None and (
+            # Never sleep while tracking is active (direct flag or body_tracker state).
+            if self._tracking_active or (body_tracker is not None and (
                 body_tracker.enabled or body_tracker.detect_only
-            ):
+            )):
                 if self._sleeping:
                     self.wake("tracking active")
                 self._stable_since = None

@@ -50,6 +50,7 @@ class BodyTracker:
         config: dict | None = None,
         ble_tracker: BLETracker | None = None,
         safety: SafetyMonitor | None = None,
+        cam_idle: Any | None = None,
     ) -> None:
         cfg = (config or {}).get("body_tracker", {})
 
@@ -97,6 +98,7 @@ class BodyTracker:
         self._tjpeg = TurboJPEG()
 
         self._safety: SafetyMonitor | None = safety
+        self._cam_idle: Any | None = cam_idle
         self._avoid_default = str(cfg.get("avoid_default", "left"))
 
         # Follow mode: "fused" (camera + BLE fallback), "camera" (camera only), "ble" (BLE only)
@@ -128,6 +130,10 @@ class BodyTracker:
         self._last_infer_ms: int = 0
         self._last_frame_ts: float = 0.0
         self._actual_fps: float = 0.0
+
+    def set_cam_idle(self, cam_idle: Any | None) -> None:
+        """Wire in the CameraIdleManager after construction (cam_idle is created later)."""
+        self._cam_idle = cam_idle
 
     def set_detection_callback(
         self, cb: Callable[[float, tuple], None] | None
@@ -268,6 +274,9 @@ class BodyTracker:
                 self._detect_only = False
                 if not self._person_tracked and self._camera_lost_at == 0.0:
                     self._camera_lost_at = time.monotonic()
+            active = self._enabled or self._detect_only
+        if self._cam_idle is not None:
+            self._cam_idle.set_tracking_active(active)
         logger.info("BodyTracker: tracking %s", "ENABLED" if enabled else "DISABLED")
         if not enabled:
             self._reset_tracking_state()
@@ -299,6 +308,9 @@ class BodyTracker:
                 # BLE-only: enabled=True so _run() activates, _run() checks mode
                 self._enabled = True
                 self._detect_only = False
+            active = self._enabled or self._detect_only
+        if self._cam_idle is not None:
+            self._cam_idle.set_tracking_active(active)
         logger.info("BodyTracker: follow_mode=%s ble_follow=%s", mode, self._ble_follow_enabled)
 
     def set_ble_follow_enabled(self, enabled: bool) -> None:
@@ -311,6 +323,9 @@ class BodyTracker:
             self._detect_only = active
             if active:
                 self._enabled = False
+            is_active = self._enabled or self._detect_only
+        if self._cam_idle is not None:
+            self._cam_idle.set_tracking_active(is_active)
         logger.info("BodyTracker: detect-only %s", "ON" if active else "OFF")
         if not active:
             self._reset_tracking_state()
@@ -552,6 +567,7 @@ class BodyTracker:
         req = urllib.request.urlopen(self._camera_url, timeout=10)
         buf = b""
         last_infer = 0.0
+        _warmup_frames = 2  # discard dark transition frames after camera reconnect
         try:
             while not self._stop_event.is_set():
                 # Stop streaming as soon as DETECT and FOLLOW are both off.
@@ -573,6 +589,13 @@ class BodyTracker:
                     continue
                 jpg = buf[a : b + 2]
                 buf = buf[b + 2 :]
+
+                # Skip dark transition frames immediately after stream reconnect.
+                if _warmup_frames > 0:
+                    if _warmup_frames == 2:
+                        logger.info("[body_tracker] skipping 2 warm-up frames after camera wake")
+                    _warmup_frames -= 1
+                    continue
 
                 now = time.monotonic()
                 if now - last_infer < self._frame_interval_s:

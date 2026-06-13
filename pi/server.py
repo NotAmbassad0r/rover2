@@ -166,6 +166,8 @@ def create_app(
     camera_health_url = str(cam_cfg.get("health_url", "http://127.0.0.1:8081/health"))
 
     cam_idle = CameraIdleManager(config) if _CAMERA_IDLE else None
+    if cam_idle is not None and body_tracker is not None:
+        body_tracker.set_cam_idle(cam_idle)
     thermal_monitor = ThermalMonitor() if _THERMAL else None
 
     hub = ControlHub(
