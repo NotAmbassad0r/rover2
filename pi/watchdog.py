@@ -851,7 +851,9 @@ class Watchdog:
             self._clear_alert(key)
             self._env_warned.discard(key)
             mp = self._megapi
-            if mp is not None and not mp.connected:
+            if mp is None:
+                return
+            if not mp.connected:
                 rkey = "megapi_reconnect"
                 if self._can_act_for(rkey):
                     self._record_attempt(rkey)
@@ -862,8 +864,59 @@ class Watchdog:
                     self._emit_alert(rkey, "warning",
                                      "MegaPi serial not responding — reconnect retries exhausted",
                                      action_taken="trigger_reconnect (exhausted)")
+                return
+            self._clear_alert("megapi_reconnect")
+            # Serial write health: if connected but no successful write in > 60s
+            write_age = mp.last_write_age_s
+            if write_age is not None and write_age > 60.0:
+                rkey = "megapi_write_stale"
+                if self._can_act_for(rkey):
+                    self._record_attempt(rkey)
+                    mp.trigger_reconnect()
+                    self._log("WARNING", f"megapi_write_stale_{write_age:.0f}s",
+                              "trigger_reconnect", "requested")
+                    self._emit_alert(rkey, "warning",
+                                     f"MEGAPI SERIAL UNRESPONSIVE — no write for {write_age:.0f}s",
+                                     action_taken="trigger_reconnect")
+            else:
+                self._clear_alert("megapi_write_stale")
         except Exception as exc:
             logger.debug("Watchdog: megapi check: %s", exc)
+
+    async def _check_megapi_power(self) -> None:
+        try:
+            mp = self._megapi
+            if mp is None:
+                return
+            if not mp.connected:
+                return  # handled by _check_megapi_serial
+            state = mp.megapi_power_state
+            # Don't alert during follow mode (navigation decisions cause rapid
+            # command changes that corrupt the correlation heuristic)
+            if self._is_follow_active():
+                return
+            # Don't alert when safety has blocked forward motion
+            sm = self._safety_monitor
+            if sm is not None and sm.forward_blocked:
+                return
+            if state == "no_response":
+                self._emit_alert(
+                    "megapi_power", "warning",
+                    "MEGAPI NOT RESPONDING TO DRIVE COMMANDS — check battery power",
+                    action_taken="none — manual check required",
+                )
+            elif state == "low_battery":
+                self._emit_alert(
+                    "megapi_power_low", "warning",
+                    "MEGAPI WEAK MOTOR RESPONSE — battery may be low",
+                    action_taken="none",
+                )
+            elif state == "ok":
+                self._clear_alert("megapi_power")
+                self._clear_alert("megapi_power_low")
+            # "unknown" → no alert (no drive commands sent recently)
+        except Exception as exc:
+            logger.debug("Watchdog: megapi_power check: %s", exc)
 
     async def _check_robot_stuck(self) -> None:
         try:
@@ -1287,6 +1340,7 @@ class Watchdog:
             self._check_wifi_driver,
             self._check_camera_frames,
             self._check_megapi_serial,
+            self._check_megapi_power,
             self._check_robot_stuck,
             self._check_person_lost,
             self._check_safety_stale,

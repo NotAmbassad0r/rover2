@@ -46,6 +46,17 @@ class MegaPiBridge:
         self._ultrasonic_state: str = "timeout"
         self._ultrasonic_fault_count: int = 0
 
+        # Motor power monitoring — indirect via drive+ultrasonic correlation
+        self._last_linear_drive_ts: float = 0.0   # monotonic time of last forward/back cmd
+        self._ult_at_linear_drive: int | None = None  # ultrasonic snapshot when cmd sent
+        self._drive_check_pending: bool = False    # waiting for next ultrasonic reading
+        self._motor_no_response_count: int = 0    # consecutive no-movement checks
+        self._motor_weak_response_count: int = 0  # consecutive weak-movement checks
+        self._megapi_power_state: str = "unknown"
+
+        # Serial write health tracking
+        self._last_write_ts: float = 0.0
+
     @property
     def connected(self) -> bool:
         return self._serial is not None and self._serial.is_open
@@ -75,6 +86,19 @@ class MegaPiBridge:
     @property
     def ultrasonic_fault_count(self) -> int:
         return self._ultrasonic_fault_count
+
+    @property
+    def megapi_power_state(self) -> str:
+        """ok | low_battery | no_response | unknown | serial_error"""
+        if not self.connected:
+            return "serial_error"
+        return self._megapi_power_state
+
+    @property
+    def last_write_age_s(self) -> float | None:
+        if self._last_write_ts == 0.0:
+            return None
+        return time.monotonic() - self._last_write_ts
 
     def set_poll_interval(self, interval_s: float) -> None:
         self._poll_interval_s = max(0.2, float(interval_s))
@@ -107,6 +131,7 @@ class MegaPiBridge:
             assert self._serial is not None
             self._serial.write(payload.encode("utf-8"))
             self._serial.flush()
+        self._last_write_ts = time.monotonic()
 
     def request_ultrasonic(self, wait_s: float = 0.55) -> int | None:
         """Request a fresh reading; wait up to *wait_s* for the sensor response."""
@@ -139,6 +164,11 @@ class MegaPiBridge:
 
     def drive(self, left: int, right: int) -> None:
         self.send({"cmd": "drive", "l": int(left), "r": int(right)})
+        # Track linear commands (both motors active) for power monitoring
+        if left != 0 and right != 0:
+            self._last_linear_drive_ts = time.monotonic()
+            self._ult_at_linear_drive = self._last_ultrasonic_cm
+            self._drive_check_pending = True
 
     def stop_motors(self) -> None:
         self.send({"cmd": "stop"})
@@ -199,6 +229,47 @@ class MegaPiBridge:
                 pass
         self._serial = None
 
+    def _evaluate_motor_response(self, current_cm: int) -> None:
+        """Called on each ultrasonic reading. Correlates with recent linear drive cmd."""
+        if not self._drive_check_pending:
+            return
+        now = time.monotonic()
+        age = now - self._last_linear_drive_ts
+        # Expire check if command is too old (> 3s — robot already moved or stopped)
+        if age > 3.0:
+            self._drive_check_pending = False
+            return
+        # Need enough time for robot to actually move (at least 0.3s)
+        if age < 0.3:
+            return
+        before = self._ult_at_linear_drive
+        # Skip if readings are out of valid range (nothing in ultrasonic field)
+        if before is None or before <= 0 or before >= 400:
+            self._drive_check_pending = False
+            return
+        if current_cm <= 0 or current_cm >= 400:
+            self._drive_check_pending = False
+            return
+        self._drive_check_pending = False
+        delta = abs(current_cm - before)
+        if delta >= 5:
+            # Clear movement — motors responding normally
+            self._motor_no_response_count = 0
+            self._motor_weak_response_count = 0
+            self._megapi_power_state = "ok"
+        elif delta >= 2:
+            # Weak movement — possible low battery
+            self._motor_weak_response_count += 1
+            self._motor_no_response_count = 0
+            if self._motor_weak_response_count >= 3:
+                self._megapi_power_state = "low_battery"
+        else:
+            # No movement
+            self._motor_no_response_count += 1
+            self._motor_weak_response_count = 0
+            if self._motor_no_response_count >= 3:
+                self._megapi_power_state = "no_response"
+
     def _read_line(self) -> None:
         assert self._serial is not None
         raw = self._serial.readline()
@@ -232,6 +303,7 @@ class MegaPiBridge:
             cm = self._last_ultrasonic_cm
             self._ultrasonic_state = "ok" if 0 <= cm < 400 else "no_echo"
             self._ultrasonic_event.set()
+            self._evaluate_motor_response(cm)
         if msg.get("evt") in ("ready", "detected"):
             motors = int(msg.get("motors", 0))
             self._motors_ready = motors >= 2 if motors else True

@@ -459,6 +459,7 @@
       <div class="status-row" id="row-ws"><span>WEBSOCKET</span><span id="st-ws">—</span></div>
       <div class="status-row" id="row-serial"><span>SERIAL</span><span id="st-serial">—</span></div>
       <div class="status-row"><span>MOTORS</span><span id="st-motors">—</span></div>
+      <div class="status-row" id="row-megapi-power"><span>MEGAPI POWER</span><span id="st-megapi-power">—</span></div>
       <div class="status-row" id="row-firmware"><span>FIRMWARE</span><span id="st-firmware">—</span></div>
       <div class="status-row" id="row-ultra"><span>ULTRASONIC</span><span id="st-ultra">—</span></div>
       <div class="status-row" id="row-safety"><span>SAFETY</span><span id="st-safety">—</span></div>
@@ -2252,6 +2253,34 @@
           wEl.textContent = 'unloaded';
           wEl.style.color = 'var(--muted)';
           wRow.className  = 'status-row';
+        }
+      }
+
+      // MEGAPI POWER row
+      const mpPwrRow = document.getElementById('row-megapi-power');
+      const mpPwrEl  = document.getElementById('st-megapi-power');
+      if (mpPwrRow && mpPwrEl && d.megapi_power_state) {
+        const ps = d.megapi_power_state;
+        if (ps === 'ok') {
+          mpPwrEl.textContent = 'OK';
+          mpPwrEl.style.color = 'var(--accent)';
+          mpPwrRow.className  = 'status-row';
+        } else if (ps === 'low_battery') {
+          mpPwrEl.textContent = 'LOW BATTERY';
+          mpPwrEl.style.color = 'var(--warn)';
+          mpPwrRow.className  = 'status-row warn';
+        } else if (ps === 'no_response') {
+          mpPwrEl.textContent = 'NO RESPONSE';
+          mpPwrEl.style.color = 'var(--danger)';
+          mpPwrRow.className  = 'status-row err';
+        } else if (ps === 'serial_error') {
+          mpPwrEl.textContent = 'SERIAL ERROR';
+          mpPwrEl.style.color = 'var(--danger)';
+          mpPwrRow.className  = 'status-row err';
+        } else {
+          mpPwrEl.textContent = 'UNKNOWN';
+          mpPwrEl.style.color = 'var(--muted)';
+          mpPwrRow.className  = 'status-row';
         }
       }
 

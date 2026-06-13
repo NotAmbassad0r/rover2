@@ -304,6 +304,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   <div class="dbg-row"><span class="dbg-key">WSS</span><span id="dbg-wss">disconnected</span></div>
   <div class="dbg-row"><span class="dbg-key">WDOG</span><span id="dbg-wdog">—</span></div>
   <div class="dbg-row"><span class="dbg-key">AP</span><span id="dbg-ap">—</span></div>
+  <div class="dbg-row"><span class="dbg-key">MOTOR</span><span id="dbg-motor">—</span></div>
 </div>
 
 <div id="ui">
@@ -679,6 +680,15 @@ function _applyTelemetry(d) {
     else if (ap === 'away')  { apEl.textContent = 'AWAY'; apEl.style.color = '#d29922'; }
     else if (ap === 'error') { apEl.textContent = 'ERR'; apEl.style.color = '#f85149'; }
     else { apEl.textContent = ap || '—'; apEl.style.color = ''; }
+  }
+  const motorEl = document.getElementById('dbg-motor');
+  if (motorEl && d.megapi_power_state) {
+    const ps = d.megapi_power_state;
+    if (ps === 'ok')           { motorEl.textContent = 'ok';         motorEl.style.color = '#3fb950'; }
+    else if (ps === 'low_battery') { motorEl.textContent = 'low-bat'; motorEl.style.color = '#d29922'; }
+    else if (ps === 'no_response') { motorEl.textContent = 'no-response'; motorEl.style.color = '#f85149'; }
+    else if (ps === 'serial_error') { motorEl.textContent = 'serial-err'; motorEl.style.color = '#f85149'; }
+    else                       { motorEl.textContent = 'unknown';    motorEl.style.color = ''; }
   }
 
   // SELF-HEALED: watchdog acted within last 60 s and system is now IDLE
