@@ -469,6 +469,7 @@
       <div class="status-row" id="row-ble"><span>BLE BEACON</span><span id="st-ble">—</span></div>
       <div class="status-row" id="row-cam-idle"><span>CAMERA</span><span id="st-cam-idle">—</span></div>
       <div class="status-row"><span>UPTIME</span><span id="st-uptime">—</span></div>
+      <div class="status-row" id="row-heartbeat"><span>HEARTBEAT</span><span id="st-heartbeat">—</span></div>
       <div class="status-row" id="row-watchdog"><span>WATCHDOG</span><span id="st-watchdog">—</span></div>
       <div class="status-row" id="row-ap"><span>AP MODE</span><span id="st-ap">—</span></div>
       <div class="status-row" id="row-whisper"><span>WHISPER</span><span id="st-whisper">—</span></div>
@@ -2125,6 +2126,20 @@
         safetyRow.className = 'status-row';
       }
       document.getElementById('st-uptime').textContent = d.uptime_s + ' s';
+      // HEARTBEAT row
+      const hbRow = document.getElementById('row-heartbeat');
+      const hbEl  = document.getElementById('st-heartbeat');
+      if (hbRow && hbEl && d.last_heartbeat_s != null) {
+        const s = d.last_heartbeat_s;
+        const tout = d.heartbeat_timeout_s || 60;
+        if (s > tout) {
+          hbEl.textContent = 'TIMEOUT'; hbEl.style.color = 'var(--danger)'; hbRow.className = 'status-row err';
+        } else if (s > 30) {
+          hbEl.textContent = `WARNING (${s}s ago)`; hbEl.style.color = 'var(--warn)'; hbRow.className = 'status-row warn';
+        } else {
+          hbEl.textContent = `OK (${s}s ago)`; hbEl.style.color = 'var(--accent)'; hbRow.className = 'status-row';
+        }
+      }
       const trackRow = document.getElementById('row-tracking');
       const trackEl = document.getElementById('st-tracking');
       if (!d.tracking_available) {

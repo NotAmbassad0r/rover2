@@ -276,6 +276,8 @@ class BodyTracker:
                     self._camera_lost_at = time.monotonic()
             active = self._enabled or self._detect_only
         if self._cam_idle is not None:
+            logger.info("[body_tracker] camera idle %s",
+                        "suppressed (tracking active)" if active else "released (tracking inactive)")
             self._cam_idle.set_tracking_active(active)
         logger.info("BodyTracker: tracking %s", "ENABLED" if enabled else "DISABLED")
         if not enabled:
@@ -310,6 +312,8 @@ class BodyTracker:
                 self._detect_only = False
             active = self._enabled or self._detect_only
         if self._cam_idle is not None:
+            logger.info("[body_tracker] camera idle %s",
+                        "suppressed (tracking active)" if active else "released (tracking inactive)")
             self._cam_idle.set_tracking_active(active)
         logger.info("BodyTracker: follow_mode=%s ble_follow=%s", mode, self._ble_follow_enabled)
 
@@ -325,6 +329,8 @@ class BodyTracker:
                 self._enabled = False
             is_active = self._enabled or self._detect_only
         if self._cam_idle is not None:
+            logger.info("[body_tracker] camera idle %s",
+                        "suppressed (tracking active)" if is_active else "released (tracking inactive)")
             self._cam_idle.set_tracking_active(is_active)
         logger.info("BodyTracker: detect-only %s", "ON" if active else "OFF")
         if not active:

@@ -172,10 +172,11 @@ class ControlHub:
                 )
                 if not active:
                     continue
-                if time.monotonic() - self._last_client_activity > self._heartbeat_timeout_s:
+                elapsed = time.monotonic() - self._last_client_activity
+                if elapsed > self._heartbeat_timeout_s:
                     logger.warning(
-                        "Heartbeat timeout (%.1fs) — stopping motors/tracking",
-                        self._heartbeat_timeout_s,
+                        "[ws] heartbeat timeout after %.1fs — disabling follow and stopping motors",
+                        elapsed,
                     )
                     self.touch_activity()
                     if self._body_tracker is not None and self._body_tracker.enabled:
@@ -233,6 +234,8 @@ class ControlHub:
                     self._cam_idle,
                     self._guard_controller,
                 )
+                payload["last_heartbeat_s"] = round(time.monotonic() - self._last_client_activity, 1)
+                payload["heartbeat_timeout_s"] = self._heartbeat_timeout_s
                 if self._telemetry_extra:
                     payload.update(self._telemetry_extra)
                 await self._send_json(ws, payload)

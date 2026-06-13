@@ -58,9 +58,13 @@ class CameraIdleManager:
         When True the camera never sleeps regardless of scene stability.
         When False normal idle logic resumes (if neither enabled nor detect_only).
         """
+        prev = self._tracking_active
         self._tracking_active = enabled
-        if enabled:
+        if enabled and not prev:
+            logger.info("[camera_idle] tracking active — idle suppressed")
             self.wake("tracking enabled")
+        elif not enabled and prev:
+            logger.info("[camera_idle] tracking inactive — idle resumed")
 
     def notify_tracking_active(self) -> None:
         """Call whenever FOLLOW or DETECT is enabled."""
