@@ -41,6 +41,9 @@ def main() -> None:
     )
     ultra_cfg = config.get("ultrasonic", {})
     megapi.set_poll_interval(float(ultra_cfg.get("poll_interval_s", 0.4)))
+    megapi_cfg = config.get("megapi", {})
+    if "speed_to_cm_factor" in megapi_cfg:
+        megapi.set_speed_to_cm_factor(float(megapi_cfg["speed_to_cm_factor"]))
     megapi.start()
 
     safety_monitor: SafetyMonitor | None = None

@@ -56,18 +56,18 @@ class HAClient:
     async def get_states(self) -> list[dict]:
         """Return all entity states from HA."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
+            async with httpx.AsyncClient(timeout=3.0) as c:
                 r = await c.get(f"{self._url}/api/states", headers=self._headers)
                 r.raise_for_status()
                 return r.json()
-        except Exception as exc:
-            logger.warning("HA get_states failed: %s", exc)
+        except Exception:
+            logger.info("[ha] HA unreachable — office/offline mode")
             return []
 
     async def get_state(self, entity_id: str) -> dict | None:
         """Return a single entity state, or None if not found / unreachable."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
+            async with httpx.AsyncClient(timeout=3.0) as c:
                 r = await c.get(
                     f"{self._url}/api/states/{entity_id}", headers=self._headers
                 )
@@ -75,8 +75,8 @@ class HAClient:
                     return None
                 r.raise_for_status()
                 return r.json()
-        except Exception as exc:
-            logger.warning("HA get_state(%s) failed: %s", entity_id, exc)
+        except Exception:
+            logger.info("[ha] HA unreachable — office/offline mode")
             return None
 
     async def call_service(
@@ -84,7 +84,7 @@ class HAClient:
     ) -> bool:
         """Call a HA service (e.g. light.turn_on)."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
+            async with httpx.AsyncClient(timeout=3.0) as c:
                 r = await c.post(
                     f"{self._url}/api/services/{domain}/{service}",
                     headers=self._headers,
@@ -92,10 +92,8 @@ class HAClient:
                 )
                 r.raise_for_status()
                 return True
-        except Exception as exc:
-            logger.warning(
-                "HA call_service(%s.%s, %s) failed: %s", domain, service, entity_id, exc
-            )
+        except Exception:
+            logger.info("[ha] HA unreachable — office/offline mode")
             return False
 
     async def toggle(self, entity_id: str) -> bool:
@@ -155,7 +153,7 @@ class HAClient:
     async def ping(self) -> bool:
         """Return True if HA API is reachable."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
+            async with httpx.AsyncClient(timeout=3.0) as c:
                 r = await c.get(f"{self._url}/api/", headers=self._headers)
                 return r.status_code == 200
         except Exception:

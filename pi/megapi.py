@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+from collections import deque
 from typing import Any, Callable
 
 import serial
@@ -54,6 +55,11 @@ class MegaPiBridge:
         self._motor_weak_response_count: int = 0  # consecutive weak-movement checks
         self._megapi_power_state: str = "unknown"
 
+        # Battery / performance ratio tracking (ratio = observed_delta / expected_delta)
+        self._motor_performance_samples: deque[float] = deque(maxlen=10)
+        self._last_commanded_speed: int = 0
+        self._speed_to_cm_factor: float = 8.0   # expected cm delta at full speed per poll
+
         # Serial write health tracking
         self._last_write_ts: float = 0.0
 
@@ -99,6 +105,34 @@ class MegaPiBridge:
         if self._last_write_ts == 0.0:
             return None
         return time.monotonic() - self._last_write_ts
+
+    @property
+    def battery_estimate(self) -> str:
+        """good | low | critical | no_response | unknown — based on performance ratio history."""
+        if not self._motor_performance_samples:
+            return "unknown"
+        avg = sum(self._motor_performance_samples) / len(self._motor_performance_samples)
+        if avg > 0.8:
+            return "good"
+        if avg >= 0.5:
+            return "low"
+        if avg > 0.0:
+            return "critical"
+        return "no_response"
+
+    @property
+    def performance_ratio(self) -> float | None:
+        """Mean observed/expected movement ratio over last 10 samples, or None."""
+        if not self._motor_performance_samples:
+            return None
+        return round(sum(self._motor_performance_samples) / len(self._motor_performance_samples), 2)
+
+    @property
+    def megapi_samples_count(self) -> int:
+        return len(self._motor_performance_samples)
+
+    def set_speed_to_cm_factor(self, factor: float) -> None:
+        self._speed_to_cm_factor = float(factor)
 
     def set_poll_interval(self, interval_s: float) -> None:
         self._poll_interval_s = max(0.2, float(interval_s))
@@ -168,6 +202,7 @@ class MegaPiBridge:
         if left != 0 and right != 0:
             self._last_linear_drive_ts = time.monotonic()
             self._ult_at_linear_drive = self._last_ultrasonic_cm
+            self._last_commanded_speed = max(abs(int(left)), abs(int(right)))
             self._drive_check_pending = True
 
     def stop_motors(self) -> None:
@@ -252,6 +287,10 @@ class MegaPiBridge:
             return
         self._drive_check_pending = False
         delta = abs(current_cm - before)
+        # Record performance ratio: observed delta vs speed-proportional expectation
+        if self._last_commanded_speed > 0:
+            expected = (self._last_commanded_speed / 255.0) * self._speed_to_cm_factor
+            self._motor_performance_samples.append(min(delta / expected, 2.0))
         if delta >= 5:
             # Clear movement — motors responding normally
             self._motor_no_response_count = 0

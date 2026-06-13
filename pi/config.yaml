@@ -33,6 +33,9 @@ safety:
   poll_interval_s: 0.5
   initial_poll_delay_s: 1.0
 
+megapi:
+  speed_to_cm_factor: 8.0   # expected ultrasonic delta (cm) at max speed per poll interval
+
 ultrasonic:
   poll_interval_s: 0.5   # background poll on serial bridge
 

@@ -32,7 +32,11 @@ def build_telemetry(
         "serial_connected": megapi.connected,
         "firmware": megapi.firmware_version,
         "motors_ready": megapi.motors_ready,
+        "megapi_port": megapi.port,
         "megapi_power_state": megapi.megapi_power_state,
+        "megapi_battery_estimate": megapi.battery_estimate,
+        "megapi_performance_ratio": megapi.performance_ratio,
+        "megapi_samples": megapi.megapi_samples_count,
         "ultrasonic_cm": public_ultrasonic_cm(
             megapi.last_ultrasonic_cm, age_s=megapi.last_ultrasonic_age_s
         ),

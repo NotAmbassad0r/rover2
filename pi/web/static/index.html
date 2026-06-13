@@ -1433,6 +1433,19 @@
       const el = document.getElementById('fd-robot');
       if (!el || _activeTab !== 'diag') return;
       const rows = [];
+      // MEGAPI rows
+      if (d.megapi_port) rows.push(metricRow('MEGAPI PORT', d.megapi_port, null, 'info'));
+      const _pwrCls = {ok:'ok',low_battery:'warn',no_response:'error',unknown:'info',serial_error:'error'};
+      rows.push(metricRow('MEGAPI POWER', (d.megapi_power_state||'unknown').replace(/_/g,' ').toUpperCase(), null, _pwrCls[d.megapi_power_state]||'info'));
+      if (d.megapi_battery_estimate) {
+        const _bCls = {good:'ok',low:'warn',critical:'error',no_response:'error',unknown:'info'};
+        rows.push(metricRow('MEGAPI BATTERY', d.megapi_battery_estimate.toUpperCase(), null, _bCls[d.megapi_battery_estimate]||'info'));
+      }
+      if (d.megapi_performance_ratio != null) {
+        const _r = d.megapi_performance_ratio;
+        const _pCls = _r > 0.8 ? 'ok' : _r >= 0.5 ? 'warn' : 'error';
+        rows.push(metricRow('MEGAPI PERF', _r.toFixed(2) + (d.megapi_samples ? ` (${d.megapi_samples} samples)` : ''), null, _pCls));
+      }
       if (d.ble_rssi != null) {
         const cls = d.ble_rssi >= -60 ? 'ok' : d.ble_rssi >= -75 ? 'info' : 'warn';
         rows.push(metricRow('BLE RSSI', d.ble_rssi + ' dBm', null, cls));
@@ -1962,8 +1975,8 @@
           if (entSection) entSection.innerHTML = '';
           return;
         }
-        const connCol = d.connected ? 'var(--success)' : 'var(--error,#f55)';
-        const connStr = d.connected ? 'CONNECTED' : 'DISCONNECTED';
+        const connCol = d.connected ? 'var(--success)' : 'var(--muted)';
+        const connStr = d.connected ? 'CONNECTED' : 'HA OFFLINE';
         const statusRows = [['STATUS', `<span style="color:${connCol}">${connStr}</span>`]];
         if (d.last_command) {
           const lc = d.last_command;
