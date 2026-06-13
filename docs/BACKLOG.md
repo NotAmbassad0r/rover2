@@ -794,3 +794,147 @@ After every Cline session that adds a feature:
 - The UI is never "done" — it grows with the robot
 
 Priority: high — ongoing, applied to every future session
+
+---
+
+## MCP / Integration
+
+### ROVER2 MCP Server — full robot control via MCP protocol
+
+Deploy a full-featured MCP server on a dedicated Proxmox Ubuntu Server VM
+that exposes all ROVER2 capabilities to any MCP-compatible client
+(Claude.ai, Claude Code/Cline, or any local MCP client).
+
+#### Infrastructure
+
+**VM specs (create manually on Proxmox):**
+- Ubuntu Server 24.04 LTS
+- 2 cores, 2GB RAM, 16GB disk
+- VirtIO NIC on IoT VLAN (192.168.70.x)
+- Machine type: q35, CPU type: host
+- Static IP: 192.168.70.x (pick free address)
+- Tailscale installed and connected
+- SSH accessible from central-computer
+
+**Reachability:**
+- Local network: http://192.168.70.x:8083/sse
+- Tailscale: http://100.x.x.x:8083/sse
+- Protected by API key header on all endpoints
+
+**Architecture:**
+MCP Client (Claude.ai / Cline / any client)
+
+↓ SSE (HTTP) or stdio
+
+Proxmox VM 192.168.70.x: rover2-mcp server
+
+↓ HTTPS via Tailscale or local network
+
+Pi rover2-api:8082 (existing, unchanged)
+
+#### MCP tools to expose
+
+**Robot control:**
+- follow_start / follow_stop
+- set_follow_mode (camera/ble/fused/detect)
+- drive (direction, speed, duration)
+- stop_motors
+- wave_arm
+- set_gripper (open/close)
+
+**Vision / AI:**
+- describe_scene — VLM scene description
+- ask_rover — send voice agent query, get response
+- get_camera_snapshot — returns base64 JPEG
+
+**Diagnostics:**
+- get_status — full system status
+- get_diagnostics — all sensor readings
+- get_logs (service, lines, filter)
+- get_resource_usage — CPU, RAM, temp
+- get_alert_history
+- get_watchdog_status
+
+**Configuration:**
+- get_config
+- set_config (key, value)
+- restart_service (name)
+- reboot_pi (requires confirmation)
+
+**Home Assistant:**
+- ha_get_status — all entities
+- ha_toggle (entity_id, state)
+- ha_get_temperatures
+- ha_get_cameras
+
+**Calendar (Google Calendar via existing Gmail MCP):**
+- calendar_add_event (title, date, time, duration)
+- calendar_get_events (date range)
+- calendar_delete_event
+
+**Memory / notes:**
+- add_note (text) — stores in rover2 memory DB
+- get_notes (query)
+- delete_note
+
+**Person management (after face recognition implemented):**
+- list_persons
+- enroll_person (name)
+- forget_person (name)
+
+#### Implementation
+
+**Server stack:**
+- Python 3.11+, FastAPI, mcp library (pip install mcp)
+- SSE transport for Claude.ai / HTTP clients
+- stdio transport for Cline / Claude Code
+- Both transports from same server
+
+**Security:**
+- API key required for all SSE connections
+- Key stored in /etc/rover2-mcp/config.yaml on VM
+- Never hardcoded in source
+- Tailscale ACLs: only allow MCP port from trusted Tailscale nodes
+
+**Files:**
+- mcp_server/server.py — main MCP server
+- mcp_server/rover2_client.py — HTTPS client for rover2-api
+- mcp_server/tools/ — one file per tool category
+- mcp_server/config.yaml — rover2 API URL, API key, port
+- systemd/rover2-mcp.service — runs on VM
+- scripts/deploy_mcp.sh — deploys from central-computer to VM
+
+**Deployment:**
+- deploy_mcp.sh rsync mcp_server/ to VM
+- Install systemd service
+- Start rover2-mcp.service
+- Verify SSE endpoint reachable from central-computer
+
+#### Prerequisites before implementation
+
+1. VM created manually on Proxmox:
+   - Ubuntu Server 24.04 LTS
+   - Static IP assigned on 192.168.70.x
+   - Tailscale installed and connected
+   - SSH accessible
+   - Tell Claude: VM IP, username, Tailscale IP
+
+2. MikroTik firewall rules:
+   - Allow TCP 8083 from home VLAN and management VLAN to 192.168.70.x
+   - IoT VLAN egress: allow 192.168.70.x → Pi Tailscale IP on HTTPS
+
+3. rover2-api accessible from VM:
+   - Via Tailscale: https://<rover-tailscale-ip>:8082
+   - Verify: curl -sk https://<rover-tailscale-ip>:8082/api/status
+
+#### Claude.ai integration (after deployment)
+
+Add MCP server to Claude.ai settings:
+  URL: http://192.168.70.x:8083/sse
+  OR Tailscale: http://100.x.x.x:8083/sse
+  API key: <generated key>
+
+This allows controlling ROVER2 directly from Claude.ai conversations
+without going through the web UI.
+
+Priority: medium — after formal follow tests and presentation
