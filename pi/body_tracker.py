@@ -69,6 +69,9 @@ class BodyTracker:
         self._frame_interval_s = float(cfg.get("frame_interval_s", 0.10))
         self._hailo_warmup_s = float(cfg.get("hailo_warmup_s", 30.0))
         self._detect_only_on_start = bool(cfg.get("detect_only_on_start", False))
+        self._min_box_width = float(cfg.get("min_box_width", 0.03))
+        self._min_box_height = float(cfg.get("min_box_height", 0.06))
+        self._min_box_area = float(cfg.get("min_box_area", 0.003))
         self._start_time = 0.0  # set in start()
 
         self._left_bound = 0.5 - self._centre_zone / 2
@@ -653,6 +656,11 @@ class BodyTracker:
             logger.warning("Hailo infer returned None")
             return
         self._frames_inferred += 1
+        logger.debug(
+            "Hailo raw: shape=%s max=%.3f mean=%.3f nonzero=%d",
+            nms_out.shape, float(nms_out.max()),
+            float(nms_out.mean()), int(np.count_nonzero(nms_out)),
+        )
         now_fi = time.monotonic()
         if now_fi - self._last_frame_log >= 5.0:
             self._last_frame_log = now_fi
@@ -664,8 +672,13 @@ class BodyTracker:
                 logger.debug("Class-0 det0: score=%.3f y0=%.3f x0=%.3f y1=%.3f x1=%.3f",
                              det0[0], det0[1], det0[2], det0[3], det0[4])
 
-        best = parse_best_person(nms_out, confidence=self._confidence)
-        raw_best = parse_best_person(nms_out, confidence=0.0)
+        _box_kwargs = dict(
+            min_box_width=self._min_box_width,
+            min_box_height=self._min_box_height,
+            min_box_area=self._min_box_area,
+        )
+        best = parse_best_person(nms_out, confidence=self._confidence, **_box_kwargs)
+        raw_best = parse_best_person(nms_out, confidence=0.0, **_box_kwargs)
         now = time.monotonic()
         if now - self._last_score_log >= 3.0:
             self._last_score_log = now

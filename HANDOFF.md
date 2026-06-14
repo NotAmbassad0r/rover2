@@ -1,6 +1,6 @@
 # HANDOFF.md — ROVER2
 
-Last updated: 2026-06-13 (heartbeat 10→60s for demo; camera idle suppression logging; HEARTBEAT STATUS row)
+Last updated: 2026-06-14 (bbox coordinate normalization — fixes person boxes rejected despite max=1.000 detection)
 
 Greenfield minimal stack: MegaPi motors, **arm lift**, gripper, ultrasonic, web control, **Hailo person follow**, **BLE beacon fallback follow**, **on-device AI (LLM + VLM)**. Runs **alongside** ROVER v1 on a separate port; **do not** bind both APIs to `/dev/ttyUSB0` at once.
 
@@ -613,6 +613,8 @@ Must be created manually on a fresh Pi setup.
 ---
 
 ## Known issues / notes
+
+30. **Hailo NMS coordinate ordering — FIXED 2026-06-14** — Hailo YOLOv8m NMS output (40080-element padded stride format) sometimes returns bounding box coordinates out of canonical order: x0 > x1. This caused `parse_best_person` to reject every detection (bounds check `x0 < x1` fails) even when Hailo's max confidence was 1.000. Root cause: the `score, y0, x0, y1, x1` field ordering documented in HANDOFF assumes sorted coordinates, but Hailo can emit `x_max` before `x_min`. Fix: `parse_best_person` now normalises coordinates before the bounds check — swaps x0/x1 if x0 > x1, swaps y0/y1 if y0 > y1. Debug log added at DEBUG level when swap occurs. Verified 2026-06-14: `Detect score: 0.48 → PASS`, bbox stored as `[0.924, 0.234, 0.999, 0.953]` (valid normalised coords). Also reduced the `nms_output_to_tensor` per-frame debug messages from INFO to DEBUG (they were flooding the journal at 1fps). Box-size minimums (`min_box_width: 0.03`, `min_box_height: 0.06`, `min_box_area: 0.003`) were already in config.yaml and code — no further change needed there.
 
 25. **body_tracker CPU optimisation applied (2026-06-05)** — three changes reduced detect-only CPU from 90–110% to ~16–22%:
    - **TurboJPEG 1/2-scale decode**: `PyTurboJPEG>=1.8,<2.0` installed in venv (requires libjpeg-turbo 2.x on Pi; 2.0 requires libjpeg-turbo 3.x). Decodes 640×480 JPEG directly to 320×240 RGB in one step — eliminates `cv2.imdecode`, `np.frombuffer`, and `cvtColor`. ∼4× faster per decode.

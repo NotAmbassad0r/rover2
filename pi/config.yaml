@@ -65,6 +65,9 @@ body_tracker:
   ble_follow_enabled: false # BLE fallback off by default — enable via UI BLE button
   detect_only_on_start: true # watch for people on boot; rover does NOT follow until explicitly enabled
   avoid_default: left   # when wall blocks FWD and person is centred in frame
+  min_box_width: 0.03   # min normalised bbox width  (was 0.06 — too strict at 3-4m)
+  min_box_height: 0.06  # min normalised bbox height (was 0.10 — too strict at 3-4m)
+  min_box_area: 0.003   # min normalised bbox area   (was 0.012 — too strict at 3-4m)
 
 ble_tracker:
   enabled: true        # set false for office demo (no BLE, saves CPU + heat)
