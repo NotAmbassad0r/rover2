@@ -17,6 +17,7 @@ _MIN_BOX_WIDTH: float = 0.03   # was 0.06 — reduced to detect at 3-4m distance
 _MIN_BOX_HEIGHT: float = 0.06  # was 0.10 — reduced to detect at 3-4m distance
 _MIN_BOX_AREA: float = 0.003   # was 0.012 — reduced to detect at 3-4m distance
 _PERSON_CLASS: int = 0
+_dumped: bool = False  # one-shot field-layout verification log
 
 
 def nms_output_to_tensor(nms_output: np.ndarray) -> np.ndarray | None:
@@ -24,12 +25,21 @@ def nms_output_to_tensor(nms_output: np.ndarray) -> np.ndarray | None:
     if flat.size == int(np.prod(_NMS_SHAPE)):
         return flat.reshape(_NMS_SHAPE)
     if flat.size == _NUM_CLASSES * _PADDED_CLASS_STRIDE:
+        global _dumped
         mat = flat.reshape(_NUM_CLASSES, _PADDED_CLASS_STRIDE)
         class_maxes = [(i, float(v)) for i, v in enumerate(mat.max(axis=1)) if v > 0.1]
         logger.debug("nms classes with max>0.1: %s", class_maxes)
         nz = np.where(flat > 0.1)[0]
         logger.debug("nms nonzero[:10] idx=%s val=%s", nz[:10].tolist(), flat[nz[:10]].tolist())
-        return mat[:, : _MAX_DET * _VALS_PER_DET].reshape(_NMS_SHAPE)
+        if not _dumped and float(mat[0, 0]) >= 1:
+            logger.info(
+                "nms field-layout dump (class0 count=%.0f): %s",
+                mat[0, 0],
+                mat[0, :11].tolist(),
+            )
+            _dumped = True
+        # col 0 is per-class count; detections start at col 1
+        return mat[:, 1 : 1 + _MAX_DET * _VALS_PER_DET].reshape(_NMS_SHAPE)
     return None
 
 
@@ -71,7 +81,7 @@ def parse_best_person(
     }
 
     for i in range(_MAX_DET):
-        score, y0, x0, y1, x1 = (float(v) for v in nms[person_class, i, :])
+        y0, x0, y1, x1, score = (float(v) for v in nms[person_class, i, :])
         if score < 0.01:
             continue  # empty detection slot
         # Hailo NMS may return coordinates in non-canonical order — normalize before bounds check

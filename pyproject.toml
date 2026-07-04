@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--tb=short -q"
+
+[tool.coverage.run]
+source = ["pi"]
+omit = [
+    "pi/main.py",
+    "pi/camera_server.py",
+    "pi/firmware_flash.py",
+    "pi/server.py",
+]
+# Measure coverage of pi/ even when tests live outside it
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
