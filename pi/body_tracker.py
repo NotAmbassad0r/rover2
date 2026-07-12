@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 import urllib.request
 from collections import deque
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 from turbojpeg import TJPF_RGB, TurboJPEG
 
 from body_tracker_parse import parse_best_person
+from capture_nms_fixture import save_fixture
 from follow_nav import ble_should_turn_in_place, steer_around_obstacle
 
 if TYPE_CHECKING:
@@ -20,6 +23,10 @@ if TYPE_CHECKING:
     from safety import SafetyMonitor
 
 logger = logging.getLogger(__name__)
+
+# One-shot debug tap (see BodyTracker._maybe_dump_nms): presence of this file triggers
+# a single raw-NMS-tensor dump to /tmp on the next inference cycle, then deletes itself.
+_NMS_DUMP_TRIGGER_PATH = "/tmp/rover2_dump_nms"
 
 _CONFIRM_FRAMES: int = 3
 _LOST_FRAMES: int = 4
@@ -656,6 +663,7 @@ class BodyTracker:
             logger.warning("Hailo infer returned None")
             return
         self._frames_inferred += 1
+        self._maybe_dump_nms(nms_out)
         logger.debug(
             "Hailo raw: shape=%s max=%.3f mean=%.3f nonzero=%d",
             nms_out.shape, float(nms_out.max()),
@@ -749,6 +757,49 @@ class BodyTracker:
         else:
             logger.info("Follow: cx=%.2f bbox=%.2f → HOLD", cx, bbox_w)
             self._drive(0, 0)
+
+    def _maybe_dump_nms(self, nms_out: np.ndarray) -> None:
+        """One-shot debug tap: dump the current raw NMS tensor to /tmp when triggered.
+
+        Trigger: presence of _NMS_DUMP_TRIGGER_PATH. Its (stripped) contents are used as
+        the fixture name; the file is deleted after firing so it dumps exactly once.
+        Purely observational — reuses the existing inference output, opens no new Hailo
+        device, and must never affect or crash the tracking loop.
+        """
+        if not os.path.exists(_NMS_DUMP_TRIGGER_PATH):
+            return
+        try:
+            try:
+                with open(_NMS_DUMP_TRIGGER_PATH, "r", encoding="utf-8") as f:
+                    name = f.read().strip()
+            except OSError:
+                name = ""
+            name = name or "nms_dump"
+
+            path = save_fixture(nms_out, name=name, out_dir=Path("/tmp"))
+
+            best = parse_best_person(
+                nms_out,
+                confidence=self._confidence,
+                min_box_width=self._min_box_width,
+                min_box_height=self._min_box_height,
+                min_box_area=self._min_box_area,
+            )
+            result_str = (
+                f"score={best[4]:.3f} box=(y0={best[0]:.3f}, x0={best[1]:.3f}, "
+                f"y1={best[2]:.3f}, x1={best[3]:.3f})"
+            ) if best is not None else "None"
+            logger.info(
+                "NMS dump: saved %s shape=%s size=%d parse_best_person=%s",
+                path, nms_out.shape, nms_out.size, result_str,
+            )
+        except Exception as exc:
+            logger.warning("NMS dump failed: %s", exc)
+        finally:
+            try:
+                os.remove(_NMS_DUMP_TRIGGER_PATH)
+            except OSError:
+                pass
 
 
 class _HailoInference:
