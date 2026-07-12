@@ -177,7 +177,20 @@ class TestParseBestPerson:
         Synthetic (80,501) tensor, person-class count=2, two known real detections.
         parse_best_person must return the higher-scoring detection's exact
         [y0, x0, y1, x1, score] — proving the count value at column 0 never lands
-        in any coordinate/score slot, and that field order/stride are aligned.
+        in any coordinate/score slot, and that field order/stride are aligned
+        UNDER THE ASSUMPTION that detection 1 starts immediately at raw[6] with no
+        gap (stride 5, no padding between slots).
+
+        KNOWN LIMITATION (as of this writing): a real hardware count=2 capture has
+        not yet been obtained. det0's placement at raw[1:6] is confirmed correct by
+        a real count=1 capture; det1's placement at raw[6:11] (used here and in
+        test_best_of_multiple_detections above) is NOT yet confirmed against real
+        hardware — the reported x1==count symptom could not be reproduced with this
+        no-gap layout, meaning the real multi-detection stride/padding may differ.
+        Do not treat this test passing as proof that count>=2 decodes correctly on
+        real hardware. Update this test once pi/body_tracker_parse.py's extended
+        one-shot dump (raw[0:16], gated on count>=2) captures a real multi-detection
+        frame.
         """
         mat = np.zeros((_NUM_CLASSES, _PADDED_CLASS_STRIDE), dtype=np.float32)
         count = 2.0

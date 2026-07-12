@@ -31,13 +31,16 @@ def nms_output_to_tensor(nms_output: np.ndarray) -> np.ndarray | None:
         logger.debug("nms classes with max>0.1: %s", class_maxes)
         nz = np.where(flat > 0.1)[0]
         logger.debug("nms nonzero[:10] idx=%s val=%s", nz[:10].tolist(), flat[nz[:10]].tolist())
-        if not _dumped and float(mat[_PERSON_CLASS, 0]) >= 1:
-            # Raw values BEFORE any field extraction — confirms the true on-chip layout
-            # against the count-drop + [y0,x0,y1,x1,score] assumption below.
+        if not _dumped and float(mat[_PERSON_CLASS, 0]) >= 2:
+            # count=1 layout already confirmed correct on real hardware (raw[1:6] =
+            # [y0,x0,y1,x1,score]). Multi-detection (count>=2) frames are where the
+            # x1==count symptom appears — dump count + first 3 assumed-stride-5 slots
+            # (raw[0:16]) BEFORE any field extraction, to reveal the true multi-
+            # detection stride/padding once a real count>=2 frame is inferred.
             logger.info(
-                "nms field-layout dump (person-class count=%.0f), raw[0:12]: %s",
+                "nms field-layout dump (person-class count=%.0f), raw[0:16]: %s",
                 mat[_PERSON_CLASS, 0],
-                mat[_PERSON_CLASS, :12].tolist(),
+                mat[_PERSON_CLASS, :16].tolist(),
             )
             _dumped = True
         # col 0 is per-class count; detections start at col 1
