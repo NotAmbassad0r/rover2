@@ -321,15 +321,38 @@ class TestSelfTestHook:
         assert wd.actions_used == 0
         wd._selftest_clear_task.cancel()
 
-    async def test_does_not_trigger_diagnosis(self):
+    async def test_can_be_diagnosed_like_a_real_alert(self):
+        """Diagnosis runs for the self-test alert too (it's the documented way
+        to exercise the whole path on demand) — but see the next test: even if
+        the LLM proposes a remediation for it, it must never execute."""
         agent = MagicMock()
-        agent.diagnose = AsyncMock(return_value={"text": "should not be called"})
+        agent.diagnose = AsyncMock(return_value={"text": "this is a test, no action needed",
+                                                  "action_proposal": None})
         wd = _make_watchdog(rover_agent=agent)
 
         wd.trigger_selftest()
-        await asyncio.sleep(0)
+        await _drain(wd)
 
-        agent.diagnose.assert_not_awaited()
+        agent.diagnose.assert_awaited_once()
+        wd._selftest_clear_task.cancel()
+
+    async def test_never_executes_remediation_even_if_llm_proposes_one(self, monkeypatch):
+        """The one hard rule for self-test: no real remediation, ever — even
+        with allow_llm_remediation on and a whitelisted-looking proposal."""
+        agent = MagicMock()
+        agent.diagnose = AsyncMock(return_value={
+            "text": "just restart ollama to be safe",
+            "action_proposal": {"name": "restart_service", "args": {"service": "ollama"}},
+        })
+        wd = _make_watchdog(rover_agent=agent, allow_llm_remediation=True)
+        run_fix = AsyncMock(return_value=True)
+        monkeypatch.setattr(wd, "_run_fix", run_fix)
+
+        wd.trigger_selftest()
+        await _drain(wd)
+
+        run_fix.assert_not_awaited()
+        assert wd.actions_used == 0
         wd._selftest_clear_task.cancel()
 
     async def test_idempotent_repeated_calls(self):

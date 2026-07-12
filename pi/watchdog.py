@@ -319,16 +319,19 @@ class Watchdog:
     def _maybe_diagnose(self, key: str, severity: str, message: str) -> None:
         """Fire-and-forget an advisory diagnosis for a new/escalating alert.
 
-        Never blocks the caller. Skips (logs a note, does not raise) when:
-        diagnosis is disabled, no agent is wired up, this is the synthetic
-        self-test key, a diagnosis for this key is already in flight, the
-        per-key cooldown hasn't elapsed (unless the severity just escalated),
-        or the Hailo GenAI session is currently held by voice/VLM.
+        Runs for the synthetic self-test alert too (deliberately — it's the
+        documented, safe way to exercise this path on the live Pi on demand;
+        see trigger_selftest()). Never blocks the caller. Skips (logs a note,
+        does not raise) when: diagnosis is disabled, no agent is wired up, a
+        diagnosis for this key is already in flight, the per-key cooldown
+        hasn't elapsed (unless the severity just escalated), or the Hailo
+        GenAI session is currently held by voice/VLM. Remediation is a
+        separate gate (_maybe_execute_llm_remediation) that always excludes
+        the self-test key regardless of config, so a self-test can never
+        cause a real restart even if diagnosis somehow proposes one.
         """
         if not self._llm_diagnosis_enabled or self._rover_agent is None:
             return
-        if key == _SELFTEST_KEY:
-            return  # synthetic alert — nothing real to diagnose
 
         existing_task = self._diagnosis_tasks.get(key)
         if existing_task is not None and not existing_task.done():
@@ -392,12 +395,15 @@ class Watchdog:
         self._log("INFO", key, "diagnosis", diagnosis["text"][:120])
         logger.info("Watchdog: diagnosis for %s: %s", key, diagnosis["text"][:200])
 
-        if proposal:
+        if proposal and key != _SELFTEST_KEY:
             self._maybe_execute_llm_remediation(key, proposal)
 
     def _maybe_execute_llm_remediation(self, key: str, proposal: dict[str, Any]) -> None:
         """Execute an LLM-proposed remediation ONLY if explicitly enabled AND the
         action is in the narrow whitelist AND the global action budget allows it.
+        Never called for the synthetic self-test key (see _run_diagnosis) — a
+        fake alert must never be able to cause a real restart, regardless of
+        config or of what the LLM happens to propose for it.
         Never executes reboot_pi / stop_service / ha_toggle / arbitrary commands —
         restart_service against {ollama, rover2-camera} only."""
         if not self._allow_llm_remediation:
@@ -438,8 +444,11 @@ class Watchdog:
     def trigger_selftest(self, severity: str = "warning") -> dict[str, Any]:
         """Raise a clearly-labelled, synthetic alert through the real
         _emit_alert -> _sync_emotion_state path, auto-clearing after
-        _SELFTEST_TTL_S. Never invokes any real check or remediation, and is
-        safe/idempotent to call repeatedly — a new call simply refreshes the
+        _SELFTEST_TTL_S. Also exercises the advisory diagnosis layer exactly
+        like a real alert would (respecting its cooldown/session-busy skip) —
+        but NEVER a remediation, regardless of config or what the LLM
+        proposes; see _maybe_execute_llm_remediation. Invokes no real check.
+        Safe/idempotent to call repeatedly — a new call simply refreshes the
         alert and reschedules the auto-clear."""
         if severity not in ("warning", "critical"):
             severity = "warning"
