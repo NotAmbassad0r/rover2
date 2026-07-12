@@ -116,6 +116,13 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 .dot-pg{width:6px;height:6px;border-radius:50%;
   background:rgba(255,255,255,.18);display:inline-block;transition:background .2s}
 .dot-pg.active{background:rgba(255,255,255,.82)}
+/* ── Emotion badge — small pill, top-centre, below page dots ──────────────── */
+#emotion-badge{position:fixed;top:22px;left:50%;transform:translateX(-50%);
+  z-index:16;padding:3px 10px;border-radius:10px;
+  background:rgba(13,17,23,.72);color:#8b949e;
+  font-family:'Courier New',Courier,monospace;font-size:10px;letter-spacing:.08em;
+  pointer-events:none;opacity:0;transition:opacity 200ms ease}
+#emotion-badge.visible{opacity:1}
 /* ── TTS speech bubble ───────────────────────────────────────────────────── */
 #tts-bubble{position:fixed;right:14px;top:63%;transform:translateY(-50%);
   max-width:42vw;max-height:40vh;overflow:hidden;
@@ -299,6 +306,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
 </div>
 <div id="tts-bubble"><div id="speech-bubble-text"></div></div>
 <div id="idle-hint">tap to wake</div>
+<div id="emotion-badge"></div>
 
 <div id="dbg-panel" onclick="dbgToggle()">
   <div class="dbg-row"><span class="dbg-key">MIC</span><span id="dbg-mic">pending</span></div>
@@ -306,6 +314,7 @@ canvas{display:block;image-rendering:pixelated;position:fixed;top:0;left:0;width
   <div class="dbg-row"><span class="dbg-key">VAD</span><span id="dbg-vad">idle</span></div>
   <div class="dbg-row"><span class="dbg-key">SESSION</span><span id="dbg-session">inactive</span></div>
   <div class="dbg-row"><span class="dbg-key">LAST</span><span id="dbg-last">—</span></div>
+  <div class="dbg-row"><span class="dbg-key">EMOTION</span><span id="dbg-emotion">—</span></div>
   <div class="dbg-row"><span class="dbg-key">ROUTED</span><span id="dbg-routed">—</span></div>
   <div class="dbg-row"><span class="dbg-key">WSS</span><span id="dbg-wss">disconnected</span></div>
   <div class="dbg-row"><span class="dbg-key">WDOG</span><span id="dbg-wdog">—</span></div>
@@ -375,6 +384,21 @@ let _stateAt    = 0;
 let _personDir  = 0;   // -1=left, 0=center, 1=right — drives pupil
 let _speakUntil = 0;   // monotonic ms
 let _alertMsg   = '';
+
+// ── Emotion/state layer ──────────────────────────────────────────────────────
+// Backend-computed "how is the robot doing" signal (see pi/emotion_state.py),
+// distinct from the activity-mode STATE above. Rendered as a small badge +
+// debug row; unrecognised/missing values degrade to 'idle' (badge hidden).
+const EMOTION_META = {
+  idle:          { label: '',              color: '#8b949e' },
+  attentive:     { label: 'ATTENTIVE',     color: '#58a6ff' },
+  acknowledging: { label: 'ACKNOWLEDGING', color: '#3fb950' },
+  working:       { label: 'WORKING',       color: '#3a8fc8' },
+  concerned:     { label: 'CONCERNED',     color: '#d29922' },
+  alert:         { label: 'ALERT',         color: '#f85149' },
+};
+const EMOTION_ACK_PHRASES = ['Sure.', 'On it.', 'Right away, sir.', 'One moment.'];
+let _lastEmotionState = null;
 
 function setState(s) {
   if (s === faceState) return;
@@ -697,6 +721,28 @@ function _applyTelemetry(d) {
     else if (ps === 'serial_error') { motorEl.textContent = 'serial-err'; motorEl.style.color = '#f85149'; }
     else                       { motorEl.textContent = 'unknown';    motorEl.style.color = ''; }
   }
+
+  // Emotion/state layer — degrade to 'idle' if unrecognised or missing.
+  const emotion = Object.prototype.hasOwnProperty.call(EMOTION_META, d.emotion_state)
+    ? d.emotion_state : 'idle';
+  const emotionMeta = EMOTION_META[emotion];
+  const emotionEl = document.getElementById('dbg-emotion');
+  if (emotionEl) { emotionEl.textContent = emotion; emotionEl.style.color = emotionMeta.color; }
+  const badgeEl = document.getElementById('emotion-badge');
+  if (badgeEl) {
+    if (emotionMeta.label) {
+      badgeEl.textContent = emotionMeta.label;
+      badgeEl.style.color = emotionMeta.color;
+      badgeEl.classList.add('visible');
+    } else {
+      badgeEl.classList.remove('visible');
+    }
+  }
+  // Speak a short acknowledgement once, on the edge into 'acknowledging'.
+  if (emotion === 'acknowledging' && _lastEmotionState !== 'acknowledging') {
+    _ttsSpeak(EMOTION_ACK_PHRASES[Math.floor(Math.random() * EMOTION_ACK_PHRASES.length)]);
+  }
+  _lastEmotionState = emotion;
 
   // SELF-HEALED: watchdog acted within last 60 s and system is now IDLE
   const _wdTs = d.watchdog_last_action_ts || 0;
@@ -1761,6 +1807,8 @@ function _gotoPage(page) {
   _canvasVisible = onFace;
   document.getElementById('dbg-panel').style.display = onFace ? '' : 'none';
   document.getElementById('ui').style.display        = onFace ? '' : 'none';
+  const emotionBadgeEl = document.getElementById('emotion-badge');
+  if (emotionBadgeEl) emotionBadgeEl.style.display = onFace ? '' : 'none';
   if (!onFace) { clearTimeout(_ttsBubbleTimer); clearTimeout(_ttsBubbleFadeTimer); const b = document.getElementById('tts-bubble'); if (b) b.classList.remove('visible'); }
   // MJPEG — load only on PAGE 1 (saves bandwidth)
   const cam = document.getElementById('cam-feed');

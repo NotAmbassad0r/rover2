@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import emotion_state
 from arm_control import arm_pwm
 from body_tracker import BodyTracker
 from megapi import MegaPiBridge
@@ -1056,6 +1057,7 @@ def create_app(
         wake = matched is not None
         if wake:
             logger.info("voice/wake: TRIGGERED matched=%r transcript=%r", matched, transcript)
+            emotion_state.on_wake_word()
         else:
             logger.info("voice/wake: no match transcript=%r", transcript)
         return JSONResponse({"wake": wake, "transcript": transcript})

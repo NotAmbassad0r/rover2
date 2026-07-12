@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import emotion_state
+
 logger = logging.getLogger(__name__)
 
 _LOG_PATH   = Path("/opt/rover2/data/watchdog.log")
@@ -257,12 +259,24 @@ class Watchdog:
         self._persistent_alerts.append(alert)
         level = logging.CRITICAL if severity == "critical" else logging.WARNING
         logger.log(level, "Watchdog alert [%s] %s — action: %s", key, message, action_taken)
+        self._sync_emotion_state()
 
     def _clear_alert(self, key: str) -> None:
         self._persistent_alerts = [
             a for a in self._persistent_alerts
             if a.get("metric") != f"watchdog_{key}"
         ]
+        self._sync_emotion_state()
+
+    def _sync_emotion_state(self) -> None:
+        """Reflect the worst active persistent-alert severity into the shared
+        emotion state — critical wins over warning, no alerts clears it."""
+        if any(a.get("severity") == "critical" for a in self._persistent_alerts):
+            emotion_state.on_watchdog_alert()
+        elif self._persistent_alerts:
+            emotion_state.on_watchdog_concern()
+        else:
+            emotion_state.on_watchdog_clear()
 
     # ── Logging ─────────────────────────────────────────────────────────────
 

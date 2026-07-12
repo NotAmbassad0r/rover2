@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+import emotion_state
 from body_tracker import BodyTracker
 from megapi import MegaPiBridge
 from safety import SafetyMonitor
@@ -44,6 +45,7 @@ def build_telemetry(
         "ultrasonic_state": megapi.ultrasonic_state,
         "ultrasonic_fault_count": megapi.ultrasonic_fault_count,
         "uptime_s": int(time.monotonic() - start_monotonic),
+        "emotion_state": emotion_state.current(),
     }
     if safety_monitor is not None:
         payload["safety_enabled"] = True

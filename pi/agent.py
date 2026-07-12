@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+import emotion_state
 from agent_knowledge import ROVER2_KNOWLEDGE
 from agent_solutions import build_solutions
 from ha_client import HAClient
@@ -1544,7 +1545,7 @@ class RoverAgent:
         if match:
             tool_name, tool_args = match
             t0 = time.monotonic()
-            result = await self._run_tool(tool_name, tool_args)
+            result = await self._run_tool_with_reaction(tool_name, tool_args)
             ms = int((time.monotonic() - t0) * 1000)
             tool_log = [{"name": tool_name, "args": tool_args, "result": result, "duration_ms": ms}]
             logger.info("Agent: spoken fast-path %s → %d ms", tool_name, ms)
@@ -1873,7 +1874,7 @@ class RoverAgent:
                     )
 
                 t0     = time.monotonic()
-                result = await self._run_tool(name, args)
+                result = await self._run_tool_with_reaction(name, args)
                 ms     = int((time.monotonic() - t0) * 1000)
                 tool_log.append({"name": name, "args": args, "result": result, "duration_ms": ms})
                 logger.info("Agent tool %s → %d ms", name, ms)
@@ -1886,7 +1887,7 @@ class RoverAgent:
         return AgentTurn("(max tool rounds reached)", tool_log, None)
 
     async def execute_action(self, name: str, args: dict) -> dict[str, Any]:
-        return await self._run_tool(name, args)
+        return await self._run_tool_with_reaction(name, args)
 
     def get_status(self) -> dict[str, Any]:
         # Report the effective backend: if hailo is configured but currently down,
@@ -2044,7 +2045,7 @@ class RoverAgent:
                 ], None)
 
             t0     = time.monotonic()
-            data   = await self._run_tool(tool_name, {})
+            data   = await self._run_tool_with_reaction(tool_name, {})
             ms     = int((time.monotonic() - t0) * 1000)
             reply  = formatter(data)
             logger.info("Agent fast-path: %s → %d ms", tool_name, ms)
@@ -2053,6 +2054,21 @@ class RoverAgent:
         return None
 
     # ── Tool implementations ────────────────────────────────────────────────
+
+    async def _run_tool_with_reaction(self, name: str, args: dict) -> Any:
+        """Wrap _run_tool with emotion-state acknowledgement/working bookkeeping.
+
+        Does not change what the tool does, nor its result — only brackets the
+        call with state transitions so the face can react: acknowledging (brief,
+        before dispatch) -> working (while it runs) -> cleared (back to
+        idle/attentive) once done, success or failure.
+        """
+        emotion_state.on_tool_acknowledging()
+        emotion_state.on_tool_working()
+        try:
+            return await self._run_tool(name, args)
+        finally:
+            emotion_state.on_tool_done()
 
     async def _run_tool(self, name: str, args: dict) -> Any:
         try:
@@ -2412,7 +2428,7 @@ class RoverAgent:
 
                 # ── Execute tool (async, session held open to avoid reopen cost) ──
                 t0 = time.monotonic()
-                result = await self._run_tool(tool_name, tool_args)
+                result = await self._run_tool_with_reaction(tool_name, tool_args)
                 ms = int((time.monotonic() - t0) * 1000)
                 tool_log = [{"name": tool_name, "args": tool_args, "result": result, "duration_ms": ms}]
                 self._push_tool_history(tool_name, ms)

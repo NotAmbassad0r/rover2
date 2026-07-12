@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import numpy as np
 from turbojpeg import TJPF_RGB, TurboJPEG
 
+import emotion_state
 from body_tracker_parse import parse_best_person
 from capture_nms_fixture import save_fixture
 from follow_nav import ble_should_turn_in_place, steer_around_obstacle
@@ -397,8 +398,10 @@ class BodyTracker:
             # Just lost — start the BLE handoff timer
             self._camera_lost_at = time.monotonic()
             self._ble_rssi_history.clear()
+            emotion_state.on_person_lost()
         elif not was_tracked and self._person_tracked:
             # Just reacquired — cancel BLE
+            emotion_state.on_person_detected()
             if self._ble_active:
                 logger.info("BLE follow: camera re-acquired, returning to camera follow")
             self._ble_active = False
