@@ -25,12 +25,13 @@ _EXPECTED_DENSE_SIZE = 80 * 100 * 5   # 40000
 _EXPECTED_PADDED_SIZE = 80 * 501       # 40080
 
 
-def save_fixture(nms_output: np.ndarray, name: str = "live_sample") -> Path:
+def save_fixture(nms_output: np.ndarray, name: str = "live_sample", out_dir: Path | None = None) -> Path:
     """Validate and persist one NMS tensor.
 
     Args:
         nms_output: Raw Hailo NMS output (1-D or any shape; will be ravelled).
-        name:       Output file stem — saved as tests/fixtures/nms_{name}.npy.
+        name:       Output file stem — saved as {out_dir}/nms_{name}.npy.
+        out_dir:    Destination directory; defaults to tests/fixtures/ (repo-relative).
 
     Returns:
         Path to the saved .npy file.
@@ -44,8 +45,9 @@ def save_fixture(nms_output: np.ndarray, name: str = "live_sample") -> Path:
             f"Unexpected NMS output size {arr.size}; "
             f"expected {_EXPECTED_DENSE_SIZE} (dense) or {_EXPECTED_PADDED_SIZE} (padded-501)."
         )
-    _FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _FIXTURE_DIR / f"nms_{name}.npy"
+    target_dir = out_dir if out_dir is not None else _FIXTURE_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"nms_{name}.npy"
     np.save(path, arr)
     print(f"[capture_nms_fixture] saved {arr.size} floats → {path}")
     return path
