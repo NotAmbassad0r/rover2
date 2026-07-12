@@ -31,11 +31,13 @@ def nms_output_to_tensor(nms_output: np.ndarray) -> np.ndarray | None:
         logger.debug("nms classes with max>0.1: %s", class_maxes)
         nz = np.where(flat > 0.1)[0]
         logger.debug("nms nonzero[:10] idx=%s val=%s", nz[:10].tolist(), flat[nz[:10]].tolist())
-        if not _dumped and float(mat[0, 0]) >= 1:
+        if not _dumped and float(mat[_PERSON_CLASS, 0]) >= 1:
+            # Raw values BEFORE any field extraction — confirms the true on-chip layout
+            # against the count-drop + [y0,x0,y1,x1,score] assumption below.
             logger.info(
-                "nms field-layout dump (class0 count=%.0f): %s",
-                mat[0, 0],
-                mat[0, :11].tolist(),
+                "nms field-layout dump (person-class count=%.0f), raw[0:12]: %s",
+                mat[_PERSON_CLASS, 0],
+                mat[_PERSON_CLASS, :12].tolist(),
             )
             _dumped = True
         # col 0 is per-class count; detections start at col 1

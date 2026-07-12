@@ -171,6 +171,33 @@ class TestParseBestPerson:
         assert result is not None
         assert abs(result[4] - 0.88) < 1e-4, "highest-score detection should win"
 
+    def test_count_does_not_leak_into_coordinates(self):
+        """Regression for the reported x1==count symptom (count=2 investigation).
+
+        Synthetic (80,501) tensor, person-class count=2, two known real detections.
+        parse_best_person must return the higher-scoring detection's exact
+        [y0, x0, y1, x1, score] — proving the count value at column 0 never lands
+        in any coordinate/score slot, and that field order/stride are aligned.
+        """
+        mat = np.zeros((_NUM_CLASSES, _PADDED_CLASS_STRIDE), dtype=np.float32)
+        count = 2.0
+        mat[PERSON_CLASS, 0] = count
+        det0 = (0.2, 0.3, 0.6, 0.5, 0.85)   # higher score — expected winner
+        det1 = (0.1, 0.1, 0.3, 0.3, 0.55)
+        mat[PERSON_CLASS, 1:6] = det0
+        mat[PERSON_CLASS, 6:11] = det1
+
+        result = parse_best_person(mat.ravel(), confidence=0.40)
+        assert result is not None, "a valid person detection should be found"
+        y0, x0, y1, x1, score = result
+
+        for name, val, expected in zip(("y0", "x0", "y1", "x1", "score"), result, det0):
+            assert abs(val - expected) < 1e-4, f"{name} expected {expected} got {val}"
+            assert abs(val - count) > 1e-6, f"{name}={val} equals the class count ({count}) — count leaked into a field"
+
+        assert 0.0 <= y0 < y1 <= 1.05
+        assert 0.0 <= x0 < x1 <= 1.05
+
     def test_non_person_class_ignored(self):
         """Detections in other classes must not be returned as persons."""
         mat = np.zeros((_NUM_CLASSES, _PADDED_CLASS_STRIDE), dtype=np.float32)
