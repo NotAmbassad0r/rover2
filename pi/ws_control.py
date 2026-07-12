@@ -61,6 +61,8 @@ def build_telemetry(
         payload["person_detected"] = state["person_detected"]
         payload["person_bbox"] = state.get("person_bbox")
         payload["person_conf"] = state.get("person_conf", 0.0)
+        payload["person_cx"] = state.get("person_cx")
+        payload["follow_decision"] = state.get("follow_decision", "NONE")
         payload["ble_active"] = state.get("ble_active", False)
         payload["ble_follow_enabled"] = state.get("ble_follow_enabled", True)
         payload["follow_mode"] = state.get("follow_mode", "fused")

@@ -96,6 +96,8 @@ class BodyTracker:
         self._person_detected = False
         self._last_bbox: tuple | None = None   # (y0, x0, y1, x1) normalised 0-1
         self._last_conf: float = 0.0
+        self._last_cx: float | None = None     # normalised target centre x, for HUD only
+        self._last_decision: str = "NONE"      # FWD | LEFT | RIGHT | STOP | NONE — for HUD only
         self._person_tracked = False
         self._seen_streak = 0
         self._lost_streak = 0
@@ -233,6 +235,8 @@ class BodyTracker:
             "person_detected": self._person_detected,
             "person_bbox": list(self._last_bbox) if self._last_bbox else None,
             "person_conf": round(self._last_conf, 2),
+            "person_cx": round(self._last_cx, 3) if self._last_cx is not None else None,
+            "follow_decision": self._last_decision,
             "person_tracked": self._person_tracked,
             "last_error": self._last_error,
             "camera_url": self._camera_url,
@@ -368,6 +372,8 @@ class BodyTracker:
         self._ble_active = False
         self._camera_lost_at = 0.0
         self._ble_rssi_history.clear()
+        self._last_cx = None
+        self._last_decision = "NONE"
 
     def _update_person_presence(self, seen: bool) -> None:
         was_tracked = self._person_tracked
@@ -700,9 +706,11 @@ class BodyTracker:
         if best is not None:
             self._last_bbox = (best[0], best[1], best[2], best[3])
             self._last_conf = best[4]
+            self._last_cx = (best[1] + best[3]) / 2.0
         else:
             self._last_bbox = None
             self._last_conf = 0.0
+            self._last_cx = None
 
         # Fire external detection callback (e.g. guard mode) — must be non-blocking
         if best is not None:
@@ -716,12 +724,14 @@ class BodyTracker:
                     pass
 
         if detect_only:
+            self._last_decision = "NONE"   # HUD bookkeeping only — detect-only never drives
             return
 
         with self._lock:
             follow_mode = self._follow_mode
 
         if not self._person_tracked or best is None:
+            self._last_decision = "NONE"   # HUD bookkeeping only — no camera-driven decision
             if (
                 follow_mode != "camera"          # camera mode: never activate BLE
                 and self._ble is not None
@@ -747,15 +757,19 @@ class BodyTracker:
 
         if cx < self._left_bound:
             logger.info("Follow: cx=%.2f → LEFT  (speed=%d)", cx, self._turn_speed)
+            self._last_decision = "LEFT"   # HUD bookkeeping only
             self._follow_drive("left", self._turn_speed, person_cx=cx)
         elif cx > self._right_bound:
             logger.info("Follow: cx=%.2f → RIGHT (speed=%d)", cx, self._turn_speed)
+            self._last_decision = "RIGHT"   # HUD bookkeeping only
             self._follow_drive("right", self._turn_speed, person_cx=cx)
         elif bbox_w < self._target_bbox_width:
             logger.info("Follow: cx=%.2f bbox=%.2f → FWD  (speed=%d)", cx, bbox_w, self._forward_speed)
+            self._last_decision = "FWD"   # HUD bookkeeping only
             self._follow_drive("forward", self._forward_speed, person_cx=cx)
         else:
             logger.info("Follow: cx=%.2f bbox=%.2f → HOLD", cx, bbox_w)
+            self._last_decision = "STOP"   # HUD bookkeeping only — centred + at target distance
             self._drive(0, 0)
 
     def _maybe_dump_nms(self, nms_out: np.ndarray) -> None:
