@@ -29,6 +29,28 @@ logger = logging.getLogger(__name__)
 # a single raw-NMS-tensor dump to /tmp on the next inference cycle, then deletes itself.
 _NMS_DUMP_TRIGGER_PATH = "/tmp/rover2_dump_nms"
 
+# ── [PIPEDIAG] temporary detection-pipeline diagnostic instrumentation ─────────
+# Guarded, off by default, same trigger-file pattern as _NMS_DUMP_TRIGGER_PATH
+# above — presence of this file enables verbose [PIPEDIAG] stage-boundary
+# logging (rate-limited to ~once/sec per stage); absence is the normal, silent
+# default. Purely observational, no behaviour change. Remove after the
+# diagnosis is done; see scripts/diag_detection_pipeline.py.
+_PIPEDIAG_TRIGGER_PATH = "/tmp/rover2_pipediag"
+_pipediag_last_log_ts: dict[str, float] = {}
+
+
+def _pipediag_on() -> bool:
+    return os.path.exists(_PIPEDIAG_TRIGGER_PATH)
+
+
+def _pipediag_log(stage: str, msg: str) -> None:
+    """Rate-limited (~1/s per stage) [PIPEDIAG] log line."""
+    now = time.monotonic()
+    last = _pipediag_last_log_ts.get(stage, 0.0)
+    if now - last >= 1.0:
+        _pipediag_last_log_ts[stage] = now
+        logger.info("[PIPEDIAG] %s: %s", stage, msg)
+
 _CONFIRM_FRAMES: int = 3
 _LOST_FRAMES: int = 4
 _DRIVE_MIN_INTERVAL_S: float = 0.25
@@ -615,6 +637,10 @@ class BodyTracker:
                 jpg = buf[a : b + 2]
                 buf = buf[b + 2 :]
 
+                if _pipediag_on():
+                    _pipediag_log("b_frame_acquisition",
+                                  f"jpeg bytes acquired, len={len(jpg)}")
+
                 # Skip dark transition frames immediately after stream reconnect.
                 if _warmup_frames > 0:
                     if _warmup_frames == 2:
@@ -638,8 +664,16 @@ class BodyTracker:
                     # TurboJPEG DCT-domain scaling: ~4× faster than cv2.imdecode at full res.
                     # Decode directly to RGB — eliminates the subsequent cvtColor step.
                     frame = self._tjpeg.decode(jpg, pixel_format=TJPF_RGB, scaling_factor=(1, 2))
-                except Exception:
+                except Exception as exc:
+                    if _pipediag_on():
+                        _pipediag_log("c_turbojpeg_decode", f"decode RAISED: {exc!r}")
                     continue
+                if _pipediag_on():
+                    _pipediag_log(
+                        "c_turbojpeg_decode",
+                        f"shape={frame.shape} dtype={frame.dtype} "
+                        f"all_zero={bool(np.all(frame == 0))}",
+                    )
                 self._process_frame(frame)
         finally:
             try:
@@ -659,9 +693,29 @@ class BodyTracker:
             return
 
         rgb = cv2.resize(frame, (640, 640)).astype(np.uint8)
+        if _pipediag_on():
+            _expected_shape = None
+            try:
+                _expected_shape = self._hailo._infer_model.input().shape  # noqa: SLF001
+            except Exception as exc:
+                _expected_shape = f"<unavailable: {exc!r}>"
+            _pipediag_log(
+                "d_preprocess",
+                f"handed_to_hailo shape={rgb.shape} dtype={rgb.dtype} "
+                f"model_expected_input_shape={_expected_shape}",
+            )
         _t_infer = time.monotonic()
         nms_out = self._hailo.infer(rgb)
         _infer_ms = int((time.monotonic() - _t_infer) * 1000)
+        if _pipediag_on():
+            if nms_out is None:
+                _pipediag_log("e_hailo_inference", "infer() returned None")
+            else:
+                _pipediag_log(
+                    "e_hailo_inference",
+                    f"shape={nms_out.shape} dtype={nms_out.dtype} "
+                    f"all_zero={bool(np.all(nms_out == 0))} infer_ms={_infer_ms}",
+                )
         now_fps = time.monotonic()
         if self._last_frame_ts > 0.0:
             dt = now_fps - self._last_frame_ts
@@ -694,6 +748,13 @@ class BodyTracker:
             min_box_height=self._min_box_height,
             min_box_area=self._min_box_area,
         )
+        if _pipediag_on():
+            _flat = nms_out.ravel()
+            _pipediag_log(
+                "f_raw_nms_to_parser",
+                f"shape={nms_out.shape} size={_flat.size} "
+                f"empty={bool(np.all(_flat == 0))} max={float(_flat.max()):.4f}",
+            )
         best = parse_best_person(nms_out, confidence=self._confidence, **_box_kwargs)
         raw_best = parse_best_person(nms_out, confidence=0.0, **_box_kwargs)
         now = time.monotonic()
@@ -852,6 +913,19 @@ class _HailoInference:
         self._configured = self._infer_model.configure()
         self._out_name = self._infer_model.output_names[0]
         self._out_shape = self._infer_model.output(self._out_name).shape
+
+        if _pipediag_on():
+            try:
+                import hailo_platform as _hp  # noqa: E402
+                _hp_version = getattr(_hp, "__version__", "<unknown>")
+            except Exception as exc:
+                _hp_version = f"<unavailable: {exc!r}>"
+            _pipediag_log(
+                "e_hailo_inference_init",
+                f"loaded hef={hef_path} group_id={group_id} "
+                f"input_shape={self._infer_model.input().shape} "
+                f"output_shape={self._out_shape} hailo_platform_version={_hp_version}",
+            )
 
     def infer(self, rgb_640: np.ndarray) -> np.ndarray | None:
         out_buf = np.zeros(self._out_shape, dtype=np.float32)

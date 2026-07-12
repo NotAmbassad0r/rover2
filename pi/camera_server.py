@@ -24,6 +24,7 @@ import socketserver
 import sys
 import threading
 import time
+from pathlib import Path
 
 import cv2
 from turbojpeg import TurboJPEG
@@ -35,6 +36,21 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [rover2-camera] %(message)s",
 )
 logger = logging.getLogger("rover2-camera")
+
+# ── [PIPEDIAG] temporary detection-pipeline diagnostic instrumentation ───────
+# Guarded, off by default, no service restart/env var needed to toggle — same
+# established trigger-file pattern as the existing NMS dump tap
+# (_NMS_DUMP_TRIGGER_PATH in body_tracker.py): presence of this file enables
+# verbose [PIPEDIAG] logging; absence is the normal, silent default. Purely
+# observational — no behaviour changes. Remove after the diagnosis is done;
+# see scripts/diag_detection_pipeline.py for the runner that uses this.
+_PIPEDIAG_TRIGGER_PATH = Path("/tmp/rover2_pipediag")
+_pipediag_frame_count = 0
+_pipediag_last_log_ts = 0.0
+
+
+def _pipediag_on() -> bool:
+    return _PIPEDIAG_TRIGGER_PATH.exists()
 
 # ── Config from environment (same vars as v1 rover-camera.service) ───────────
 
@@ -174,6 +190,17 @@ def _capture_loop(cap: cv2.VideoCapture) -> None:
             continue
 
         _publish_frame(jpeg)
+
+        if _pipediag_on():
+            global _pipediag_frame_count, _pipediag_last_log_ts
+            _pipediag_frame_count += 1
+            _now_pd = time.monotonic()
+            if _now_pd - _pipediag_last_log_ts >= 1.0:
+                _pipediag_last_log_ts = _now_pd
+                logger.info(
+                    "[PIPEDIAG] camera: frame#%d shape=%s dtype=%s jpeg_bytes=%d fps=%.1f",
+                    _pipediag_frame_count, frame.shape, frame.dtype, len(jpeg), _actual_fps,
+                )
 
         now     = time.monotonic()
         elapsed = max(now - last_ts, 1e-6)
