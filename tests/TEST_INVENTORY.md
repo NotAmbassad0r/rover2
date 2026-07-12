@@ -304,3 +304,19 @@ These modules contain testable logic but lack a hardware-injection seam. Filed f
 | `test_safety.py` | safety | ✅ |
 | `test_voice_routing.py` | voice_engine (pure parts) | ✅ |
 | `test_watchdog.py` | watchdog | ✅ |
+
+---
+
+## Test Environment Notes
+
+- **Python 3.14 no longer auto-creates an event loop.** Async tests that touch
+  `GuardController._transition` (and anything else calling `asyncio.get_event_loop()`
+  implicitly) must be `async def` test functions (pytest-asyncio, `asyncio_mode = "auto"`
+  per `pyproject.toml`) — a plain `def` test will no longer get a loop for free.
+- **`watchdog._LOG_PATH` must be patched to `tmp_path`** in watchdog tests — there is no
+  `/opt/rover2` on the dev machine, so the real default path is not writable/creatable here.
+- **NMS fixtures are captured via the in-service dump tap**
+  (`BodyTracker._maybe_dump_nms` in `pi/body_tracker.py`, triggered by
+  `/tmp/rover2_dump_nms`), not via the standalone `pi/capture_live_nms.py` script — see
+  `docs/HAILO_NOTES.md` for why the standalone script hits a Hailo driver/library version
+  mismatch when run as a separate process.

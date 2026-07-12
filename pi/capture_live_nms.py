@@ -50,6 +50,21 @@ _HAILO_BUSY_MSG = (
     " (then re-run this, then: sudo systemctl start rover2-api)"
 )
 
+_HAILO_VERSION_MISMATCH_MSG = (
+    "Hailo driver/library version mismatch (HAILO_INVALID_DRIVER_VERSION) — this is not "
+    "device contention. Likely cause: this script is running under a different libhailort "
+    "than rover2-api uses (rover2-api's venv is linked to the hand-built /usr/local/lib/"
+    "libhailort.so.5.2.0; the system dpkg packages are 5.1.1). Re-run via the same "
+    "interpreter/library rover2-api uses: /opt/rover2/venv/bin/python3 pi/capture_live_nms.py ..."
+)
+
+
+def _is_driver_version_mismatch(exc: Exception) -> bool:
+    """True if the failure looks like a Hailo driver/library version mismatch (error 76),
+    as opposed to the device simply being held open by another process."""
+    msg = str(exc).upper()
+    return "INVALID_DRIVER_VERSION" in msg or "DRIVER_VERSION" in msg or "(76)" in msg
+
 
 def _load_body_tracker_config() -> dict:
     """Minimal YAML read — same pattern pi/main.py uses to load config.yaml."""
@@ -152,7 +167,10 @@ def main() -> int:
     try:
         hailo_inf = _HailoInference(hef_path, group_id)
     except Exception as exc:
-        print(_HAILO_BUSY_MSG)
+        if _is_driver_version_mismatch(exc):
+            print(_HAILO_VERSION_MISMATCH_MSG)
+        else:
+            print(_HAILO_BUSY_MSG)
         print(f"  (underlying error: {exc})")
         return 1
 
