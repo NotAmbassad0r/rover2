@@ -181,6 +181,16 @@ watchdog:
   cert_critical_days: 7         # days until expiry → attempt renew
   temp_follow_disable_c: 85     # °C → disable FOLLOW/DETECT via body_tracker
   temp_critical_c: 90           # °C → speak TTS warning (overrides old temp_critical_c)
+  # ── LLM diagnosis layer — strictly advisory, see pi/watchdog.py ─────────────
+  llm_diagnosis:
+    enabled: true                    # plain-language explanation on new/escalating alerts;
+                                      # non-blocking, skips cleanly if Hailo session is busy
+    cooldown_s: 300                  # min seconds between diagnosis attempts for the same check
+    allow_llm_remediation: false     # if true: LLM may request restart_service on
+                                      # {ollama, rover2-camera} ONLY, still gated by the
+                                      # existing action budget. Recommended: keep false —
+                                      # unlike the agent's confirm-gated dangerous tools,
+                                      # this would execute with no human in the loop.
 
 firmware:
   hex_path: /tmp/rover2_firmware.hex

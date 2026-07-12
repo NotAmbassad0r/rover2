@@ -2476,6 +2476,33 @@ class RoverAgent:
             finally:
                 await asyncio.get_event_loop().run_in_executor(None, llm.release)
 
+    async def diagnose(self, prompt: str) -> dict[str, Any] | None:
+        """Background, advisory diagnosis for a watchdog alert.
+
+        Reuses the exact same hailo tool-calling path a live "what's wrong"
+        query would use — the model may call suggest_fix/get_diagnostics/etc
+        itself and narrate the result. Never called by a live user; called
+        by the watchdog on a new/escalating alert, so it must never fall
+        back to CPU Ollama (too slow/heavy for a background advisory pass)
+        and must never wait for a busy Hailo session — the caller is
+        expected to check hailo_session.session_holder() itself, but this
+        method double-checks defensively since it may be called directly.
+
+        Returns None if the Hailo LLM path is unavailable/busy/disabled —
+        callers must treat that as "diagnosis skipped", not an error.
+        """
+        from hailo_session import session_holder
+
+        if session_holder() is not None:
+            return None
+        if not self._hailo_tool_calling or not self._hailo_llm_available():
+            return None
+        ht_result = await self._call_hailo_with_tools(prompt, lang="en", spoken=True)
+        if ht_result is None:
+            return None
+        reply, tool_log, action_proposal = ht_result
+        return {"text": reply, "tool_log": tool_log, "action_proposal": action_proposal}
+
     async def _call_model(self, messages: list[dict]) -> dict | None:
         self._last_model_error = None
 

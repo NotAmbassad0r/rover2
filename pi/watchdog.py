@@ -34,6 +34,17 @@ _DEPLOY_GUARD = Path("/tmp/watchdog_deployed")
 _RETRY_WINDOW_S      = 600   # per-check rate-limit window: 10 minutes
 _MAX_RETRIES_PER_CHECK = 3   # attempts before emitting persistent alert
 
+_SELFTEST_KEY     = "selftest"
+_SELFTEST_TTL_S   = 8.0   # auto-clear window for the synthetic self-test alert
+
+# LLM-requested remediation whitelist — deliberately much narrower than the
+# agent's own dangerous-tool set (no reboot_pi, no stop_service, no ha_toggle):
+# only a restart of one of these two already-existing, already-safe targets,
+# using the exact same command _check_existing_ollama_runners/_check_services
+# already run elsewhere in this file. Gated by watchdog.llm_diagnosis.
+# allow_llm_remediation (default False) AND the existing global _can_act() budget.
+_LLM_REMEDIATION_ALLOWED_SERVICES = frozenset({"ollama", "rover2-camera"})
+
 
 class Watchdog:
     def __init__(
@@ -43,6 +54,7 @@ class Watchdog:
         body_tracker: Any = None,
         safety_monitor: Any = None,
         megapi: Any = None,
+        rover_agent: Any = None,
     ) -> None:
         cfg = config.get("watchdog", {})
         self._enabled          = bool(cfg.get("enabled", True))
@@ -67,11 +79,25 @@ class Watchdog:
         self._temp_follow_disable_c = float(cfg.get("temp_follow_disable_c", 85.0))
         self._temp_tts_c          = float(cfg.get("temp_critical_c", 90.0))
 
+        # ── LLM diagnosis layer — strictly advisory, see _maybe_diagnose() ──────
+        llm_cfg = cfg.get("llm_diagnosis", {})
+        self._llm_diagnosis_enabled     = bool(llm_cfg.get("enabled", True))
+        self._llm_diagnosis_cooldown_s  = float(llm_cfg.get("cooldown_s", 300))
+        # Default OFF — an LLM-requested remediation runs with no human confirmation.
+        self._allow_llm_remediation     = bool(llm_cfg.get("allow_llm_remediation", False))
+        self._diagnosed_at: dict[str, float]     = {}   # key -> monotonic ts of last ATTEMPT
+        self._diagnosed_severity: dict[str, str] = {}   # key -> severity at last diagnosis
+        self._alert_diagnoses: dict[str, dict]   = {}   # key -> {"text", "diagnosed_at", ...}
+        self._diagnosis_tasks: dict[str, asyncio.Task] = {}    # key -> in-flight diagnosis task
+        self._remediation_tasks: dict[str, asyncio.Task] = {}  # key -> in-flight LLM-remediation task
+        self._selftest_clear_task: asyncio.Task | None = None
+
         # Component refs (injected by server.py)
         self._audio_router  = audio_router
         self._body_tracker  = body_tracker
         self._safety_monitor = safety_monitor
         self._megapi        = megapi
+        self._rover_agent   = rover_agent
 
         # Global action window (existing behaviour)
         self._actions: list[float] = []
@@ -256,10 +282,15 @@ class Watchdog:
             a for a in self._persistent_alerts
             if a.get("metric") != f"watchdog_{key}"
         ]
+        # Re-attach a diagnosis computed for this key on a prior cycle, if any —
+        # covers the case where _run_diagnosis() finishes between emits.
+        if key in self._alert_diagnoses:
+            alert["diagnosis"] = self._alert_diagnoses[key]
         self._persistent_alerts.append(alert)
         level = logging.CRITICAL if severity == "critical" else logging.WARNING
         logger.log(level, "Watchdog alert [%s] %s — action: %s", key, message, action_taken)
         self._sync_emotion_state()
+        self._maybe_diagnose(key, severity, message)
 
     def _clear_alert(self, key: str) -> None:
         self._persistent_alerts = [
@@ -277,6 +308,163 @@ class Watchdog:
             emotion_state.on_watchdog_concern()
         else:
             emotion_state.on_watchdog_clear()
+
+    # ── LLM diagnosis layer — advisory only, see class docstring in Step 1 report ──
+    # The deterministic 30s cycle and its auto-remediation above are entirely
+    # independent of everything below: this layer only ever adds a plain-language
+    # note (and optionally, behind a config flag, a whitelisted remediation) to an
+    # alert that has ALREADY been raised/handled by the code above. It never gates
+    # or delays _emit_alert/_clear_alert/_run_fix in any way.
+
+    def _maybe_diagnose(self, key: str, severity: str, message: str) -> None:
+        """Fire-and-forget an advisory diagnosis for a new/escalating alert.
+
+        Never blocks the caller. Skips (logs a note, does not raise) when:
+        diagnosis is disabled, no agent is wired up, this is the synthetic
+        self-test key, a diagnosis for this key is already in flight, the
+        per-key cooldown hasn't elapsed (unless the severity just escalated),
+        or the Hailo GenAI session is currently held by voice/VLM.
+        """
+        if not self._llm_diagnosis_enabled or self._rover_agent is None:
+            return
+        if key == _SELFTEST_KEY:
+            return  # synthetic alert — nothing real to diagnose
+
+        existing_task = self._diagnosis_tasks.get(key)
+        if existing_task is not None and not existing_task.done():
+            return  # already diagnosing this key
+
+        escalating = (
+            key in self._diagnosed_severity
+            and self._diagnosed_severity[key] != "critical"
+            and severity == "critical"
+        )
+        is_new = key not in self._diagnosed_severity
+        if not is_new and not escalating:
+            last = self._diagnosed_at.get(key, 0.0)
+            if time.monotonic() - last < self._llm_diagnosis_cooldown_s:
+                return  # same instance, still in cooldown
+
+        try:
+            from hailo_session import session_holder
+        except ImportError:
+            return
+        if session_holder() is not None:
+            self._log("INFO", key, "diagnosis_skipped", "hailo session busy (voice/VLM)")
+            return  # do NOT record an attempt — allow retry next cycle, no cooldown burned
+
+        self._diagnosed_at[key] = time.monotonic()
+        self._diagnosed_severity[key] = severity
+        self._diagnosis_tasks[key] = asyncio.create_task(
+            self._run_diagnosis(key, severity, message)
+        )
+
+    async def _run_diagnosis(self, key: str, severity: str, message: str) -> None:
+        prompt = f"Watchdog alert ({severity}): {message}. Diagnose the likely cause and suggest a fix."
+        try:
+            result = await asyncio.wait_for(self._rover_agent.diagnose(prompt), timeout=25.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Watchdog: diagnosis error for %s: %s", key, exc)
+            return
+
+        if result is None:
+            self._log("INFO", key, "diagnosis_skipped", "hailo unavailable/busy/disabled")
+            return
+
+        diagnosis = {
+            "text": str(result.get("text", ""))[:500],
+            "diagnosed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        proposal = result.get("action_proposal")
+        if proposal:
+            diagnosis["proposed_action"] = proposal.get("name")
+            diagnosis["proposed_action_executed"] = False
+        self._alert_diagnoses[key] = diagnosis
+
+        # Merge into the currently-live alert record, if the issue is still active.
+        for a in self._persistent_alerts:
+            if a.get("metric") == f"watchdog_{key}":
+                a["diagnosis"] = diagnosis
+                break
+
+        self._log("INFO", key, "diagnosis", diagnosis["text"][:120])
+        logger.info("Watchdog: diagnosis for %s: %s", key, diagnosis["text"][:200])
+
+        if proposal:
+            self._maybe_execute_llm_remediation(key, proposal)
+
+    def _maybe_execute_llm_remediation(self, key: str, proposal: dict[str, Any]) -> None:
+        """Execute an LLM-proposed remediation ONLY if explicitly enabled AND the
+        action is in the narrow whitelist AND the global action budget allows it.
+        Never executes reboot_pi / stop_service / ha_toggle / arbitrary commands —
+        restart_service against {ollama, rover2-camera} only."""
+        if not self._allow_llm_remediation:
+            logger.info(
+                "Watchdog: LLM proposed %s for %s but allow_llm_remediation is off — proposal only",
+                proposal.get("name"), key,
+            )
+            return
+        name = proposal.get("name")
+        args = proposal.get("args") or {}
+        service = str(args.get("service", "")).strip()
+        if name != "restart_service" or service not in _LLM_REMEDIATION_ALLOWED_SERVICES:
+            logger.warning(
+                "Watchdog: LLM proposed non-whitelisted remediation %r args=%r for %s — ignored",
+                name, args, key,
+            )
+            return
+        if not self._can_act():
+            self._log("WARNING", key, "llm_remediation_skipped", "global action budget exhausted")
+            return
+        self._remediation_tasks[key] = asyncio.create_task(self._execute_llm_remediation(key, service))
+
+    async def _execute_llm_remediation(self, key: str, service: str) -> None:
+        ok = await self._run_fix(["sudo", "systemctl", "restart", service])
+        self._last_action_desc = f"LLM-requested restart {service} (alert: {key})"
+        self._record_action()
+        self._log("WARNING" if ok else "CRITICAL", key, "llm_remediation_restart_service",
+                  f"{service}: {'ok' if ok else 'failed'}")
+        if key in self._alert_diagnoses:
+            self._alert_diagnoses[key]["proposed_action_executed"] = ok
+            for a in self._persistent_alerts:
+                if a.get("metric") == f"watchdog_{key}":
+                    a["diagnosis"] = self._alert_diagnoses[key]
+                    break
+
+    # ── Self-test hook — exercises the REAL alert -> emotion_state path ─────────
+
+    def trigger_selftest(self, severity: str = "warning") -> dict[str, Any]:
+        """Raise a clearly-labelled, synthetic alert through the real
+        _emit_alert -> _sync_emotion_state path, auto-clearing after
+        _SELFTEST_TTL_S. Never invokes any real check or remediation, and is
+        safe/idempotent to call repeatedly — a new call simply refreshes the
+        alert and reschedules the auto-clear."""
+        if severity not in ("warning", "critical"):
+            severity = "warning"
+        if self._selftest_clear_task is not None and not self._selftest_clear_task.done():
+            self._selftest_clear_task.cancel()
+        self._emit_alert(
+            _SELFTEST_KEY, severity,
+            f"[SELF-TEST] Synthetic watchdog alert — no real issue, auto-clears in {_SELFTEST_TTL_S:.0f}s",
+            action_taken="none",
+        )
+        self._selftest_clear_task = asyncio.create_task(self._selftest_auto_clear())
+        return {
+            "status": "ok",
+            "severity": severity,
+            "ttl_s": _SELFTEST_TTL_S,
+            "emotion_state": emotion_state.current(),
+        }
+
+    async def _selftest_auto_clear(self) -> None:
+        try:
+            await asyncio.sleep(_SELFTEST_TTL_S)
+        except asyncio.CancelledError:
+            return
+        self._clear_alert(_SELFTEST_KEY)
+        logger.info("Watchdog: self-test alert auto-cleared")
 
     # ── Logging ─────────────────────────────────────────────────────────────
 

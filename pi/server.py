@@ -206,6 +206,7 @@ def create_app(
         body_tracker=body_tracker,
         safety_monitor=safety_monitor,
         megapi=megapi,
+        rover_agent=rover_agent,
     ) if _WATCHDOG else None
 
     app = FastAPI(title="ROVER2", version="2.0.0")
@@ -2112,6 +2113,19 @@ def create_app(
         except Exception:
             pass
         return JSONResponse(results)
+
+    @app.post("/api/watchdog/selftest")
+    async def watchdog_selftest() -> JSONResponse:
+        """Fire a synthetic, clearly-labelled watchdog alert through the REAL
+        _emit_alert -> _sync_emotion_state path (unlike /api/watchdog/test-alert
+        below, which only fakes the WS payload). Auto-clears itself after a short
+        TTL. Never invokes any real check or remediation — safe to call repeatedly
+        on the live Pi. This endpoint can ONLY raise the synthetic self-test
+        alert; it has no parameters selecting a real check or action.
+        """
+        if watchdog is None:
+            raise HTTPException(status_code=503, detail="watchdog not running")
+        return JSONResponse(watchdog.trigger_selftest())
 
     @app.post("/api/watchdog/test-alert")
     async def watchdog_test_alert() -> JSONResponse:
