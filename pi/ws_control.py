@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -16,6 +17,30 @@ from safety import SafetyMonitor
 from arm_control import arm_pwm
 
 logger = logging.getLogger(__name__)
+
+# ── [DOWNDIAG] temporary downstream-consumption diagnostic instrumentation ────
+# Same trigger file and pattern as pi/body_tracker.py's own [DOWNDIAG] tap
+# (duplicated helper rather than cross-imported, matching how camera_server.py
+# already keeps its own independent PIPEDIAG copy) — this half answers whether
+# a confirmed-correct person detection actually makes it into the outgoing
+# WebSocket telemetry payload each cycle, which is what feeds the /face and
+# main-UI camera overlays. Purely observational, rate-limited, no change to
+# the payload itself. Remove after the diagnosis is done; see
+# scripts/diag_downstream.py.
+_DOWNDIAG_TRIGGER_PATH = "/tmp/rover2_downdiag"
+_downdiag_last_log_ts = 0.0
+
+
+def _downdiag_on() -> bool:
+    return os.path.exists(_DOWNDIAG_TRIGGER_PATH)
+
+
+def _downdiag_log(msg: str) -> None:
+    global _downdiag_last_log_ts
+    now = time.monotonic()
+    if now - _downdiag_last_log_ts >= 1.0:
+        _downdiag_last_log_ts = now
+        logger.info("[DOWNDIAG] %s", msg)
 
 
 def build_telemetry(
@@ -65,6 +90,7 @@ def build_telemetry(
         payload["person_conf"] = state.get("person_conf", 0.0)
         payload["person_cx"] = state.get("person_cx")
         payload["follow_decision"] = state.get("follow_decision", "NONE")
+        payload["configured_fps"] = state.get("configured_fps", 0)
         payload["ble_active"] = state.get("ble_active", False)
         payload["ble_follow_enabled"] = state.get("ble_follow_enabled", True)
         payload["follow_mode"] = state.get("follow_mode", "fused")
@@ -75,6 +101,13 @@ def build_telemetry(
             payload["ble_rssi"] = ble.get("rssi")
         if state.get("last_error"):
             payload["tracking_error"] = state["last_error"]
+        if _downdiag_on():
+            _downdiag_log(
+                f"telemetry_built person_detected={payload['person_detected']} "
+                f"person_bbox={payload['person_bbox']} person_conf={payload['person_conf']} "
+                f"follow_decision={payload['follow_decision']} "
+                f"telemetry_ts={time.monotonic():.3f}"
+            )
     else:
         payload["tracking_available"] = False
         payload["tracking_enabled"] = False

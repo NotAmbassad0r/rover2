@@ -3335,6 +3335,19 @@
     // ── END CHAT TAB ──────────────────────────────────────────────────────────
 
     // ── Detection overlay ─────────────────────────────────────────────────────
+    // Detection cadence label — drives the "@Nfps" text from the real live
+    // rate (telemetry's configured_fps) rather than a hardcoded string, so it
+    // can't go stale if frame_interval_s ever changes. The box is only ever as
+    // fresh as this rate; the live camera feed can be much faster, so a moving
+    // subject can visibly outrun the box between updates — this label makes
+    // that a known cadence, not a mystery gap.
+    function _fpsLabel(d) {
+      const fps = d.configured_fps;
+      if (fps == null || fps <= 0) return '?fps';
+      const rounded = Math.round(fps * 10) / 10;
+      return (Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + 'fps';
+    }
+
     function drawDetectionOverlay(d) {
       const canvas = document.getElementById('detection-overlay');
       const img    = document.getElementById('camera');
@@ -3376,11 +3389,11 @@
       // bottom-right
       ctx.beginPath(); ctx.moveTo(bx + bw - cs, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - cs); ctx.stroke();
 
-      // Label: PERSON  conf%  distance
+      // Label: PERSON  conf%  distance  ·  @Nfps
       const conf = Math.round((d.person_conf || 0) * 100);
       const dist = (d.ultrasonic_cm != null && d.ultrasonic_age_s != null && d.ultrasonic_age_s < 2)
         ? d.ultrasonic_cm + ' cm' : '—';
-      const label = 'PERSON  ' + conf + '%  ' + dist;
+      const label = 'PERSON  ' + conf + '%  ' + dist + '  ·  @' + _fpsLabel(d);
 
       ctx.font      = 'bold 11px "Courier New", monospace';
       ctx.fillStyle = '#4a9eda';

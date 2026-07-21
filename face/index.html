@@ -1869,6 +1869,19 @@ function _resizeCamOverlay() {
   }
 }
 
+// Detection cadence label — drives the overlay's "@Nfps" text from the real
+// live rate (telemetry's configured_fps) rather than a hardcoded string, so
+// it can't go stale if frame_interval_s ever changes. The box is only ever as
+// fresh as this rate; the live video above it can be much faster (rover2-
+// camera runs ~10fps active), so a moving subject can visibly outrun the box
+// between updates — this label makes that a known cadence, not a mystery gap.
+function _fpsLabel(d) {
+  const fps = d.configured_fps;
+  if (fps == null || fps <= 0) return '?fps';
+  const rounded = Math.round(fps * 10) / 10;
+  return (Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + 'fps';
+}
+
 function _ctrlDrawOverlay(d) {
   if (_currentPage !== 1) return;   // only draw while the control page is visible
   const ov = document.getElementById('cam-overlay');
@@ -1896,7 +1909,8 @@ function _ctrlDrawOverlay(d) {
     ctx.strokeStyle = '#3fb950';
     ctx.lineWidth = 2;
     ctx.strokeRect(bx, by, bw, bh);
-    const label = 'person ' + (d.person_conf != null ? d.person_conf.toFixed(2) : '?');
+    const label = 'person ' + (d.person_conf != null ? d.person_conf.toFixed(2) : '?')
+      + ' · box @' + _fpsLabel(d);
     ctx.font = '11px "Courier New", monospace';
     const labelW = ctx.measureText(label).width + 6;
     const labelY = Math.max(0, by - 14);

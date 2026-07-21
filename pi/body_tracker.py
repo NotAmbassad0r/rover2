@@ -16,7 +16,7 @@ import numpy as np
 from turbojpeg import TJPF_RGB, TurboJPEG
 
 import emotion_state
-from body_tracker_parse import parse_best_person
+from body_tracker_parse import _PERSON_CLASS, nms_output_to_tensor, parse_best_person
 from capture_nms_fixture import save_fixture
 from follow_nav import ble_should_turn_in_place, steer_around_obstacle
 
@@ -106,6 +106,54 @@ def _pipediag_log(stage: str, msg: str) -> None:
     if now - last >= 1.0:
         _pipediag_last_log_ts[stage] = now
         logger.info("[PIPEDIAG] %s: %s", stage, msg)
+
+
+# ── [CLASSDIAG] temporary per-class detection diagnostic instrumentation ──────
+# Guarded, off by default, same trigger-file pattern as PIPEDIAG/_NMS_DUMP —
+# presence of this file enables a per-inference-cycle breakdown of the FULL
+# 80-class raw NMS tensor: which classes have any raw score at all, whether the
+# hardcoded person class (body_tracker_parse._PERSON_CLASS) has one, and which
+# classes would survive the exact same confidence+bounds+size filter
+# parse_best_person() applies — computed by calling parse_best_person() once
+# per class id, so it is byte-for-byte the same filter logic already running
+# in production, never a reimplementation. Purely observational: only reads
+# nms_out that's already been computed for this cycle, no extra Hailo calls,
+# no change to `best`/`raw_best` used by the real pipeline below. Remove after
+# the diagnosis is done; see scripts/diag_person_class.py.
+_CLASSDIAG_TRIGGER_PATH = "/tmp/rover2_classdiag"
+_CLASSDIAG_RAW_SCORE_FLOOR = 0.05  # ignore near-zero/empty-slot noise when listing raw classes
+
+
+def _classdiag_on() -> bool:
+    return os.path.exists(_CLASSDIAG_TRIGGER_PATH)
+
+
+def _classdiag_log(msg: str) -> None:
+    logger.info("[CLASSDIAG] %s", msg)
+
+
+# ── [DOWNDIAG] temporary downstream-consumption diagnostic instrumentation ────
+# Guarded, off by default, same trigger-file pattern as CLASSDIAG/PIPEDIAG.
+# Person detection at the Hailo/parse layer is already proven correct
+# (scripts/diag_person_class.py). This tap answers what happens to a CORRECT
+# detection next: does the follow-mode decision logic in THIS function
+# actually consume `best`/`_person_tracked` each cycle, and what does it
+# decide and why. pi/ws_control.py carries its own matching [DOWNDIAG] tap
+# (same trigger file, duplicated helper — same pattern camera_server.py
+# already uses for its own PIPEDIAG copy, kept decoupled rather than
+# cross-importing) for the telemetry-build hop. Purely observational — logs
+# only, no change to any decision this function already makes. Remove after
+# the diagnosis is done; see scripts/diag_downstream.py.
+_DOWNDIAG_TRIGGER_PATH = "/tmp/rover2_downdiag"
+
+
+def _downdiag_on() -> bool:
+    return os.path.exists(_DOWNDIAG_TRIGGER_PATH)
+
+
+def _downdiag_log(msg: str) -> None:
+    logger.info("[DOWNDIAG] %s", msg)
+
 
 _CONFIRM_FRAMES: int = 3
 _LOST_FRAMES: int = 4
@@ -806,6 +854,37 @@ class BodyTracker:
                 f"shape={nms_out.shape} size={_flat.size} "
                 f"empty={bool(np.all(_flat == 0))} max={float(_flat.max()):.4f}",
             )
+        if _classdiag_on():
+            _cd_tensor = nms_output_to_tensor(nms_out)
+            if _cd_tensor is None:
+                _classdiag_log("nms_output_to_tensor returned None — cannot compute per-class breakdown")
+            else:
+                # Raw max score per class, col 4 = score field, NO filtering at all
+                # (not even the 0.01 empty-slot floor parse_best_person applies).
+                _cd_raw_scores = _cd_tensor[:, :, 4].max(axis=1)
+                _cd_raw_top = sorted(
+                    ((i, round(float(s), 3)) for i, s in enumerate(_cd_raw_scores)
+                     if s > _CLASSDIAG_RAW_SCORE_FLOOR),
+                    key=lambda t: -t[1],
+                )
+                # Re-run the REAL parse_best_person filter (confidence+bounds+size)
+                # once per class id — same function/logic the production path uses
+                # two lines below, just parameterized across all 80 classes instead
+                # of only the hardcoded person class, to see what would survive if
+                # each class were treated as the tracked target.
+                _cd_survives = []
+                for _cid in range(_cd_tensor.shape[0]):
+                    _cd_r = parse_best_person(
+                        nms_out, confidence=self._confidence, person_class=_cid, **_box_kwargs
+                    )
+                    if _cd_r is not None:
+                        _cd_survives.append((_cid, round(_cd_r[4], 3)))
+                _classdiag_log(
+                    f"person_class={_PERSON_CLASS} confidence_threshold={self._confidence:.2f} "
+                    f"person_raw_score={float(_cd_raw_scores[_PERSON_CLASS]):.3f} "
+                    f"raw_classes(score>{_CLASSDIAG_RAW_SCORE_FLOOR})={_cd_raw_top[:16]} "
+                    f"survives_filter={_cd_survives}"
+                )
         best = parse_best_person(nms_out, confidence=self._confidence, **_box_kwargs)
         raw_best = parse_best_person(nms_out, confidence=0.0, **_box_kwargs)
         now = time.monotonic()
@@ -838,8 +917,18 @@ class BodyTracker:
                 except Exception:
                     pass
 
+        if _downdiag_on():
+            _downdiag_log(
+                f"consumed best={'yes' if best is not None else 'no'} "
+                f"bbox={self._last_bbox} conf={self._last_conf:.3f} "
+                f"person_tracked={self._person_tracked} detect_only={detect_only} "
+                f"follow_mode={self._follow_mode}"
+            )
+
         if detect_only:
             self._last_decision = "NONE"   # HUD bookkeeping only — detect-only never drives
+            if _downdiag_on():
+                _downdiag_log("decision=NONE reason=detect_only_mode_never_drives")
             return
 
         with self._lock:
@@ -847,6 +936,11 @@ class BodyTracker:
 
         if not self._person_tracked or best is None:
             self._last_decision = "NONE"   # HUD bookkeeping only — no camera-driven decision
+            if _downdiag_on():
+                _downdiag_log(
+                    f"decision=NONE reason=not_tracked_or_no_best "
+                    f"person_tracked={self._person_tracked} best_present={best is not None}"
+                )
             if (
                 follow_mode != "camera"          # camera mode: never activate BLE
                 and self._ble is not None
@@ -873,18 +967,26 @@ class BodyTracker:
         if cx < self._left_bound:
             logger.info("Follow: cx=%.2f → LEFT  (speed=%d)", cx, self._turn_speed)
             self._last_decision = "LEFT"   # HUD bookkeeping only
+            if _downdiag_on():
+                _downdiag_log(f"decision=LEFT cx={cx:.3f} left_bound={self._left_bound:.3f}")
             self._follow_drive("left", self._turn_speed, person_cx=cx)
         elif cx > self._right_bound:
             logger.info("Follow: cx=%.2f → RIGHT (speed=%d)", cx, self._turn_speed)
             self._last_decision = "RIGHT"   # HUD bookkeeping only
+            if _downdiag_on():
+                _downdiag_log(f"decision=RIGHT cx={cx:.3f} right_bound={self._right_bound:.3f}")
             self._follow_drive("right", self._turn_speed, person_cx=cx)
         elif bbox_w < self._target_bbox_width:
             logger.info("Follow: cx=%.2f bbox=%.2f → FWD  (speed=%d)", cx, bbox_w, self._forward_speed)
             self._last_decision = "FWD"   # HUD bookkeeping only
+            if _downdiag_on():
+                _downdiag_log(f"decision=FWD cx={cx:.3f} bbox_w={bbox_w:.3f} target_bbox_width={self._target_bbox_width:.3f}")
             self._follow_drive("forward", self._forward_speed, person_cx=cx)
         else:
             logger.info("Follow: cx=%.2f bbox=%.2f → HOLD", cx, bbox_w)
             self._last_decision = "STOP"   # HUD bookkeeping only — centred + at target distance
+            if _downdiag_on():
+                _downdiag_log(f"decision=STOP(HOLD) cx={cx:.3f} bbox_w={bbox_w:.3f} — centred at target distance")
             self._drive(0, 0)
 
     def _maybe_dump_nms(self, nms_out: np.ndarray) -> None:

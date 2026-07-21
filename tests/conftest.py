@@ -32,6 +32,7 @@ _stub("hailo_platform.pyhailort")
 # turbojpeg (body_tracker, camera_server)
 _turbo = _stub("turbojpeg")
 _turbo.TurboJPEG = MagicMock  # type: ignore[attr-defined]
+_turbo.TJPF_RGB = 0  # type: ignore[attr-defined]
 
 # pyserial (megapi)
 _serial = _stub("serial")
@@ -51,6 +52,12 @@ _megapi_stub.MegaPiBridge = MagicMock  # type: ignore[attr-defined]
 # cv2 (camera_server)
 _cv2 = _stub("cv2")
 _cv2.VideoCapture = MagicMock  # type: ignore[attr-defined]
+
+# fastapi (ws_control) — only WebSocket/WebSocketDisconnect symbols are needed
+# at import time; build_telemetry() itself never touches a real connection.
+_fastapi = _stub("fastapi")
+_fastapi.WebSocket = MagicMock  # type: ignore[attr-defined]
+_fastapi.WebSocketDisconnect = Exception  # type: ignore[attr-defined]
 
 # ── 2. Add pi/ to sys.path ──────────────────────────────────────────────────
 _PI_DIR = Path(__file__).parent.parent / "pi"
