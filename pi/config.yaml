@@ -61,6 +61,8 @@ body_tracker:
   turn_speed: 210
   forward_speed: 170
   frame_interval_s: 0.33   # ~3fps — matches Pi's real throughput ceiling (history: 1.0/1fps CPU concession -> 0.2/5fps tested live, Pi capped ~3.14fps actual -> 0.33/~3fps shipped)
+  presence_confirm_frames: 3  # consecutive-hit-equivalent streak to confirm person_tracked (decays 1/miss, no longer resets to 0)
+  presence_lost_frames: 6     # consecutive misses before declaring person lost (was 4; raised so a rough patch during choppy ~47pct-hit-rate detection doesn't flip "lost" prematurely)
   hailo_warmup_s: 30.0     # delay before loading Hailo model — lets CPU idle after boot
   ble_follow_enabled: false # BLE fallback off by default — enable via UI BLE button
   detect_only_on_start: true # watch for people on boot; rover does NOT follow until explicitly enabled

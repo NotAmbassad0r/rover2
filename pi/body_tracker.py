@@ -155,8 +155,10 @@ def _downdiag_log(msg: str) -> None:
     logger.info("[DOWNDIAG] %s", msg)
 
 
-_CONFIRM_FRAMES: int = 3
-_LOST_FRAMES: int = 4
+_CONFIRM_FRAMES: int = 3   # default; overridable via config.yaml body_tracker.presence_confirm_frames
+_LOST_FRAMES: int = 6      # default; overridable via config.yaml body_tracker.presence_lost_frames
+                           # (was 4 — raised alongside the streak-decay change below so a rough
+                           # patch during choppy detection doesn't flip "lost" prematurely)
 _DRIVE_MIN_INTERVAL_S: float = 0.25
 _RECONNECT_DELAY_S: float = 2.0
 
@@ -206,6 +208,8 @@ class BodyTracker:
         self._min_box_width = float(cfg.get("min_box_width", 0.03))
         self._min_box_height = float(cfg.get("min_box_height", 0.06))
         self._min_box_area = float(cfg.get("min_box_area", 0.003))
+        self._confirm_frames = int(cfg.get("presence_confirm_frames", _CONFIRM_FRAMES))
+        self._lost_frames = int(cfg.get("presence_lost_frames", _LOST_FRAMES))
         self._start_time = 0.0  # set in start()
 
         self._left_bound = 0.5 - self._centre_zone / 2
@@ -503,18 +507,29 @@ class BodyTracker:
         self._last_decision = "NONE"
 
     def _update_person_presence(self, seen: bool) -> None:
+        """Hysteresis gate deciding self._person_tracked (== self._person_detected).
+
+        A miss DECAYS _seen_streak by 1 (floor 0) rather than resetting it to 0 —
+        a single dropped frame in an otherwise-good run costs one point of
+        progress, not the whole accumulated streak. This tolerates a choppy
+        detector (sub-100% per-cycle hit rate on a moving subject) without
+        requiring a run of _confirm_frames PERFECTLY consecutive hits, while
+        still requiring genuinely sustained presence (not just one lucky frame)
+        to confirm. _lost_streak (consecutive misses, no decay) is unchanged —
+        that's what still recognizes a genuine departure.
+        """
         was_tracked = self._person_tracked
         if seen:
             self._seen_streak += 1
             self._lost_streak = 0
-            if self._seen_streak >= _CONFIRM_FRAMES:
+            if self._seen_streak >= self._confirm_frames:
                 if not self._person_tracked:
                     logger.info("BodyTracker: person ACQUIRED (streak=%d)", self._seen_streak)
                 self._person_tracked = True
         else:
             self._lost_streak += 1
-            self._seen_streak = 0
-            if self._lost_streak >= _LOST_FRAMES:
+            self._seen_streak = max(0, self._seen_streak - 1)
+            if self._lost_streak >= self._lost_frames:
                 if self._person_tracked:
                     logger.info("BodyTracker: person LOST (streak=%d)", self._lost_streak)
                 self._person_tracked = False
