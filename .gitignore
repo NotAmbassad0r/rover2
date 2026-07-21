@@ -3,6 +3,8 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+.testdeps/
+.coverage
 *.egg-info/
 .DS_Store
 .idea/

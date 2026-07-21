@@ -15,7 +15,13 @@
       "Bash(ssh ambassad0r@rover \"node --check /tmp/test_js.js 2>&1 | head -20\")",
       "Bash(ssh ambassad0r@rover \"systemctl is-active rover2-api && curl -s http://localhost:8082/api/health && echo && curl -s -o /dev/null -w '%{http_code}' http://localhost:8082/\")",
       "Bash(rsync -av pi/web/static/index.html ambassad0r@rover:/opt/rover2/web/static/)",
-      "Bash(ssh ambassad0r@rover \"curl -s http://localhost:8082/ | head -2\")"
+      "Bash(ssh ambassad0r@rover \"curl -s http://localhost:8082/ | head -2\")",
+      "WebSearch",
+      "Bash(gh api *)",
+      "Bash(curl -s \"https://api.github.com/users/hailo-ai/repos?per_page=100\")",
+      "Bash(gh release *)",
+      "Bash(curl -s \"https://api.github.com/search/repositories?q=hailo-ollama\")",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -24,6 +25,61 @@ if TYPE_CHECKING:
     from safety import SafetyMonitor
 
 logger = logging.getLogger(__name__)
+
+# ── MJPEG multipart frame extraction ───────────────────────────────────────────
+# camera_server.py sends each part as `--frame\r\nContent-Type: ...\r\n
+# Content-Length: N\r\n\r\n<N bytes of JPEG>\r\n`. Parse the boundary + declared
+# length instead of scanning the rolling buffer for raw SOI/EOI (\xff\xd8 /
+# \xff\xd9) markers — the old approach truncated `buf` to its last 4096 bytes
+# whenever it grew past 65536 bytes without finding both markers, which could
+# discard an already-seen SOI and force the parser to resync on some later
+# frame. Diagnosed 2026-07-21: this produced multi-tens-of-seconds stalls in
+# body_tracker's own frame consumption while the camera server was verifiably
+# still producing frames at full fps (rover2-camera's own /health never
+# dipped). Reading the exact declared Content-Length makes desync impossible.
+_MULTIPART_BOUNDARY = b"--frame\r\n"
+_CONTENT_LENGTH_RE = re.compile(rb"Content-Length:\s*(\d+)", re.IGNORECASE)
+
+
+def _extract_multipart_jpeg(buf: bytes) -> tuple[bytes | None, bytes]:
+    """Pull one JPEG part out of a multipart/x-mixed-replace buffer.
+
+    Returns (jpeg_bytes, remaining_buf) once a full part is available, or
+    (None, buf) if more data is needed first. Critically, `buf` is only ever
+    trimmed of bytes that are either definitely-garbage (before the first
+    boundary token) or definitely-consumed (part of an already-extracted
+    frame) — never of the boundary/header bytes themselves while we're still
+    waiting on more of the body to arrive, otherwise the next call would have
+    nothing left to find the boundary with.
+    """
+    boundary_idx = buf.find(_MULTIPART_BOUNDARY)
+    if boundary_idx == -1:
+        # Haven't seen a boundary yet (e.g. right after connecting) — keep only
+        # a short tail in case the boundary token is split across reads.
+        if len(buf) > 4096:
+            buf = buf[-256:]
+        return None, buf
+    if boundary_idx > 0:
+        buf = buf[boundary_idx:]  # drop garbage before the boundary
+
+    after_boundary = buf[len(_MULTIPART_BOUNDARY):]
+    header_end = after_boundary.find(b"\r\n\r\n")
+    if header_end == -1:
+        return None, buf  # keep the boundary — headers aren't fully in yet
+
+    m = _CONTENT_LENGTH_RE.search(after_boundary[:header_end])
+    if not m:
+        # Malformed part header — drop it and resync on the next boundary.
+        return None, buf[len(_MULTIPART_BOUNDARY) + header_end + 4:]
+
+    length = int(m.group(1))
+    body_start = len(_MULTIPART_BOUNDARY) + header_end + 4
+    body_end = body_start + length
+    if len(buf) < body_end + 2:  # +2 for the trailing \r\n after the JPEG body
+        return None, buf  # keep everything — body isn't fully in yet
+
+    return buf[body_start:body_end], buf[body_end + 2:]
+
 
 # One-shot debug tap (see BodyTracker._maybe_dump_nms): presence of this file triggers
 # a single raw-NMS-tensor dump to /tmp on the next inference cycle, then deletes itself.
@@ -628,14 +684,9 @@ class BodyTracker:
                 if not chunk:
                     break
                 buf += chunk
-                a = buf.find(b"\xff\xd8")
-                b = buf.find(b"\xff\xd9")
-                if a == -1 or b == -1 or b < a:
-                    if len(buf) > 65536:
-                        buf = buf[-4096:]
+                jpg, buf = _extract_multipart_jpeg(buf)
+                if jpg is None:
                     continue
-                jpg = buf[a : b + 2]
-                buf = buf[b + 2 :]
 
                 if _pipediag_on():
                     _pipediag_log("b_frame_acquisition",

@@ -37,6 +37,16 @@ _MAX_RETRIES_PER_CHECK = 3   # attempts before emitting persistent alert
 _SELFTEST_KEY     = "selftest"
 _SELFTEST_TTL_S   = 8.0   # auto-clear window for the synthetic self-test alert
 
+# Alert keys that must NEVER trigger advisory diagnosis, regardless of whether
+# detection is active — these alerts ARE the detection pipeline's own health
+# signal, and diagnosing them risks re-causing the exact Hailo/CPU contention
+# they're about (see _maybe_diagnose).
+_DIAGNOSIS_EXCLUDED_KEYS = frozenset({"camera_frames_stall", "detection_stalled_camera_healthy"})
+
+# Camera is considered genuinely alive if /health responds status=ok with a
+# strictly-positive fps (i.e. it's actually capturing, not just accepting TCP).
+_CAMERA_ALIVE_FPS_THRESHOLD = 0.0
+
 # LLM-requested remediation whitelist — deliberately much narrower than the
 # agent's own dangerous-tool set (no reboot_pi, no stop_service, no ha_toggle):
 # only a restart of one of these two already-existing, already-safe targets,
@@ -316,6 +326,12 @@ class Watchdog:
     # alert that has ALREADY been raised/handled by the code above. It never gates
     # or delays _emit_alert/_clear_alert/_run_fix in any way.
 
+    def _detection_is_priority(self) -> bool:
+        """True while body_tracker's stream loop is supposed to be running and
+        actively contending for the Hailo chip/CPU (FOLLOW or DETECT mode)."""
+        bt = self._body_tracker
+        return bt is not None and (bt.enabled or bt.detect_only)
+
     def _maybe_diagnose(self, key: str, severity: str, message: str) -> None:
         """Fire-and-forget an advisory diagnosis for a new/escalating alert.
 
@@ -324,13 +340,26 @@ class Watchdog:
         see trigger_selftest()). Never blocks the caller. Skips (logs a note,
         does not raise) when: diagnosis is disabled, no agent is wired up, a
         diagnosis for this key is already in flight, the per-key cooldown
-        hasn't elapsed (unless the severity just escalated), or the Hailo
-        GenAI session is currently held by voice/VLM. Remediation is a
-        separate gate (_maybe_execute_llm_remediation) that always excludes
-        the self-test key regardless of config, so a self-test can never
-        cause a real restart even if diagnosis somehow proposes one.
+        hasn't elapsed (unless the severity just escalated), the Hailo GenAI
+        session is currently held by voice/VLM, OR — critically — when `key`
+        is a detection-pipeline alert (_DIAGNOSIS_EXCLUDED_KEYS) or detection
+        is currently the active priority (_detection_is_priority()). Both of
+        those exist specifically to stop diagnosis from starving body_tracker
+        of Hailo/CPU access while it's trying to run (a real incident: a
+        29-second GenAI session hold delayed body_tracker's camera reconnect
+        by exactly 29 seconds). Remediation is a separate gate
+        (_maybe_execute_llm_remediation) that always excludes the self-test
+        key regardless of config, so a self-test can never cause a real
+        restart even if diagnosis somehow proposes one.
         """
         if not self._llm_diagnosis_enabled or self._rover_agent is None:
+            return
+
+        if key in _DIAGNOSIS_EXCLUDED_KEYS:
+            self._log("INFO", key, "diagnosis_skipped", "detection-pipeline alert path — never diagnosed")
+            return
+        if self._detection_is_priority():
+            self._log("INFO", key, "diagnosis_skipped", "detection priority — tracking active")
             return
 
         existing_task = self._diagnosis_tasks.get(key)
@@ -585,6 +614,30 @@ class Watchdog:
                 return r.status_code in (200, 206)
         except Exception:
             return False
+
+    async def _get_camera_health(self) -> dict[str, Any] | None:
+        """Independent camera liveness signal — rover2-camera's own /health,
+        not body_tracker's frames_inferred counter. Used to distinguish a
+        genuinely dead camera from a healthy one that body_tracker just isn't
+        currently consuming (see _check_camera_frames)."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as c:
+                r = await c.get("http://localhost:8081/health")
+                if r.status_code == 200:
+                    return r.json()
+        except Exception:
+            pass
+        return None
+
+    def _camera_is_alive(self, health: dict[str, Any] | None) -> bool:
+        """True if /health reports the camera is genuinely capturing frames."""
+        if health is None:
+            return False
+        return (
+            health.get("status") == "ok"
+            and float(health.get("fps", 0) or 0) > _CAMERA_ALIVE_FPS_THRESHOLD
+        )
 
     async def _probe_api(self) -> bool:
         try:
@@ -1016,6 +1069,7 @@ class Watchdog:
             if not (bt.enabled or bt.detect_only):
                 self._frames_stall_since = None
                 self._clear_alert("camera_frames_stall")
+                self._clear_alert("detection_stalled_camera_healthy")
                 return
             cam_active = await self._is_service_active("rover2-camera")
             if not cam_active:
@@ -1029,20 +1083,44 @@ class Watchdog:
                     key = "camera_frames_stall"
                     if self._can_act_for(key):
                         self._record_attempt(key)
-                        ok = await self._run_fix(["sudo", "systemctl",
-                                                   "restart", "rover2-camera"])
-                        self._log("WARNING", "camera_frames_stalled",
-                                  "restart_rover2_camera", "ok" if ok else "failed")
-                        self._emit_alert(key, "warning",
-                                         "CAMERA FRAMES STALLED — rover2-camera restarted",
-                                         action_taken="restart rover2-camera")
-                        if ok:
-                            self._frames_stall_since = None
-                            self._clear_alert(key)
+                        # Independent liveness check BEFORE deciding remediation:
+                        # is the camera itself actually alive and capturing, or
+                        # is this body_tracker starvation wearing a camera-fault
+                        # costume? Only restart a camera that's genuinely dead —
+                        # restarting a healthy one just severs a working stream
+                        # and compounds whatever starved body_tracker.
+                        health = await self._get_camera_health()
+                        if self._camera_is_alive(health):
+                            self._log(
+                                "WARNING", "camera_frames_stalled_camera_healthy",
+                                "alert_only_no_restart",
+                                f"camera fps={health.get('fps')} clients={health.get('clients')} "
+                                "— not restarted",
+                            )
+                            self._emit_alert(
+                                "detection_stalled_camera_healthy", "warning",
+                                f"Detection frames stalled but camera is healthy "
+                                f"(fps={health.get('fps'):.1f}, clients={health.get('clients')}) — "
+                                "likely body_tracker starvation, not a camera fault. "
+                                "Camera NOT restarted.",
+                                action_taken="none (camera healthy, restart skipped)",
+                            )
+                        else:
+                            ok = await self._run_fix(["sudo", "systemctl",
+                                                       "restart", "rover2-camera"])
+                            self._log("WARNING", "camera_frames_stalled",
+                                      "restart_rover2_camera", "ok" if ok else "failed")
+                            self._emit_alert(key, "warning",
+                                             "CAMERA FRAMES STALLED — rover2-camera restarted",
+                                             action_taken="restart rover2-camera")
+                            if ok:
+                                self._frames_stall_since = None
+                                self._clear_alert(key)
             else:
                 self._last_frames_inferred = current
                 self._frames_stall_since = None
                 self._clear_alert("camera_frames_stall")
+                self._clear_alert("detection_stalled_camera_healthy")
         except Exception as exc:
             logger.debug("Watchdog: camera frames check: %s", exc)
 
