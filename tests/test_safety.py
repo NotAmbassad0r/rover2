@@ -12,10 +12,12 @@ from tests.mocks.fake_motor import FakeMotorSink
 def _make_monitor(
     forward_signs: tuple[int, int] = (1, -1),
     safe_distance_cm: int = 40,
+    last_ultrasonic_age_s: float | None = 0.1,
 ) -> tuple[SafetyMonitor, MagicMock]:
     fake_megapi = MagicMock()
     fake_megapi.send = FakeMotorSink()
     fake_megapi.on_message = None
+    fake_megapi.last_ultrasonic_age_s = last_ultrasonic_age_s
     sm = SafetyMonitor(
         megapi=fake_megapi,
         forward_signs=forward_signs,
@@ -99,6 +101,7 @@ class TestGuardedSend:
         fake_megapi = MagicMock()
         fake_megapi.send = fake_sink
         fake_megapi.on_message = None
+        fake_megapi.last_ultrasonic_age_s = 0.1
         sm = SafetyMonitor(
             megapi=fake_megapi,
             forward_signs=(1, -1),
@@ -170,6 +173,39 @@ class TestIngestUltrasonic:
         sm, _ = _make_monitor()
         sm._ingest_ultrasonic({"evt": "sensor", "ultrasonic_cm": None})
         assert sm._distance_cm is None
+
+
+class TestStaleness:
+    """A1: a frozen/stale ultrasonic reading must not be trusted as 'clear' forever."""
+
+    def test_stale_clear_reading_blocks_forward(self):
+        # Sensor reported "clear" (200 cm) once, then the ultrasonic subsystem
+        # stalled — no reading for 10s even though the serial link is alive.
+        sm, _ = _make_monitor(safe_distance_cm=40, last_ultrasonic_age_s=10.0)
+        sm._distance_cm = 200
+        cmd = {"cmd": "drive", "l": 170, "r": -170}
+        assert sm._should_block(cmd) is True
+
+    def test_fresh_clear_reading_does_not_block(self):
+        sm, _ = _make_monitor(safe_distance_cm=40, last_ultrasonic_age_s=0.1)
+        sm._distance_cm = 200
+        cmd = {"cmd": "drive", "l": 170, "r": -170}
+        assert sm._should_block(cmd) is False
+
+    def test_missing_age_blocks_forward(self):
+        # last_ultrasonic_age_s is None until the very first reading ever
+        # arrives — but here _distance_cm is already set, an inconsistent
+        # state that should be treated as untrustworthy, not "clear forever".
+        sm, _ = _make_monitor(safe_distance_cm=40, last_ultrasonic_age_s=None)
+        sm._distance_cm = 200
+        cmd = {"cmd": "drive", "l": 170, "r": -170}
+        assert sm._should_block(cmd) is True
+
+    def test_stale_reading_does_not_affect_reverse(self):
+        sm, _ = _make_monitor(safe_distance_cm=40, last_ultrasonic_age_s=10.0)
+        sm._distance_cm = 200
+        cmd = {"cmd": "drive", "l": -170, "r": 170}
+        assert sm._should_block(cmd) is False
 
 
 class TestMiscPublicMethods:

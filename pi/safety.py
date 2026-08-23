@@ -29,12 +29,14 @@ class SafetyMonitor:
         safe_distance_cm: int = 40,
         poll_interval_s: float = 0.5,
         initial_poll_delay_s: float = 4.0,
+        max_reading_age_s: float = 2.0,
     ) -> None:
         self._megapi = megapi
         self._forward_signs = forward_signs
         self._safe_distance_cm = safe_distance_cm
         self._poll_interval_s = poll_interval_s
         self._initial_poll_delay_s = initial_poll_delay_s
+        self._max_reading_age_s = max_reading_age_s
 
         self._distance_cm: int | None = None
         self._forward_blocked: bool = False
@@ -125,7 +127,15 @@ class SafetyMonitor:
             return False
         with self._lock:
             dist = self._distance_cm
-        return dist is not None and 0 < dist < self._safe_distance_cm
+        if dist is None:
+            return False
+        if 0 < dist < self._safe_distance_cm:
+            return True
+        # Reading says "clear" — but only trust it if it's fresh. A stalled
+        # ultrasonic subsystem (serial link otherwise alive) must not read as
+        # "clear forever".
+        age = self._megapi.last_ultrasonic_age_s
+        return age is None or age > self._max_reading_age_s
 
     def _is_forward(self, left: int, right: int) -> bool:
         """True when motor signs match the configured forward direction."""
