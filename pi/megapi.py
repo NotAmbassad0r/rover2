@@ -239,6 +239,7 @@ class MegaPiBridge:
                 port=self.port,
                 baudrate=self.baudrate,
                 timeout=self.timeout_s,
+                exclusive=True,
             )
             self._last_read_time = time.monotonic()
             logger.info("MegaPi connected on %s", self.port)
