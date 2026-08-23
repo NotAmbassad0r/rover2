@@ -243,8 +243,8 @@ class ControlHub:
             raise ValueError(f"Unknown direction: {direction}")
         mult_l, mult_r = self._directions[direction]
         speed = self._scale(speed_frac) if direction != "stop" else 0
-        left = mult_l * speed
-        right = mult_r * speed
+        left = max(-self._max_speed, min(self._max_speed, mult_l * speed))
+        right = max(-self._max_speed, min(self._max_speed, mult_r * speed))
         if direction == "stop":
             self._megapi.stop_motors()
         else:
