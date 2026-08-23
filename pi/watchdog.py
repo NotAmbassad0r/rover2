@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
 import shutil
 from collections import deque
@@ -30,6 +31,15 @@ logger = logging.getLogger(__name__)
 _LOG_PATH   = Path("/opt/rover2/data/watchdog.log")
 _LOG_MAX_B  = 10 * 1024 * 1024   # rotate at 10 MB
 _DEPLOY_GUARD = Path("/tmp/watchdog_deployed")
+
+# The mem_emergency_restart budget is persisted here. /tmp (like /run) is
+# cleared at reboot, which is correct since time.monotonic() also resets
+# then — but unlike /run it's writable by the non-root user rover2-api runs
+# as (matches _DEPLOY_GUARD's existing use of /tmp for the same reason).
+# Every other per-check key stays in-memory only; this is the one whose own
+# remediation action can wipe the in-memory counter meant to be limiting it.
+_MEM_RESTART_STATE_PATH = Path("/tmp/rover2-watchdog-mem-restarts.json")
+_MEM_RESTART_KEY = "mem_emergency_restart"
 
 _RETRY_WINDOW_S      = 600   # per-check rate-limit window: 10 minutes
 _MAX_RETRIES_PER_CHECK = 3   # attempts before emitting persistent alert
@@ -120,6 +130,7 @@ class Watchdog:
 
         # Per-check rate-limit: check_key → list of monotonic timestamps
         self._retry_ts: dict[str, list[float]] = {}
+        self._retry_ts[_MEM_RESTART_KEY] = self._load_mem_restart_timestamps()
 
         # Persistent alerts for WebSocket broadcast
         self._persistent_alerts: list[dict[str, Any]] = []
@@ -185,6 +196,7 @@ class Watchdog:
         self._actions.clear()
         self._limit_reached = False
         self._retry_ts.clear()
+        self._persist_mem_restart_timestamps()
         self._persistent_alerts.clear()
         self._log("INFO", "manual_reset", "reset_actions", "action counter cleared by operator")
         logger.info("Watchdog: actions reset by operator")
@@ -262,6 +274,8 @@ class Watchdog:
         cutoff = time.monotonic() - _RETRY_WINDOW_S
         recent = [t for t in self._retry_ts[key] if t > cutoff]
         self._retry_ts[key] = recent
+        if key == _MEM_RESTART_KEY:
+            self._persist_mem_restart_timestamps()
         if len(recent) >= _MAX_RETRIES_PER_CHECK:
             self._emit_alert(
                 key, "critical",
@@ -269,6 +283,24 @@ class Watchdog:
                 " — manual intervention required",
                 action_taken="stopped_retrying",
             )
+
+    def _load_mem_restart_timestamps(self) -> list[float]:
+        """Restore mem_emergency_restart's attempt history across a
+        rover2-api restart — see _MEM_RESTART_STATE_PATH."""
+        try:
+            raw = json.loads(_MEM_RESTART_STATE_PATH.read_text())
+        except (OSError, ValueError):
+            return []
+        cutoff = time.monotonic() - _RETRY_WINDOW_S
+        return [t for t in raw if isinstance(t, (int, float)) and t > cutoff]
+
+    def _persist_mem_restart_timestamps(self) -> None:
+        try:
+            _MEM_RESTART_STATE_PATH.write_text(
+                json.dumps(self._retry_ts.get(_MEM_RESTART_KEY, []))
+            )
+        except OSError:
+            logger.debug("Watchdog: could not persist mem-restart state", exc_info=True)
 
     # ── Persistent alert management ─────────────────────────────────────────
 
@@ -1324,7 +1356,7 @@ class Watchdog:
             if rss > 450 and self._ollama_stopped_for_mem:
                 # Emergency: ollama already stopped and still high
                 if not self._is_voice_active() and not self._is_follow_active():
-                    key = "mem_emergency_restart"
+                    key = _MEM_RESTART_KEY
                     if self._can_act_for(key):
                         self._record_attempt(key)
                         self._log("CRITICAL", f"memory_emergency_{rss:.0f}MB",

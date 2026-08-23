@@ -15,6 +15,7 @@ from watchdog import Watchdog, _MAX_RETRIES_PER_CHECK, _RETRY_WINDOW_S
 def _patch_log_path(tmp_path, monkeypatch):
     """Redirect watchdog log to tmp_path — avoids /opt/rover2 permission errors."""
     monkeypatch.setattr(_wd_module, "_LOG_PATH", tmp_path / "watchdog.log")
+    monkeypatch.setattr(_wd_module, "_MEM_RESTART_STATE_PATH", tmp_path / "mem-restarts.json")
 
 
 def _make_watchdog(
@@ -125,6 +126,42 @@ class TestPerCheckRateLimiting:
         # Record old attempt (beyond retry window)
         wd._retry_ts["memory"] = [time.monotonic() - _RETRY_WINDOW_S - 1.0]
         assert wd._can_act_for("memory") is True
+
+
+class TestMemRestartPersistence:
+    """C2: the mem_emergency_restart budget must survive the exact
+    rover2-api restart it exists to bound, not reset with it."""
+
+    def test_budget_persists_across_simulated_restart(self):
+        wd1 = _make_watchdog()
+        for _ in range(_MAX_RETRIES_PER_CHECK):
+            wd1._record_attempt("mem_emergency_restart")
+        assert wd1._can_act_for("mem_emergency_restart") is False
+
+        # Simulate `systemctl restart rover2-api`: a brand new process, a
+        # brand new Watchdog instance, no shared Python state — only the
+        # tmpfs file (same tmp_path here) can carry the count across.
+        wd2 = _make_watchdog()
+        assert wd2._can_act_for("mem_emergency_restart") is False
+
+    def test_other_check_keys_are_not_persisted(self):
+        wd1 = _make_watchdog()
+        for _ in range(_MAX_RETRIES_PER_CHECK):
+            wd1._record_attempt("mem_emergency_restart")
+        wd2 = _make_watchdog()
+        assert wd2._can_act_for("some_other_check") is True
+
+    def test_persisted_attempts_outside_window_are_pruned(self):
+        wd1 = _make_watchdog()
+        for _ in range(_MAX_RETRIES_PER_CHECK):
+            wd1._record_attempt("mem_emergency_restart")
+        wd1._retry_ts["mem_emergency_restart"] = [
+            t - _RETRY_WINDOW_S - 1.0 for t in wd1._retry_ts["mem_emergency_restart"]
+        ]
+        wd1._persist_mem_restart_timestamps()
+
+        wd2 = _make_watchdog()
+        assert wd2._can_act_for("mem_emergency_restart") is True
 
 
 class TestAlertManagement:
