@@ -22,7 +22,7 @@ Minimal companion robot stack: **MegaPi motion**, **ultrasonic safety**, **web c
 
 - Android brain (A32 / Flip 6 apps), voice, LLM, agent loop, world state
 - Extension plugin platform, Home Assistant, patrol
-- Wear OS watch, security hardening (WSS, API tokens) — unless explicitly added later
+- Wear OS watch, security hardening (WSS, API tokens) — unless explicitly added later (auth deferral decision + revisit tripwire recorded in `docs/FIX_LOG_2026-08-23.md`)
 - pylgbst head pan/tilt, multi-model HAT pipeline, semantic memory
 
 See `~/Documents/projects/rover/ROVER_BACKLOG.md` for the full v1 wishlist.  
